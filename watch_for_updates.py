@@ -11,6 +11,17 @@ from pathlib import Path
 INTERVAL = int(os.environ.get("UPDATE_INTERVAL", "60"))
 REPO_DIR = Path(__file__).resolve().parent
 
+# Track only the current branch (defaults to "main")
+BRANCH = os.environ.get("WATCH_BRANCH")
+if BRANCH is None:
+    BRANCH = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+        cwd=REPO_DIR,
+        stdout=subprocess.PIPE,
+        text=True,
+        check=False,
+    ).stdout.strip() or "main"
+
 
 def run(cmd: list[str]) -> str:
     result = subprocess.run(
@@ -27,16 +38,21 @@ def run(cmd: list[str]) -> str:
 
 def main() -> None:
     while True:
-        # Fetch remote updates
-        run(["git", "remote", "update"])
-        local = run(["git", "rev-parse", "@"])
-        remote = run(["git", "rev-parse", "@{u}"])
-        base = run(["git", "merge-base", "@", "@{u}"])
+        # Fetch updates for the branch only
+        run(["git", "fetch", "origin", BRANCH])
+        local = run(["git", "rev-parse", BRANCH])
+        remote = run(["git", "rev-parse", f"origin/{BRANCH}"])
+        base = run(["git", "merge-base", BRANCH, f"origin/{BRANCH}"])
 
         if local != remote and local == base:
             print("New commits found. Pulling and rebuilding containers...")
-            run(["git", "pull", "--ff-only"])
-            subprocess.run(["docker-compose", "up", "--build", "-d"], cwd=REPO_DIR)
+            run(["git", "pull", "origin", BRANCH, "--ff-only"])
+            subprocess.run([
+                "docker-compose",
+                "up",
+                "--build",
+                "-d",
+            ], cwd=REPO_DIR)
         time.sleep(INTERVAL)
 
 
