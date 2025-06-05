@@ -13,6 +13,7 @@ DEFAULT_WEBHOOK = (
 def main():
     webhook_url = os.environ.get("WEBHOOK_URL", DEFAULT_WEBHOOK)
 
+
     pr_number = os.environ.get('PR_NUMBER', '')
     pr_title = os.environ.get('PR_TITLE', '')
     pr_url = os.environ.get('PR_URL', '')
