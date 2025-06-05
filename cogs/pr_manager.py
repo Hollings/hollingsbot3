@@ -84,22 +84,25 @@ class PRManager(commands.Cog):
             await msg.add_reaction("\N{WHITE HEAVY CHECK MARK}")
             await msg.add_reaction("\N{CROSS MARK}")
 
-    async def _api_request(self, method: str, url: str, **kwargs) -> int:
+    async def _api_request(self, method: str, url: str, **kwargs) -> tuple[int, str]:
         headers = kwargs.pop("headers", {})
         headers["Authorization"] = f"token {self.token}"
         async with aiohttp.ClientSession() as session:
             async with session.request(method, url, headers=headers, **kwargs) as resp:
+                text = await resp.text()
                 self.log.debug("%s %s -> %s", method, url, resp.status)
-                return resp.status
+                return resp.status, text
 
     async def merge_pr(self, number: int) -> bool:
         url = f"https://api.github.com/repos/{self.repo}/pulls/{number}/merge"
         self.log.info("Merging PR #%s", number)
-        status = await self._api_request(
+        status, body = await self._api_request(
             "PUT", url, json={"merge_method": "squash"}
         )
         if status not in (200, 201):
-            self.log.error("Failed to merge PR #%s (status %s)", number, status)
+            self.log.error(
+                "Failed to merge PR #%s (status %s): %s", number, status, body
+            )
             return False
         return True
 
