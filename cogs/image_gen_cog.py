@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Mapping, Awaitable
 
 from caption import add_caption
+from prompt_db import add_prompt, init_db
 
 import discord
 from discord.ext import commands
@@ -26,17 +27,18 @@ class ImageGenCog(commands.Cog):
         bot: commands.Bot,
         *,
         config: Mapping[str, Mapping[str, str]] | None = None,
-        task_func: Callable[[str, str, str], Awaitable[str]] | None = None,
+        task_func: Callable[[int, str, str, str], Awaitable[str]] | None = None,
     ) -> None:
         self.bot = bot
+        init_db()
         if config is None:
             with open(DEFAULT_CONFIG_PATH) as f:
                 config = json.load(f)
         self.config = config
         self.task_func = task_func or self._celery_task
 
-    async def _celery_task(self, api: str, model: str, prompt: str) -> str:
-        task = generate_image.delay(api, model, prompt)
+    async def _celery_task(self, prompt_id: int, api: str, model: str, prompt: str) -> str:
+        task = generate_image.delay(prompt_id, api, model, prompt)
         return await asyncio.to_thread(task.get)
 
     def _parse_prompt(
@@ -62,8 +64,9 @@ class ImageGenCog(commands.Cog):
         except discord.HTTPException:
             pass
 
+        prompt_id = add_prompt(prompt, str(message.author.id), spec.get("api"), spec.get("model"))
         try:
-            b64 = await self.task_func(spec.get("api"), spec.get("model"), prompt)
+            b64 = await self.task_func(prompt_id, spec.get("api"), spec.get("model"), prompt)
             image_bytes = base64.b64decode(b64)
             image_bytes = add_caption(image_bytes, prompt)
             file = discord.File(BytesIO(image_bytes), filename="output.png")

@@ -37,6 +37,7 @@ class FakeChannel:
 class FakeAuthor:
     def __init__(self, *, bot: bool = False):
         self.bot = bot
+        self.id = 123
 
 
 class FakeMessage:
@@ -55,13 +56,14 @@ class FakeMessage:
 
 
 @pytest.mark.asyncio
-async def test_image_generation_success():
+async def test_image_generation_success(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROMPT_DB_PATH", str(tmp_path / "db.sqlite"))
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator()
     config = {"!": {"api": "mock", "model": "m"}}
 
-    async def task(api, model, prompt):
+    async def task(pid, api, model, prompt):
         assert api == "mock"
         assert model == "m"
         data = await gen.generate(prompt)
@@ -79,13 +81,14 @@ async def test_image_generation_success():
 
 
 @pytest.mark.asyncio
-async def test_image_generation_failure():
+async def test_image_generation_failure(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROMPT_DB_PATH", str(tmp_path / "db.sqlite"))
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator(should_fail=True)
     config = {"!": {"api": "mock", "model": "m"}}
 
-    async def task(api, model, prompt):
+    async def task(pid, api, model, prompt):
         data = await gen.generate(prompt)
         return base64.b64encode(data).decode()
 
@@ -101,7 +104,8 @@ async def test_image_generation_failure():
 
 
 @pytest.mark.asyncio
-async def test_multiple_prefixes():
+async def test_multiple_prefixes(tmp_path, monkeypatch):
+    monkeypatch.setenv("PROMPT_DB_PATH", str(tmp_path / "db.sqlite"))
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen1 = MockGenerator()
@@ -111,7 +115,7 @@ async def test_multiple_prefixes():
         "$": {"api": "mock2", "model": "m2"},
     }
 
-    async def task(api, model, prompt):
+    async def task(pid, api, model, prompt):
         gen_map = {"mock1": gen1, "mock2": gen2}
         data = await gen_map[api].generate(prompt)
         return base64.b64encode(data).decode()
