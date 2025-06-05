@@ -1,33 +1,60 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import List
+import textwrap
 
 from PIL import Image, ImageDraw, ImageFont
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     """Return a truetype font or fall back to the default."""
-    try:
-        return ImageFont.truetype("DejaVuSans.ttf", size=size)
-    except OSError:
-        return ImageFont.load_default()
+    for font_name in ("arial.ttf", "DejaVuSans.ttf"):
+        try:
+            return ImageFont.truetype(font_name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
 
-def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
-    words = text.split()
-    lines: List[str] = []
-    line = ""
-    for word in words:
-        test = f"{line} {word}".strip()
-        if draw.textlength(test, font=font) <= max_width:
-            line = test
-        else:
-            if line:
-                lines.append(line)
-            line = word
-    if line:
-        lines.append(line)
-    return lines
+
+def calculate_font_size(caption: str) -> int:
+    """Return a font size based on caption length."""
+    if len(caption) < 100:
+        return 40
+    if len(caption) < 200:
+        return 30
+    return 20
+
+
+def _add_caption(img: Image.Image, caption: str) -> Image.Image:
+    """Return a new image with the caption above the original image."""
+    font_size = calculate_font_size(caption)
+    font = _load_font(font_size)
+
+    margin = 20
+    max_width = img.width - 2 * margin
+
+    temp_img = Image.new("RGB", (img.width, img.height), (255, 255, 255))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    wrap_count = 100
+    wrapped = textwrap.fill(caption, width=wrap_count)
+    bbox = temp_draw.textbbox((0, 0), wrapped, font=font)
+    while bbox[2] > max_width and wrap_count > 1:
+        wrap_count -= 1
+        wrapped = textwrap.fill(caption, width=wrap_count)
+        bbox = temp_draw.textbbox((0, 0), wrapped, font=font)
+
+    caption_height = bbox[3] + 2 * margin
+    new_img = Image.new("RGB", (img.width, img.height + caption_height), (255, 255, 255))
+    new_img.paste(img, (0, caption_height))
+
+    draw = ImageDraw.Draw(new_img)
+    text_width = bbox[2] - bbox[0]
+    x = (new_img.width - text_width) // 2
+    y = margin
+    draw.text((x, y), wrapped, fill="black", font=font)
+
+    return new_img
 
 
 def add_caption(image_bytes: bytes, text: str) -> bytes:
@@ -35,40 +62,9 @@ def add_caption(image_bytes: bytes, text: str) -> bytes:
     if not text:
         return image_bytes
 
-    with Image.open(BytesIO(image_bytes)) as im:
-        im = im.convert("RGB")
-        width = im.width
-        draw = ImageDraw.Draw(im)
-        max_font = 40
-        min_font = 12
-        padding = 10
-        for size in range(max_font, min_font - 1, -2):
-            font = _load_font(size)
-            lines = _wrap_text(draw, text, font, int(width * 0.95))
-            bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font)
-            if bbox[2] <= width:
-                break
-        else:
-            font = _load_font(min_font)
-            lines = _wrap_text(draw, text, font, int(width * 0.95))
-            bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font)
-        text_height = bbox[3] - bbox[1]
-        caption_height = text_height + 2 * padding
-
-        caption_img = Image.new("RGB", (width, caption_height), "white")
-        caption_draw = ImageDraw.Draw(caption_img)
-        caption_draw.multiline_text(
-            (width // 2, padding),
-            "\n".join(lines),
-            font=font,
-            fill="black",
-            align="center",
-            anchor="ma",
-        )
-
-        new_img = Image.new("RGB", (width, caption_height + im.height), "white")
-        new_img.paste(caption_img, (0, 0))
-        new_img.paste(im, (0, caption_height))
+    with Image.open(BytesIO(image_bytes)) as img:
+        img = img.convert("RGB")
+        new_img = _add_caption(img, text)
         out = BytesIO()
         new_img.save(out, format="PNG")
         return out.getvalue()
