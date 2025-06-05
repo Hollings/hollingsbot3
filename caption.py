@@ -6,6 +6,13 @@ from typing import List
 from PIL import Image, ImageDraw, ImageFont
 
 
+def _load_font(size: int) -> ImageFont.ImageFont:
+    """Return a truetype font or fall back to the default."""
+    try:
+        return ImageFont.truetype("DejaVuSans.ttf", size=size)
+    except OSError:
+        return ImageFont.load_default()
+
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
     words = text.split()
     lines: List[str] = []
@@ -36,13 +43,13 @@ def add_caption(image_bytes: bytes, text: str) -> bytes:
         min_font = 12
         padding = 10
         for size in range(max_font, min_font - 1, -2):
-            font = ImageFont.truetype("DejaVuSans.ttf", size=size)
+            font = _load_font(size)
             lines = _wrap_text(draw, text, font, int(width * 0.95))
             bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font)
             if bbox[2] <= width:
                 break
         else:
-            font = ImageFont.truetype("DejaVuSans.ttf", size=min_font)
+            font = _load_font(min_font)
             lines = _wrap_text(draw, text, font, int(width * 0.95))
             bbox = draw.multiline_textbbox((0, 0), "\n".join(lines), font=font)
         text_height = bbox[3] - bbox[1]
