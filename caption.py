@@ -13,7 +13,6 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     except OSError:
         return ImageFont.load_default()
 
-
 def _wrap_text(draw: ImageDraw.ImageDraw, text: str, font: ImageFont.ImageFont, max_width: int) -> List[str]:
     words = text.split()
     lines: List[str] = []
