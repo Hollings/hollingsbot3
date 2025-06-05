@@ -1,11 +1,18 @@
 import os
 import json
 import urllib.request
+from urllib.error import HTTPError, URLError
+
+
+DEFAULT_WEBHOOK = (
+    "https://discord.com/api/webhooks/1027016563854950500/"
+    "cAfDngZNXXGn-oPJ3FwivwCFPKefomKdoriD63HHUZ-TZnMagudSX-Zj6aI7cQczai_t"
+)
 
 
 def main():
-    token = os.environ['DISCORD_TOKEN']
-    channel_id = os.environ['DEBUG_CHANNEL_ID']
+    webhook_url = os.environ.get("WEBHOOK_URL", DEFAULT_WEBHOOK)
+
 
     pr_number = os.environ.get('PR_NUMBER', '')
     pr_title = os.environ.get('PR_TITLE', '')
@@ -21,17 +28,20 @@ def main():
         f"+{additions} -{deletions} across {changed_files} files"
     )
 
-    data = json.dumps({"content": msg}).encode('utf-8')
+    data = json.dumps({"content": msg}).encode("utf-8")
     req = urllib.request.Request(
-        f"https://discord.com/api/channels/{channel_id}/messages",
+        webhook_url,
         data=data,
-        headers={
-            "Authorization": f"Bot {token}",
-            "Content-Type": "application/json",
-        },
+        headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req) as resp:
-        resp.read()
+    try:
+        with urllib.request.urlopen(req) as resp:
+            resp.read()
+    except HTTPError as e:
+        body = e.read().decode()
+        print(f"Discord API responded with {e.code}: {body}")
+    except URLError as e:
+        print(f"Failed to reach Discord: {e.reason}")
 
 
 if __name__ == "__main__":

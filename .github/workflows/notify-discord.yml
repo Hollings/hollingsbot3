@@ -15,9 +15,8 @@ jobs:
           python-version: '3.11'
       - name: Send merged PR summary to Discord
         env:
-          DISCORD_TOKEN: ${{ secrets.DISCORD_TOKEN }}
-          DEBUG_CHANNEL_ID: ${{ secrets.DEBUG_CHANNEL_ID }}
-          DEBUG_SERVER_ID: ${{ secrets.DEBUG_SERVER_ID }}
+          WEBHOOK_URL: https://discord.com/api/webhooks/1027016563854950500/cAfDngZNXXGn-oPJ3FwivwCFPKefomKdoriD63HHUZ-TZnMagudSX-Zj6aI7cQczai_t
+
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_URL: ${{ github.event.pull_request.html_url }}
@@ -25,5 +24,4 @@ jobs:
           ADDITIONS: ${{ github.event.pull_request.additions }}
           DELETIONS: ${{ github.event.pull_request.deletions }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
-        run: |
-          python scripts/post_pr_summary.py
+        run: python scripts/post_pr_summary.py
