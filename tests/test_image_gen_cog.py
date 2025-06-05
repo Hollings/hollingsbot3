@@ -6,6 +6,7 @@ mock_replicate = types.SimpleNamespace(Client=object, helpers=types.SimpleNamesp
 sys.modules.setdefault("replicate", mock_replicate)
 
 import pytest
+from unittest import mock
 import discord
 from discord.ext import commands
 
@@ -69,7 +70,8 @@ async def test_image_generation_success():
     cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
-    await cog.on_message(msg)
+    with mock.patch("cogs.image_gen_cog.add_caption", lambda b, text: b):
+        await cog.on_message(msg)
 
     assert gen.prompts == ["cat"]
     assert any(isinstance(entry["kwargs"].get("file"), discord.File) for entry in msg.channel.sent)
@@ -90,7 +92,8 @@ async def test_image_generation_failure():
     cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
-    await cog.on_message(msg)
+    with mock.patch("cogs.image_gen_cog.add_caption", lambda b, text: b):
+        await cog.on_message(msg)
 
     assert gen.prompts == ["cat"]
     assert any("Error generating image" in entry["args"][0] for entry in msg.channel.sent)
@@ -116,7 +119,8 @@ async def test_multiple_prefixes():
     cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("$dog", author)
-    await cog.on_message(msg)
+    with mock.patch("cogs.image_gen_cog.add_caption", lambda b, text: b):
+        await cog.on_message(msg)
 
     assert gen1.prompts == []
     assert gen2.prompts == ["dog"]

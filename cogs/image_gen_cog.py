@@ -5,6 +5,8 @@ from io import BytesIO
 from pathlib import Path
 from typing import Callable, Mapping, Awaitable
 
+from caption import add_caption
+
 import discord
 from discord.ext import commands
 
@@ -63,6 +65,7 @@ class ImageGenCog(commands.Cog):
         try:
             b64 = await self.task_func(spec.get("api"), spec.get("model"), prompt)
             image_bytes = base64.b64decode(b64)
+            image_bytes = add_caption(image_bytes, prompt)
             file = discord.File(BytesIO(image_bytes), filename="output.png")
             await message.channel.send(file=file)
             await message.clear_reaction(thinking)
