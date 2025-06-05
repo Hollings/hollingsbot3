@@ -8,8 +8,9 @@ from cogs.starboard import Starboard
 
 
 class FakeChannel:
-    def __init__(self):
+    def __init__(self, channel_id: int | None = None):
         self.sent = []
+        self.id = channel_id
 
     async def send(self, *args, **kwargs):
         self.sent.append({'args': args, 'kwargs': kwargs})
@@ -45,7 +46,7 @@ async def test_first_reaction_reposts(monkeypatch):
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix='!', intents=intents)
     os.environ['STARBOARD_CHANNEL_ID'] = '99'
-    starboard_channel = FakeChannel()
+    starboard_channel = FakeChannel(99)
     monkeypatch.setattr(bot, 'get_channel', lambda cid: starboard_channel if cid == 99 else None)
 
     cog = Starboard(bot)
@@ -66,7 +67,7 @@ async def test_second_reaction_does_not_repost(monkeypatch):
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix='!', intents=intents)
     os.environ['STARBOARD_CHANNEL_ID'] = '99'
-    starboard_channel = FakeChannel()
+    starboard_channel = FakeChannel(99)
     monkeypatch.setattr(bot, 'get_channel', lambda cid: starboard_channel if cid == 99 else None)
 
     cog = Starboard(bot)
@@ -78,3 +79,23 @@ async def test_second_reaction_does_not_repost(monkeypatch):
     await cog.on_reaction_add(reaction, user)
 
     assert len(starboard_channel.sent) == 1
+
+
+@pytest.mark.asyncio
+async def test_ignore_channel(monkeypatch):
+    intents = discord.Intents.none()
+    bot = commands.Bot(command_prefix='!', intents=intents)
+    os.environ['STARBOARD_CHANNEL_ID'] = '99'
+    os.environ['STARBOARD_IGNORE_CHANNELS'] = '12'
+    starboard_channel = FakeChannel(99)
+    monkeypatch.setattr(bot, 'get_channel', lambda cid: starboard_channel if cid == 99 else None)
+
+    cog = Starboard(bot)
+    message = FakeMessage('hello', FakeAuthor(bot=True))
+    message.channel.id = 12
+    reaction = FakeReaction(message)
+    user = FakeUser()
+
+    await cog.on_reaction_add(reaction, user)
+
+    assert not starboard_channel.sent

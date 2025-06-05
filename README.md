@@ -57,3 +57,9 @@ override the default webhook, which currently points to:
 ```
 https://discord.com/api/webhooks/1380252805494738974/wif1p4iK8_hZq41JwNCmHRcFj6E9cxyet1fNlTiLt-nN9dc2qyxclJcYZhoUnfRwG5p5
 ```
+
+### Starboard
+
+Set `STARBOARD_CHANNEL_ID` to the destination channel for reposts. The optional
+`STARBOARD_IGNORE_CHANNELS` variable accepts a comma-separated list of channel
+IDs to exclude from reposting.

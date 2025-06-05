@@ -14,6 +14,10 @@ class Starboard(commands.Cog):
         self.bot = bot
         channel_id = os.getenv("STARBOARD_CHANNEL_ID")
         self.channel_id = int(channel_id) if channel_id else None
+        ignore_channels = os.getenv("STARBOARD_IGNORE_CHANNELS", "")
+        self.ignore_channels: Set[int] = {
+            int(cid) for cid in ignore_channels.split(",") if cid.strip()
+        }
         self._posted: Set[int] = set()
 
     async def _get_channel(self) -> discord.abc.Messageable | None:
@@ -32,6 +36,8 @@ class Starboard(commands.Cog):
         if user.bot:
             return
         message = reaction.message
+        if getattr(message.channel, "id", None) in self.ignore_channels:
+            return
         if not message.author.bot:
             return
         if message.id in self._posted:
