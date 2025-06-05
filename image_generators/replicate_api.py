@@ -11,7 +11,7 @@ from .base import ImageGeneratorAPI
 class ReplicateImageGenerator(ImageGeneratorAPI):
     """Generate images using Replicate's API."""
 
-    def __init__(self, model: str = "stability-ai/sdxl") -> None:
+    def __init__(self, model: str = "black-forest-labs/flux-schnell") -> None:
         self.client = replicate.Client(api_token=os.getenv("REPLICATE_API_TOKEN"))
         self.model = model
 
