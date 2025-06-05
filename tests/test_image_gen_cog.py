@@ -57,7 +57,9 @@ async def test_image_generation_success():
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator()
-    cog = ImageGenCog(bot, generator=gen)
+    config = {"!": {"api": "mock", "model": "m"}}
+    factories = {"mock": lambda model: gen}
+    cog = ImageGenCog(bot, config=config, factories=factories)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
     await cog.on_message(msg)
@@ -72,7 +74,9 @@ async def test_image_generation_failure():
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator(should_fail=True)
-    cog = ImageGenCog(bot, generator=gen)
+    config = {"!": {"api": "mock", "model": "m"}}
+    factories = {"mock": lambda model: gen}
+    cog = ImageGenCog(bot, config=config, factories=factories)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
     await cog.on_message(msg)
@@ -80,3 +84,26 @@ async def test_image_generation_failure():
     assert gen.prompts == ["cat"]
     assert any("Error generating image" in entry["args"][0] for entry in msg.channel.sent)
     assert "\N{CROSS MARK}" in msg.added
+
+
+@pytest.mark.asyncio
+async def test_multiple_prefixes():
+    intents = discord.Intents.none()
+    bot = commands.Bot(command_prefix="!", intents=intents)
+    gen1 = MockGenerator()
+    gen2 = MockGenerator()
+    config = {
+        "!": {"api": "mock1", "model": "m1"},
+        "$": {"api": "mock2", "model": "m2"},
+    }
+    factories = {
+        "mock1": lambda model: gen1,
+        "mock2": lambda model: gen2,
+    }
+    cog = ImageGenCog(bot, config=config, factories=factories)
+    author = FakeAuthor()
+    msg = FakeMessage("$dog", author)
+    await cog.on_message(msg)
+
+    assert gen1.prompts == []
+    assert gen2.prompts == ["dog"]
