@@ -7,6 +7,7 @@ DB_PATH = Path(os.getenv("PROMPT_DB_PATH", Path(__file__).resolve().with_name("p
 
 
 def init_db() -> None:
+    """Create required tables if they don't exist."""
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute(
             """
@@ -20,6 +21,9 @@ def init_db() -> None:
                 status TEXT
             )
             """
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)"
         )
         conn.commit()
 
@@ -39,4 +43,23 @@ def update_status(prompt_id: int, status: str) -> None:
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("UPDATE prompts SET status = ? WHERE id = ?", (status, prompt_id))
+        conn.commit()
+
+
+def get_seen_prs() -> dict[int, str]:
+    """Return a mapping of PR numbers to their status."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("SELECT number, status FROM prs")
+        return {int(row[0]): row[1] for row in cur.fetchall()}
+
+
+def update_pr_status(number: int, status: str) -> None:
+    """Insert or update a PR's status."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO prs (number, status) VALUES (?, ?)",
+            (number, status),
+        )
         conn.commit()
