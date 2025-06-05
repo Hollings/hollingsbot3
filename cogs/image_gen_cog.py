@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 from io import BytesIO
 from pathlib import Path
-from typing import Callable, Mapping
+from typing import Callable, Mapping, Awaitable
 
 import discord
 from discord.ext import commands
 
-from image_generators import ImageGeneratorAPI, ReplicateImageGenerator
+from tasks import generate_image
+import base64
+import asyncio
 
 
 DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "image_gen_config.json"
@@ -22,37 +24,34 @@ class ImageGenCog(commands.Cog):
         bot: commands.Bot,
         *,
         config: Mapping[str, Mapping[str, str]] | None = None,
-        factories: Mapping[str, Callable[[str | None], ImageGeneratorAPI]] | None = None,
+        task_func: Callable[[str, str, str], Awaitable[str]] | None = None,
     ) -> None:
         self.bot = bot
         if config is None:
             with open(DEFAULT_CONFIG_PATH) as f:
                 config = json.load(f)
-        self.generators: dict[str, ImageGeneratorAPI] = {}
-        factories = factories or {"replicate": ReplicateImageGenerator}
-        for prefix, spec in config.items():
-            api = spec.get("api")
-            model = spec.get("model")
-            factory = factories.get(api)
-            if factory is None:
-                raise ValueError(f"Unknown API: {api}")
-            self.generators[prefix] = factory(model)
+        self.config = config
+        self.task_func = task_func or self._celery_task
+
+    async def _celery_task(self, api: str, model: str, prompt: str) -> str:
+        task = generate_image.delay(api, model, prompt)
+        return await asyncio.to_thread(task.get)
 
     def _parse_prompt(
         self, message: discord.Message
-    ) -> tuple[ImageGeneratorAPI, str] | None:
-        """Return the generator and prompt if the message has a known prefix."""
-        for prefix, generator in self.generators.items():
+    ) -> tuple[Mapping[str, str], str] | None:
+        """Return the generator spec and prompt if the message has a known prefix."""
+        for prefix, spec in self.config.items():
             if message.content.startswith(prefix):
                 prompt = message.content[len(prefix) :].strip()
                 if prompt:
-                    return generator, prompt
+                    return spec, prompt
         return None
 
     async def _generate_and_send(
-        self, message: discord.Message, generator: ImageGeneratorAPI, prompt: str
+        self, message: discord.Message, spec: Mapping[str, str], prompt: str
     ) -> None:
-        """Generate an image and respond with the appropriate reactions."""
+        """Generate an image via Celery and respond with the appropriate reactions."""
         thinking = "\N{THINKING FACE}"
         checkmark = "\N{WHITE HEAVY CHECK MARK}"
 
@@ -62,7 +61,8 @@ class ImageGenCog(commands.Cog):
             pass
 
         try:
-            image_bytes = await generator.generate(prompt)
+            b64 = await self.task_func(spec.get("api"), spec.get("model"), prompt)
+            image_bytes = base64.b64decode(b64)
             file = discord.File(BytesIO(image_bytes), filename="output.png")
             await message.channel.send(file=file)
             await message.clear_reaction(thinking)
@@ -81,8 +81,8 @@ class ImageGenCog(commands.Cog):
         if not parsed:
             return
 
-        generator, prompt = parsed
-        await self._generate_and_send(message, generator, prompt)
+        spec, prompt = parsed
+        await self._generate_and_send(message, spec, prompt)
 
 
 async def setup(bot: commands.Bot):
