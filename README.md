@@ -15,3 +15,17 @@ It is set up to run inside Docker using docker-compose.
    ```
 
 The bot uses a modular Cog system located in the `cogs/` directory. A sample `ping` command is provided.
+
+### Image generation configuration
+
+Image prompts are routed based on the prefix defined in `image_gen_config.json`.
+Each prefix maps to an API provider and model name:
+
+```json
+{
+  "!": {"api": "replicate", "model": "stability-ai/sdxl"}
+}
+```
+
+Additional prefixes can be added and will be handled by the configured image
+generator class.
