@@ -1,2 +1,24 @@
 __pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+.env.*
+
+# Database files
 prompts.db
+*.db
+*.sqlite*
+
+# IDE/Editor directories
+.vscode/
+.idea/
+
+# Test and type checking caches
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
