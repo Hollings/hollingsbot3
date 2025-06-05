@@ -16,23 +16,23 @@ def main():
 
     pr_number = os.environ.get('PR_NUMBER', '')
     pr_title = os.environ.get('PR_TITLE', '')
-    pr_url = os.environ.get('PR_URL', '')
+    pr_body = os.environ.get('PR_BODY', '')
     merged_by = os.environ.get('MERGED_BY', '')
-    additions = os.environ.get('ADDITIONS', '')
-    deletions = os.environ.get('DELETIONS', '')
-    changed_files = os.environ.get('CHANGED_FILES', '')
 
     msg = (
         f"PR #{pr_number} merged by {merged_by}\n"
-        f"{pr_title}\n{pr_url}\n"
-        f"+{additions} -{deletions} across {changed_files} files"
+        f"{pr_title}\n"
+        f"{pr_body}"
     )
 
     data = json.dumps({"content": msg}).encode("utf-8")
     req = urllib.request.Request(
         webhook_url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        },
     )
     try:
         with urllib.request.urlopen(req) as resp:
