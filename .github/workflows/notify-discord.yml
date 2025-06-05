@@ -20,6 +20,5 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           PR_TITLE: ${{ github.event.pull_request.title }}
           PR_BODY: ${{ github.event.pull_request.body }}
-          USER_QUERY: ${{ github.event.pull_request.title }}
           MERGED_BY: ${{ github.event.pull_request.merged_by.login }}
         run: python scripts/post_pr_summary.py

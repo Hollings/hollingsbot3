@@ -14,17 +14,15 @@ def main():
     webhook_url = os.environ.get("WEBHOOK_URL", DEFAULT_WEBHOOK)
 
 
-    pr_number = os.environ.get("PR_NUMBER", "")
-    pr_title = os.environ.get("PR_TITLE", "")
-    pr_body = os.environ.get("PR_BODY", "")
-    merged_by = os.environ.get("MERGED_BY", "")
-    user_query = os.environ.get("USER_QUERY", "")
+    pr_number = os.environ.get('PR_NUMBER', '')
+    pr_title = os.environ.get('PR_TITLE', '')
+    pr_body = os.environ.get('PR_BODY', '')
+    merged_by = os.environ.get('MERGED_BY', '')
 
     msg = (
         f"PR #{pr_number} merged by {merged_by}\n"
         f"{pr_title}\n"
-        f"{pr_body}\n"
-        f"Original query: {user_query}"
+        f"{pr_body}"
     )
 
     data = json.dumps({"content": msg}).encode("utf-8")
