@@ -47,3 +47,13 @@ Each prefix maps to an API provider and model name:
 
 Additional prefixes can be added and will be handled by the configured image
 generator class.
+
+### Pull request notifications
+
+The `PRManager` cog posts to a Discord webhook when pull requests are opened and
+when they are merged via the bot. Set the `WEBHOOK_URL` environment variable to
+override the default webhook, which currently points to:
+
+```
+https://discord.com/api/webhooks/1380252805494738974/wif1p4iK8_hZq41JwNCmHRcFj6E9cxyet1fNlTiLt-nN9dc2qyxclJcYZhoUnfRwG5p5
+```
