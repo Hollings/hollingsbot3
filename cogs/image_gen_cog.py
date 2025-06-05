@@ -7,6 +7,7 @@ from typing import Callable, Mapping, Awaitable
 
 from caption import add_caption
 from prompt_db import add_prompt, init_db
+import contextlib
 
 import discord
 from discord.ext import commands
@@ -71,10 +72,14 @@ class ImageGenCog(commands.Cog):
             image_bytes = add_caption(image_bytes, prompt)
             file = discord.File(BytesIO(image_bytes), filename="output.png")
             await message.channel.send(file=file)
-            await message.clear_reaction(thinking)
+            try:
+                await message.clear_reaction(thinking)
+            except discord.HTTPException:
+                pass
             await message.add_reaction(checkmark)
         except Exception as e:  # noqa: BLE001
-            await message.clear_reaction(thinking)
+            with contextlib.suppress(discord.HTTPException):
+                await message.clear_reaction(thinking)
             await message.add_reaction("\N{CROSS MARK}")
             await message.channel.send(f"Error generating image: {e}")
 
