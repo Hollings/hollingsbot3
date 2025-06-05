@@ -1,4 +1,4 @@
-# hollingsbot3
+# hollingsbot 3
 
 This is a minimal Discord bot project using [discord.py](https://discordpy.readthedocs.io/).
 It is set up to run inside Docker using docker-compose. Image generation tasks
