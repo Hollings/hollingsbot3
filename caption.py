@@ -8,7 +8,12 @@ from PIL import Image, ImageDraw, ImageFont
 
 def _load_font(size: int) -> ImageFont.ImageFont:
     """Return a truetype font or fall back to the default."""
-    for font_name in ("arial.ttf", "DejaVuSans.ttf"):
+    font_candidates = (
+        "arial.ttf",
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    )
+    for font_name in font_candidates:
         try:
             return ImageFont.truetype(font_name, size=size)
         except OSError:
