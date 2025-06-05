@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import os
 import logging
-from typing import Dict, Set
+from typing import Dict
+
+from prompt_db import get_seen_prs, init_db, update_pr_status
 
 import aiohttp
 import discord
@@ -19,7 +21,8 @@ class PRManager(commands.Cog):
         self.channel_id = int(channel_id) if channel_id else None
         self.repo = os.getenv("GITHUB_REPOSITORY")
         self.token = os.getenv("GITHUB_TOKEN")
-        self.seen_prs: Set[int] = set()
+        init_db()
+        self.seen_prs: Dict[int, str] = get_seen_prs()
         self.message_pr: Dict[int, int] = {}
         self.pr_info: Dict[int, Dict[str, str]] = {}
         self.log.info(
@@ -46,6 +49,7 @@ class PRManager(commands.Cog):
                 return None
         return channel
 
+
     @tasks.loop(minutes=1)
     async def poll_prs(self) -> None:
         self.log.debug("Polling for open PRs")
@@ -70,7 +74,8 @@ class PRManager(commands.Cog):
             number = pr.get("number")
             if number in self.seen_prs:
                 continue
-            self.seen_prs.add(number)
+            self.seen_prs[number] = "open"
+            update_pr_status(number, "open")
             title = pr.get("title")
             body = pr.get("body", "")
             author = pr.get("user", {}).get("login", "")
@@ -104,12 +109,16 @@ class PRManager(commands.Cog):
                 "Failed to merge PR #%s (status %s): %s", number, status, body
             )
             return False
+        self.seen_prs[number] = "merged"
+        update_pr_status(number, "merged")
         return True
 
     async def close_pr(self, number: int) -> None:
         url = f"https://api.github.com/repos/{self.repo}/pulls/{number}"
         self.log.info("Closing PR #%s", number)
         await self._api_request("PATCH", url, json={"state": "closed"})
+        self.seen_prs[number] = "closed"
+        update_pr_status(number, "closed")
 
 
 

@@ -58,6 +58,9 @@ override the default webhook, which currently points to:
 ```
 https://discord.com/api/webhooks/1380252805494738974/wif1p4iK8_hZq41JwNCmHRcFj6E9cxyet1fNlTiLt-nN9dc2qyxclJcYZhoUnfRwG5p5
 ```
+Persistent tracking of notified pull requests is stored in the SQLite database
+(`prompts.db` by default). Set `PROMPT_DB_PATH` to change where this state is
+kept.
 
 ### Starboard
 
