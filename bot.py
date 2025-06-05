@@ -21,6 +21,7 @@ async def main():
     async with bot:
         await bot.load_extension('cogs.general')
         await bot.load_extension('cogs.image_gen_cog')
+        await bot.load_extension('cogs.starboard')
         await bot.start(token)
 
 if __name__ == '__main__':
