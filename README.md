@@ -27,7 +27,7 @@ Each prefix maps to an API provider and model name:
 
 ```json
 {
-  "!": {"api": "replicate", "model": "stability-ai/sdxl"}
+  "!": {"api": "replicate", "model": "black-forest-labs/flux-schnell"}
 }
 ```
 
