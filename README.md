@@ -28,7 +28,9 @@ python watch_for_updates.py
 ```
 
 The script checks for changes every 60 seconds by default. Set the
-`UPDATE_INTERVAL` environment variable to adjust the polling interval.
+`UPDATE_INTERVAL` environment variable to adjust the polling interval. By
+default the script monitors the branch that is currently checked out. Override
+this by setting the `WATCH_BRANCH` environment variable, e.g. `WATCH_BRANCH=main`.
 
 The bot uses a modular Cog system located in the `cogs/` directory. A sample `ping` command is provided.
 
