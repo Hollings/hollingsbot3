@@ -1,7 +1,8 @@
 # hollingsbot3
 
 This is a minimal Discord bot project using [discord.py](https://discordpy.readthedocs.io/).
-It is set up to run inside Docker using docker-compose.
+It is set up to run inside Docker using docker-compose. Image generation tasks
+are handled by a separate Celery worker communicating through Redis.
 
 ## Requirements
 - Docker
@@ -9,10 +10,13 @@ It is set up to run inside Docker using docker-compose.
 
 ## Setup
 1. Create a `.env` file (already provided) and fill in the required tokens and IDs.
-2. Build and start the bot:
+2. Build and start the bot and worker:
    ```bash
    docker-compose up --build
    ```
+
+This command launches the Discord bot, a Celery worker, and a Redis instance
+used for task queueing.
 
 The bot uses a modular Cog system located in the `cogs/` directory. A sample `ping` command is provided.
 

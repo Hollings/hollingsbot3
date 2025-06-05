@@ -10,6 +10,7 @@ import discord
 from discord.ext import commands
 
 from cogs.image_gen_cog import ImageGenCog
+import base64
 
 
 class MockGenerator:
@@ -58,8 +59,14 @@ async def test_image_generation_success():
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator()
     config = {"!": {"api": "mock", "model": "m"}}
-    factories = {"mock": lambda model: gen}
-    cog = ImageGenCog(bot, config=config, factories=factories)
+
+    async def task(api, model, prompt):
+        assert api == "mock"
+        assert model == "m"
+        data = await gen.generate(prompt)
+        return base64.b64encode(data).decode()
+
+    cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
     await cog.on_message(msg)
@@ -75,8 +82,12 @@ async def test_image_generation_failure():
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = MockGenerator(should_fail=True)
     config = {"!": {"api": "mock", "model": "m"}}
-    factories = {"mock": lambda model: gen}
-    cog = ImageGenCog(bot, config=config, factories=factories)
+
+    async def task(api, model, prompt):
+        data = await gen.generate(prompt)
+        return base64.b64encode(data).decode()
+
+    cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("!cat", author)
     await cog.on_message(msg)
@@ -96,11 +107,13 @@ async def test_multiple_prefixes():
         "!": {"api": "mock1", "model": "m1"},
         "$": {"api": "mock2", "model": "m2"},
     }
-    factories = {
-        "mock1": lambda model: gen1,
-        "mock2": lambda model: gen2,
-    }
-    cog = ImageGenCog(bot, config=config, factories=factories)
+
+    async def task(api, model, prompt):
+        gen_map = {"mock1": gen1, "mock2": gen2}
+        data = await gen_map[api].generate(prompt)
+        return base64.b64encode(data).decode()
+
+    cog = ImageGenCog(bot, config=config, task_func=task)
     author = FakeAuthor()
     msg = FakeMessage("$dog", author)
     await cog.on_message(msg)
