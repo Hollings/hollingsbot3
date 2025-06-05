@@ -18,6 +18,18 @@ are handled by a separate Celery worker communicating through Redis.
 This command launches the Discord bot, a Celery worker, and a Redis instance
 used for task queueing.
 
+### Automatic updates
+
+Run `watch_for_updates.py` to poll the repository for new commits and
+automatically rebuild the containers when updates are available:
+
+```bash
+python watch_for_updates.py
+```
+
+The script checks for changes every 60 seconds by default. Set the
+`UPDATE_INTERVAL` environment variable to adjust the polling interval.
+
 The bot uses a modular Cog system located in the `cogs/` directory. A sample `ping` command is provided.
 
 ### Image generation configuration
