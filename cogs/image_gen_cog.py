@@ -38,35 +38,51 @@ class ImageGenCog(commands.Cog):
                 raise ValueError(f"Unknown API: {api}")
             self.generators[prefix] = factory(model)
 
+    def _parse_prompt(
+        self, message: discord.Message
+    ) -> tuple[ImageGeneratorAPI, str] | None:
+        """Return the generator and prompt if the message has a known prefix."""
+        for prefix, generator in self.generators.items():
+            if message.content.startswith(prefix):
+                prompt = message.content[len(prefix) :].strip()
+                if prompt:
+                    return generator, prompt
+        return None
+
+    async def _generate_and_send(
+        self, message: discord.Message, generator: ImageGeneratorAPI, prompt: str
+    ) -> None:
+        """Generate an image and respond with the appropriate reactions."""
+        thinking = "\N{THINKING FACE}"
+        checkmark = "\N{WHITE HEAVY CHECK MARK}"
+
+        try:
+            await message.add_reaction(thinking)
+        except discord.HTTPException:
+            pass
+
+        try:
+            image_bytes = await generator.generate(prompt)
+            file = discord.File(BytesIO(image_bytes), filename="output.png")
+            await message.channel.send(file=file)
+            await message.clear_reaction(thinking)
+            await message.add_reaction(checkmark)
+        except Exception as e:  # noqa: BLE001
+            await message.clear_reaction(thinking)
+            await message.add_reaction("\N{CROSS MARK}")
+            await message.channel.send(f"Error generating image: {e}")
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
 
-        for prefix, generator in self.generators.items():
-            if message.content.startswith(prefix):
-                prompt = message.content[len(prefix) :].strip()
-                if not prompt:
-                    return
+        parsed = self._parse_prompt(message)
+        if not parsed:
+            return
 
-                thinking = "\N{THINKING FACE}"
-                checkmark = "\N{WHITE HEAVY CHECK MARK}"
-                try:
-                    await message.add_reaction(thinking)
-                except discord.HTTPException:
-                    pass
-
-                try:
-                    image_bytes = await generator.generate(prompt)
-                    file = discord.File(BytesIO(image_bytes), filename="output.png")
-                    await message.channel.send(file=file)
-                    await message.clear_reaction(thinking)
-                    await message.add_reaction(checkmark)
-                except Exception as e:  # noqa: BLE001
-                    await message.clear_reaction(thinking)
-                    await message.add_reaction("\N{CROSS MARK}")
-                    await message.channel.send(f"Error generating image: {e}")
-                break
+        generator, prompt = parsed
+        await self._generate_and_send(message, generator, prompt)
 
 
 async def setup(bot: commands.Bot):
