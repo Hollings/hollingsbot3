@@ -22,6 +22,7 @@ async def main():
         await bot.load_extension('cogs.general')
         await bot.load_extension('cogs.image_gen_cog')
         await bot.load_extension('cogs.starboard')
+        await bot.load_extension('cogs.pr_manager')
         await bot.start(token)
 
 if __name__ == '__main__':
