@@ -32,7 +32,10 @@ def main():
     req = urllib.request.Request(
         webhook_url,
         data=data,
-        headers={"Content-Type": "application/json"},
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "Mozilla/5.0",
+        },
     )
     try:
         with urllib.request.urlopen(req) as resp:
