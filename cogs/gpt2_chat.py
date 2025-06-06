@@ -6,6 +6,7 @@ import os
 import discord
 from discord.ext import commands
 from transformers import pipeline
+import torch
 
 
 class GPT2Chat(commands.Cog):
@@ -17,7 +18,8 @@ class GPT2Chat(commands.Cog):
             cid = os.getenv("GPT2_CHANNEL_ID")
             channel_id = int(cid) if cid else None
         self.channel_id = channel_id
-        self.generator = pipeline("text-generation", model=model)
+        device = 0 if torch.cuda.is_available() else -1
+        self.generator = pipeline("text-generation", model=model, device=device)
 
     def _should_respond(self, message: discord.Message) -> bool:
         if message.author.bot:
