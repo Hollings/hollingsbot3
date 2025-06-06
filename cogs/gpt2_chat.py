@@ -11,7 +11,7 @@ from transformers import pipeline
 class GPT2Chat(commands.Cog):
     """Chat with GPT-2 in a designated channel."""
 
-    def __init__(self, bot: commands.Bot, *, channel_id: int | None = None, model: str = "distilgpt2") -> None:
+    def __init__(self, bot: commands.Bot, *, channel_id: int | None = None, model: str = "gpt2-large") -> None:
         self.bot = bot
         if channel_id is None:
             cid = os.getenv("GPT2_CHANNEL_ID")
@@ -27,9 +27,9 @@ class GPT2Chat(commands.Cog):
         return getattr(message.channel, "id", None) == self.channel_id
 
     async def _generate(self, prompt: str) -> str:
-        data = await asyncio.to_thread(self.generator, prompt, max_new_tokens=50)
-        text = data[0]["generated_text"][len(prompt) :]
-        return text.strip()
+        data = await asyncio.to_thread(self.generator, prompt, max_new_tokens=500)
+        text = data[0]["generated_text"]
+        return text[:2000].strip()
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
