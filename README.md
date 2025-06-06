@@ -67,3 +67,14 @@ kept.
 Set `STARBOARD_CHANNEL_ID` to the destination channel for reposts. The optional
 `STARBOARD_IGNORE_CHANNELS` variable accepts a comma-separated list of channel
 IDs to exclude from reposting.
+
+### Running tests
+
+To run the test suite outside of Docker you must install the Python
+dependencies locally. Failing to install them results in `ModuleNotFoundError`
+for packages such as `discord.py`.
+
+```bash
+pip install -r requirements.txt
+pytest
+```
