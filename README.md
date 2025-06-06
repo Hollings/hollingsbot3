@@ -19,6 +19,12 @@ are handled by a separate Celery worker communicating through Redis.
 This command launches the Discord bot, a Celery worker, and a Redis instance
 used for task queueing.
 
+### GPU acceleration
+
+The Docker setup now uses a CUDA-enabled PyTorch image. Ensure your host has the
+NVIDIA Container Toolkit installed so containers can access the GPU. The
+`docker-compose.yml` file reserves a GPU for both the bot and the Celery worker.
+
 ### Automatic updates
 
 Run `watch_for_updates.py` to poll the repository for new commits and

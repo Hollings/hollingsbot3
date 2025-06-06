@@ -4,6 +4,12 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
     depends_on:
       - redis
 
@@ -11,6 +17,12 @@ services:
     build: .
     command: celery -A tasks worker --loglevel=info
     env_file: .env
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
     depends_on:
       - redis
 
