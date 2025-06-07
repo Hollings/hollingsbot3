@@ -1,6 +1,7 @@
 import asyncio
 import base64
 import os
+from threading import Lock
 
 from celery import Celery
 
@@ -14,6 +15,9 @@ celery_app = Celery(
     broker=os.getenv('CELERY_BROKER_URL', 'redis://redis:6379/0'),
     backend=os.getenv('CELERY_RESULT_BACKEND', 'redis://redis:6379/0'),
 )
+
+_text_lock = Lock()
+_text_generator = None
 
 @celery_app.task
 def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
@@ -33,8 +37,11 @@ def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
 
 @celery_app.task
 def generate_text(model: str, prompt: str) -> str:
-    device = 0 if torch.cuda.is_available() else -1
-    generator = pipeline("text-generation", model=model, device=device)
-    data = generator(prompt, max_new_tokens=500)
-    text = data[0]["generated_text"]
-    return text[:2000].strip()
+    global _text_generator
+    with _text_lock:
+        if _text_generator is None:
+            device = 0 if torch.cuda.is_available() else -1
+            _text_generator = pipeline("text-generation", model=model, device=device)
+        data = _text_generator(prompt, max_new_tokens=500)
+        text = data[0]["generated_text"]
+        return text[:2000].strip()
