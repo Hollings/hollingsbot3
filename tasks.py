@@ -6,6 +6,8 @@ from celery import Celery
 
 from image_generators import ReplicateImageGenerator
 from prompt_db import update_status
+from transformers import pipeline
+import torch
 
 celery_app = Celery(
     'tasks',
@@ -27,3 +29,12 @@ def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
         raise
     update_status(prompt_id, "completed")
     return base64.b64encode(image_bytes).decode()
+
+
+@celery_app.task
+def generate_text(model: str, prompt: str) -> str:
+    device = 0 if torch.cuda.is_available() else -1
+    generator = pipeline("text-generation", model=model, device=device)
+    data = generator(prompt, max_new_tokens=500)
+    text = data[0]["generated_text"]
+    return text[:2000].strip()
