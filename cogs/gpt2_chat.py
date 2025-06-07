@@ -5,21 +5,28 @@ import os
 
 import discord
 from discord.ext import commands
-from transformers import pipeline
-import torch
+from tasks import generate_text
+from typing import Callable, Awaitable
 
 
 class GPT2Chat(commands.Cog):
     """Chat with GPT-2 in a designated channel."""
 
-    def __init__(self, bot: commands.Bot, *, channel_id: int | None = None, model: str = "gpt2-large") -> None:
+    def __init__(
+        self,
+        bot: commands.Bot,
+        *,
+        channel_id: int | None = None,
+        model: str = "gpt2-large",
+        task_func: Callable[[str, str], Awaitable[str]] | None = None,
+    ) -> None:
         self.bot = bot
         if channel_id is None:
             cid = os.getenv("GPT2_CHANNEL_ID")
             channel_id = int(cid) if cid else None
         self.channel_id = channel_id
-        device = 0 if torch.cuda.is_available() else -1
-        self.generator = pipeline("text-generation", model=model, device=device)
+        self.model = model
+        self.task_func = task_func or self._celery_task
 
     def _should_respond(self, message: discord.Message) -> bool:
         if message.author.bot:
@@ -28,10 +35,12 @@ class GPT2Chat(commands.Cog):
             return True
         return getattr(message.channel, "id", None) == self.channel_id
 
+    async def _celery_task(self, model: str, prompt: str) -> str:
+        task = generate_text.delay(model, prompt)
+        return await asyncio.to_thread(task.get)
+
     async def _generate(self, prompt: str) -> str:
-        data = await asyncio.to_thread(self.generator, prompt, max_new_tokens=500)
-        text = data[0]["generated_text"]
-        return text[:2000].strip()
+        return await self.task_func(self.model, prompt)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

@@ -4,8 +4,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import pytest
 import discord
 from discord.ext import commands
-from unittest import mock
-
 from cogs.gpt2_chat import GPT2Chat
 
 
@@ -13,9 +11,9 @@ class DummyGenerator:
     def __init__(self):
         self.prompts = []
 
-    def __call__(self, prompt: str, max_new_tokens: int = 50):
+    async def generate(self, prompt: str) -> str:
         self.prompts.append(prompt)
-        return [{"generated_text": prompt + " response"}]
+        return prompt + " response"
 
 
 class FakeChannel:
@@ -44,8 +42,12 @@ async def test_gpt2_chat_response(monkeypatch):
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = DummyGenerator()
-    with mock.patch("cogs.gpt2_chat.pipeline", return_value=gen):
-        cog = GPT2Chat(bot, channel_id=1)
+
+    async def task(model, prompt):
+        assert model == "gpt2-large"
+        return await gen.generate(prompt)
+
+    cog = GPT2Chat(bot, channel_id=1, task_func=task)
     channel = FakeChannel()
     msg = FakeMessage("hello", channel, FakeAuthor())
     await cog.on_message(msg)
@@ -59,8 +61,11 @@ async def test_ignore_other_channels(monkeypatch):
     intents = discord.Intents.none()
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = DummyGenerator()
-    with mock.patch("cogs.gpt2_chat.pipeline", return_value=gen):
-        cog = GPT2Chat(bot, channel_id=2)
+
+    async def task(model, prompt):
+        return await gen.generate(prompt)
+
+    cog = GPT2Chat(bot, channel_id=2, task_func=task)
     channel = FakeChannel()
     msg = FakeMessage("hello", channel, FakeAuthor())
     await cog.on_message(msg)
