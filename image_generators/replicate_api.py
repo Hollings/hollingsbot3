@@ -32,6 +32,6 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
 
     async def generate(self, prompt: str) -> bytes:
         output = await self.client.async_run(
-            self.model, input={"prompt": prompt}
+            self.model, input={"prompt": prompt, "disable_safety_checker":False}
         )
         return await self._extract_bytes(output)
