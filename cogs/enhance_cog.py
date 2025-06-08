@@ -24,16 +24,18 @@ class EnhanceCog(commands.Cog):
         self.prompt = prompt or os.getenv("ENHANCE_PROMPT", "")
         self.model = model or os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
         self.enhance_func = enhance_func or self._api_call
+        self.client = anthropic.Client(auth_token=os.getenv("ANTHROPIC_API_KEY", ""))
 
     async def _api_call(self, prompt: str, text: str) -> str:
-        client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
-        full_prompt = f"{anthropic.HUMAN_PROMPT}{prompt}\n{text}{anthropic.AI_PROMPT}"
-        resp = await client.completions.create(
+        full_prompt = f"{prompt}\n=====\n{text}"
+        return str(self.client.messages.create(
             model=self.model,
-            prompt=full_prompt,
-            max_tokens_to_sample=1000,
-        )
-        return resp.completion.strip()
+            max_tokens=1024,
+            messages=[
+                {"role": "user", "content": full_prompt}
+            ]
+        ).content)
+
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
