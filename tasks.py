@@ -4,7 +4,8 @@ import os
 
 from celery import Celery
 
-from image_generators import ReplicateImageGenerator
+from image_generators import get_image_generator
+from text_generators import get_text_generator
 from prompt_db import update_status
 
 celery_app = Celery(
@@ -17,10 +18,7 @@ celery_app = Celery(
 def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
     update_status(prompt_id, "started")
     try:
-        if api == 'replicate':
-            generator = ReplicateImageGenerator(model)
-        else:
-            raise ValueError(f'Unknown API: {api}')
+        generator = get_image_generator(api, model)
         image_bytes = asyncio.run(generator.generate(prompt))
     except Exception as e:  # noqa: BLE001
         update_status(prompt_id, f"failed: {e}")
@@ -30,19 +28,9 @@ def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
 
 
 @celery_app.task
-def generate_text(model: str, prompt: str) -> str:
-    """Generate text using a HuggingFace pipeline.
+def generate_text(api: str, model: str, prompt: str) -> str:
+    """Generate text using the specified provider."""
+    generator = get_text_generator(api, model)
 
-    Imports heavy dependencies lazily so this module can be imported without
-    requiring them. This keeps tests lightweight.
-    """
-    from transformers import pipeline  # imported here to avoid heavy dependency at module import
-    try:
-        import torch  # noqa: WPS433 - imported lazily
-        device = 0 if torch.cuda.is_available() else -1
-    except ModuleNotFoundError:
-        device = -1
-    generator = pipeline("text-generation", model=model, device=device)
-    data = generator(prompt, max_new_tokens=500)
-    text = data[0]["generated_text"]
-    return text[:2000].strip()
+    text = asyncio.run(generator.generate(prompt))
+    return text
