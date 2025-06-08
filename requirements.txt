@@ -1,6 +1,7 @@
 discord.py==2.5.2
 python-dotenv
 replicate
+aiohttp
 celery
 redis
 pytest

@@ -1,7 +1,11 @@
+# docker-compose.yml
 version: '3.9'
+
 services:
   bot:
     build: .
+    # Auto-reload the Discord bot whenever *.py files change inside /app
+    command: watchfiles --filter python "python bot.py" /app
     env_file: .env
     restart: unless-stopped
     volumes:

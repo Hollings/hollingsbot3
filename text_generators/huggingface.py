@@ -1,35 +1,70 @@
+# text_generators/huggingface.py
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+import threading
+from typing import Any, Dict
 
 from .base import TextGeneratorAPI
 
+# --------------------------------------------------------------------------- #
+# Model-wide cache so multiple tasks/processes don’t reload the same pipeline #
+# --------------------------------------------------------------------------- #
+_PIPELINE_CACHE: Dict[str, Any] = {}
+_LOCKS: Dict[str, threading.Lock] = {}
+
 
 class HuggingFaceTextGenerator(TextGeneratorAPI):
-    """Generate text using a HuggingFace pipeline."""
+    """Generate text using a Hugging Face *text-generation* pipeline.
+
+    The underlying model pipeline is cached globally, so repeated calls (even
+    across different generator instances) reuse a single loaded model rather
+    than re-loading it for every request.
+    """
 
     def __init__(self, model: str = "gpt2-large") -> None:
         self.model = model
-        self._pipeline: Any | None = None
 
-    def _ensure_pipeline(self) -> Any:
-        if self._pipeline is None:
-            from transformers import pipeline  # imported lazily
+    # ------------------------------------------------------------------ helpers
+
+    def _ensure_pipeline(self) -> Any:  # noqa: D401 – “Ensure …”
+        """Load (or retrieve) the HF pipeline for ``self.model``."""
+        if self.model in _PIPELINE_CACHE:
+            return _PIPELINE_CACHE[self.model]
+
+        # One lock **per** model to avoid serialising unrelated models.
+        lock = _LOCKS.setdefault(self.model, threading.Lock())
+        with lock:
+            # Double-check once inside the lock.
+            if self.model in _PIPELINE_CACHE:
+                return _PIPELINE_CACHE[self.model]
+
+            # Lazy import so that our tests can monkey-patch ``transformers``.
+            from transformers import pipeline  # type: ignore
+
             try:
-                import torch  # noqa: WPS433 - optional
+                import torch  # noqa: WPS433 – optional, improves device selection
+
                 device = 0 if torch.cuda.is_available() else -1
             except ModuleNotFoundError:
                 device = -1
-            self._pipeline = pipeline("text-generation", model=self.model, device=device)
-        return self._pipeline
+
+            pipe = pipeline(
+                "text-generation",
+                model=self.model,
+                device=device,
+            )
+            _PIPELINE_CACHE[self.model] = pipe
+            return pipe
+
+    # ------------------------------------------------------------------ public
 
     async def generate(self, prompt: str) -> str:
+        """Return the model’s response for *prompt* (max 500 new tokens)."""
         pipe = self._ensure_pipeline()
 
-        def _run(text: str) -> str:
-            data = pipe(text, max_new_tokens=500)
-            result = data[0]["generated_text"]
-            return result[:2000].strip()
+        def _run(inp: str) -> str:  # heavy CPU/GPU work – run in executor
+            data = pipe(inp, max_new_tokens=500)
+            return data[0]["generated_text"][:2000].strip()
 
         return await asyncio.to_thread(_run, prompt)

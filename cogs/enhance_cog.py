@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import os
+import asyncio
+from typing import Callable, Awaitable
 
 import discord
 from discord.ext import commands
-
 import anthropic
-from typing import Callable, Awaitable
 
 
 class EnhanceCog(commands.Cog):
@@ -26,16 +26,37 @@ class EnhanceCog(commands.Cog):
         self.enhance_func = enhance_func or self._api_call
         self.client = anthropic.Client(auth_token=os.getenv("ANTHROPIC_API_KEY", ""))
 
-    async def _api_call(self, prompt: str, text: str) -> str:
-        full_prompt = f"{prompt}\n=====\n{text}"
-        return str(self.client.messages.create(
-            model=self.model,
-            max_tokens=1024,
-            messages=[
-                {"role": "user", "content": full_prompt}
-            ]
-        ).content)
+    # --------------------------------------------------------------------- internal helpers
 
+    async def _api_call(self, prompt: str, text: str) -> str:
+        """Call the Anthropic API without blocking the event-loop and return plain text."""
+        full_prompt = f"{prompt}\n=====\n{text}"
+
+        # The Anthropic SDK is synchronous – run it in a worker thread.
+        def _sync_call():
+            return self.client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+
+        response = await asyncio.to_thread(_sync_call)
+
+        # Claude 3 may return a plain string (older models) or a list of “content blocks”.
+        content = response.content
+        if isinstance(content, str):
+            return content.strip()
+
+        parts: list[str] = []
+        for block in content:  # type: ignore[arg-type]
+            # New SDK objects expose the text on an attribute; streaming JSON falls back to dict.
+            if hasattr(block, "text"):
+                parts.append(str(block.text))
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text", "")))
+        return "".join(parts).strip()
+
+    # --------------------------------------------------------------------- event handlers
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
