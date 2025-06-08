@@ -4,6 +4,8 @@ services:
     build: .
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - ./:/app
     deploy:
       resources:
         reservations:
@@ -15,8 +17,10 @@ services:
 
   celery:
     build: .
-    command: celery -A tasks worker --loglevel=info
+    command: watchfiles --filter python "celery -A tasks worker --loglevel=info" /app
     env_file: .env
+    volumes:
+      - ./:/app
     deploy:
       resources:
         reservations:

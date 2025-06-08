@@ -9,3 +9,4 @@ pytest-asyncio
 pillow
 transformers
 torch
+watchfiles

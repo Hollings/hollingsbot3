@@ -19,6 +19,29 @@ are handled by a separate Celery worker communicating through Redis.
 This command launches the Discord bot, a Celery worker, and a Redis instance
 used for task queueing.
 
+### Celery worker reloading
+
+Celery 5 removed the old `--autoreload` flag. The `docker-compose.yml` file now
+starts the worker via [watchfiles](https://github.com/samuelcolvin/watchfiles),
+which monitors Python files and restarts the worker when they change.
+
+With local sources mounted into the container you can simply run:
+
+```bash
+docker-compose up
+```
+
+Whenever you edit `tasks.py` or other modules, the worker process will restart
+and pick up the new code automatically. You can also invoke the command
+directly:
+
+```bash
+watchfiles --filter python "celery -A tasks worker --loglevel=info" /app
+```
+
+If you prefer not to use auto reload you can still rebuild the containers
+manually or run `watch_for_updates.py`.
+
 ### GPU acceleration
 
 The Docker setup now uses a CUDA-enabled PyTorch image. Ensure your host has the
