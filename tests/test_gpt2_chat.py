@@ -43,7 +43,8 @@ async def test_gpt2_chat_response(monkeypatch):
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = DummyGenerator()
 
-    async def task(model, prompt):
+    async def task(api, model, prompt):
+        assert api == "huggingface"
         assert model == "gpt2-large"
         return await gen.generate(prompt)
 
@@ -62,7 +63,7 @@ async def test_ignore_other_channels(monkeypatch):
     bot = commands.Bot(command_prefix="!", intents=intents)
     gen = DummyGenerator()
 
-    async def task(model, prompt):
+    async def task(api, model, prompt):
         return await gen.generate(prompt)
 
     cog = GPT2Chat(bot, channel_id=2, task_func=task)

@@ -17,14 +17,16 @@ class GPT2Chat(commands.Cog):
         bot: commands.Bot,
         *,
         channel_id: int | None = None,
+        api: str = "huggingface",
         model: str = "gpt2-large",
-        task_func: Callable[[str, str], Awaitable[str]] | None = None,
+        task_func: Callable[[str, str, str], Awaitable[str]] | None = None,
     ) -> None:
         self.bot = bot
         if channel_id is None:
             cid = os.getenv("GPT2_CHANNEL_ID")
             channel_id = int(cid) if cid else None
         self.channel_id = channel_id
+        self.api = api
         self.model = model
         self.task_func = task_func or self._celery_task
 
@@ -35,12 +37,12 @@ class GPT2Chat(commands.Cog):
             return True
         return getattr(message.channel, "id", None) == self.channel_id
 
-    async def _celery_task(self, model: str, prompt: str) -> str:
-        task = generate_text.delay(model, prompt)
+    async def _celery_task(self, api: str, model: str, prompt: str) -> str:
+        task = generate_text.delay(api, model, prompt)
         return await asyncio.to_thread(task.get)
 
     async def _generate(self, prompt: str) -> str:
-        return await self.task_func(self.model, prompt)
+        return await self.task_func(self.api, self.model, prompt)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
