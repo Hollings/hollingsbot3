@@ -27,6 +27,7 @@ class GPT2Chat(commands.Cog):
         self.channel_id = channel_id
         self.model = model
         self.task_func = task_func or self._celery_task
+        self._lock = asyncio.Lock()
 
     def _should_respond(self, message: discord.Message) -> bool:
         if message.author.bot:
@@ -49,9 +50,10 @@ class GPT2Chat(commands.Cog):
         prompt = message.content.strip()
         if not prompt:
             return
-        reply = await self._generate(prompt)
-        if reply:
-            await message.channel.send(reply)
+        async with self._lock:
+            reply = await self._generate(prompt)
+            if reply:
+                await message.channel.send(reply)
 
 
 async def setup(bot: commands.Bot) -> None:
