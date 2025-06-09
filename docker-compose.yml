@@ -19,20 +19,24 @@ services:
     depends_on:
       - redis
 
-  celery:
+  celery_text:
     build: .
-    command: watchfiles --filter python "celery -A tasks worker --loglevel=info" /app
+    command: celery -A tasks worker --loglevel=info --concurrency=1 -Q text
     env_file: .env
-    volumes:
-      - ./:/app
+    volumes: [ ./:/app ]
+    depends_on: [ redis ]
     deploy:
       resources:
         reservations:
-          devices:
-            - driver: nvidia
-              capabilities: [gpu]
-    depends_on:
-      - redis
+          devices: [{ driver: nvidia, capabilities: [gpu] }]
+
+  celery_image:
+    build: .
+    command: celery -A tasks worker --loglevel=info --concurrency=2 -Q image
+    env_file: .env
+    volumes: [ ./:/app ]
+    depends_on: [ redis ]
+
 
   redis:
     image: redis:7

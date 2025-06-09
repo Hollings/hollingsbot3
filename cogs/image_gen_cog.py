@@ -38,7 +38,7 @@ class ImageGenCog(commands.Cog):
         self.task_func = task_func or self._celery_task
 
     async def _celery_task(self, prompt_id: int, api: str, model: str, prompt: str) -> str:
-        task = generate_image.delay(prompt_id, api, model, prompt)
+        task = generate_image.apply_async((prompt_id, api, model, prompt), queue="image")
         return await asyncio.to_thread(task.get)
 
     def _parse_prompt(

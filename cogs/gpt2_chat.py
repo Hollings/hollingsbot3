@@ -28,7 +28,7 @@ class GPT2Chat(commands.Cog):
         *,
         channel_id: int | None = None,
         api: str = "huggingface",
-        model: str = "gpt2-large",
+        model: str = "gpt2-medium",
         task_func: Callable[[str, str, str], Awaitable[str]] | None = None,
         timeout: int | None = None,
     ) -> None:
@@ -44,7 +44,7 @@ class GPT2Chat(commands.Cog):
         self.api = api
         self.model = model
         self.task_func = task_func or self._celery_task
-        self.timeout = timeout or int(os.getenv("GPT2_RESPONSE_TIMEOUT", "60"))
+        self.timeout = timeout or int(os.getenv("GPT2_RESPONSE_TIMEOUT", "120"))
 
         # Keep track of the newest message per channel so we can ignore stale jobs
         self._latest: Dict[int, int] = {}
@@ -52,6 +52,8 @@ class GPT2Chat(commands.Cog):
     # ---------------------------------------------------------------- helpers
 
     def _should_respond(self, message: discord.Message) -> bool:
+        if message.content.lower() == "enhance":
+            return False
         if message.author.bot:
             return False
         if self.channel_id is None:
@@ -59,7 +61,7 @@ class GPT2Chat(commands.Cog):
         return getattr(message.channel, "id", None) == self.channel_id
 
     async def _celery_task(self, api: str, model: str, prompt: str) -> str:
-        task = generate_text.delay(api, model, prompt)
+        task = generate_text.apply_async((api, model, prompt), queue="text")
         try:
             # Run the potentially blocking ``task.get`` call in a thread.
             return await asyncio.to_thread(task.get, timeout=self.timeout)

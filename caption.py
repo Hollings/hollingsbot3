@@ -61,15 +61,20 @@ def _add_caption(img: Image.Image, caption: str) -> Image.Image:
 
     return new_img
 
-
 def add_caption(image_bytes: bytes, text: str) -> bytes:
-    """Return image bytes with a caption added above the image."""
+    """Return image bytes with a caption rendered above the original."""
     if not text:
         return image_bytes
 
-    with Image.open(BytesIO(image_bytes)) as img:
-        img = img.convert("RGB")
-        new_img = _add_caption(img, text)
-        out = BytesIO()
-        new_img.save(out, format="PNG")
-        return out.getvalue()
+    buf = BytesIO(image_bytes)
+    img = Image.open(buf)
+    img.load()                 # <-- make pixel data independent of `buf`
+    img = img.convert("RGB")   # afterwards you can safely close the buffer
+    buf.close()
+
+    new_img = _add_caption(img, text)
+
+    out = BytesIO()
+    new_img.save(out, format="PNG")
+    out.seek(0)                # Discord will read from the start
+    return out.read()
