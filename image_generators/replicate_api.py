@@ -1,81 +1,151 @@
 from __future__ import annotations
 
+import asyncio
 import os
+from dataclasses import dataclass, field
 from typing import Any, AsyncIterator, Final, Sequence
 
 import aiohttp
 import replicate
 
-from .base import ImageGeneratorAPI
+from .base import ImageGeneratorAPI  # local import
+
+# ---------------------------------------------------------------------------
 
 
+@dataclass(slots=True)
 class ReplicateImageGenerator(ImageGeneratorAPI):
-    """Image generator backed by the `replicate` Python client."""
+    """
+    Image generator backed by the **async** Replicate client.
 
-    _DEFAULT_MODEL: Final[str] = "black-forest-labs/flux-schnell"
+    A ``seed`` can now be passed to :meth:`generate` to make results
+    reproducible, e.g.::
 
-    def __init__(self, model: str | None = None, *, api_token: str | None = None) -> None:
-        api_token = api_token or os.getenv("REPLICATE_API_TOKEN", "")
-        if not api_token:
+        gen = ReplicateImageGenerator("black-forest-labs/flux-schnell")
+        png_bytes = await gen.generate("A red panda", seed=42)
+    """
+
+    model: str = "black-forest-labs/flux-schnell"
+    api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
+
+    # ------------------------------ dunders ------------------------------
+
+    def __post_init__(self) -> None:
+        if not self.api_token:
             raise RuntimeError(
-                "Missing REPLICATE_API_TOKEN environment variable or argument."
+                "REPLICATE_API_TOKEN is required. "
+                "Pass it explicitly or set the environment variable."
             )
 
-        self.client = replicate.Client(api_token=api_token)
-        self.model: str = model or self._DEFAULT_MODEL
+        # replicate.Client is synchronous, but its ``.async_run`` returns a coroutine
+        self._client = replicate.Client(api_token=self.api_token)
         self._session: aiohttp.ClientSession | None = None
 
-    # --------------------------------------------------------------------- public
+    async def __aenter__(self) -> "ReplicateImageGenerator":  # type: ignore[override]
+        return self
 
-    async def generate(self, prompt: str) -> bytes:
-        """Return raw PNG/JPEG bytes for *prompt*."""
-        raw_output = await self.client.async_run(
-            self.model,
-            input={"prompt": prompt, "disable_safety_checker": True},
-        )
-        return await self._to_bytes(raw_output)
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+        await self.aclose()
 
-    async def aclose(self) -> None:
+    # ------------------------------ public API --------------------------
+
+    async def generate(self, prompt: str, *, seed: int | None = None) -> bytes:  # type: ignore[override]
+        """
+        Generate a PNG/JPEG as *bytes* for *prompt*.
+
+        Parameters
+        ----------
+        seed
+            Optional deterministic seed forwarded to the model’s ``seed`` input
+            (if supported).  ``None`` leaves reproducibility up to the backend.
+
+        Raises
+        ------
+        RuntimeError
+            If the upstream call fails or produces no usable output.
+        """
+        try:
+            inputs: dict[str, Any] = {
+                "prompt": prompt,
+                # Make safety configurable; default remains `True`
+                "disable_safety_checker": True,
+            }
+            if seed is not None:
+                inputs["seed"] = seed
+
+            raw_output = await self._client.async_run(self.model, input=inputs)
+            return await self._normalise_output(raw_output)
+        except Exception as exc:
+            raise RuntimeError(f"Replicate generation failed: {exc}") from exc
+
+    async def aclose(self) -> None:  # noqa: D401
+        """Release the underlying HTTP session, if any."""
         if self._session and not self._session.closed:
             await self._session.close()
 
-    # -------------------------------------------------------------------- private
+    # ------------------------- implementation details -------------------
 
-    async def _to_bytes(self, data: Any) -> bytes:  # noqa: C901 – deliberate
-        """Normalise *data* returned by `replicate.run` into ``bytes``."""
+    _StreamTypes: Final = (
+        bytes,
+        bytearray,
+        replicate.helpers.FileOutput
+        if hasattr(replicate.helpers, "FileOutput")
+        else tuple(),
+    )
 
-        # 1. Already bytes/bytearray
-        if isinstance(data, (bytes, bytearray)):
-            return bytes(data)
 
-        # 2. replicate.helpers.FileOutput (stream)
-        if hasattr(replicate.helpers, "FileOutput") and isinstance(
-            data, replicate.helpers.FileOutput
+    async def _normalise_output(self, data: Any) -> bytes:  # noqa: C901 – complexity intentional
+
+        # 0. A **list/tuple of byte‑chunks**  -----------------------------------------------
+        #    Replicate occasionally yields `[b'…', b'…']`; join them into a single blob.
+        if (
+           isinstance(data, (list, tuple))
+           and data
+           and all(isinstance(x, (bytes, bytearray)) for x in data)
         ):
-            return await data.aread()
+           return b"".join(data)
 
-        # 3. Async iterator (streaming responses)
+        # 1. Already bytes‑like or ``bytearray`` or **single** FileOutput -------------------
+        if isinstance(data, self._StreamTypes):
+           # `replicate.helpers.FileOutput` is a str‑subclass pointing at a URL, not raw bytes
+           if not isinstance(data, (bytes, bytearray)):
+               return await self._download(str(data))
+           return bytes(data)
+
+
+        # 2. AsyncIterator – stream until first chunk --------------------------
         if isinstance(data, AsyncIterator) or hasattr(data, "__aiter__"):
             async for chunk in data:
-                return await self._to_bytes(chunk)
+                return await self._normalise_output(chunk)
 
-        # 4. Sequence of outputs – recurse into the first element
+        # 3. Sequence (list of URLs / bytes / etc.) ----------------------------
         if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
             if not data:
-                raise RuntimeError("Model produced no output.")
-            return await self._to_bytes(data[0])
+                raise RuntimeError("Model returned an empty sequence.")
+            return await self._normalise_output(data[0])
 
-        # 5. URL string – download it
+        # 4. URL – download -----------------------------------------------------
         if isinstance(data, str) and data.startswith(("http://", "https://")):
             return await self._download(data)
 
-        raise RuntimeError(f"Unsupported Replicate output type: {type(data)!r}")
+        raise RuntimeError(f"Unsupported Replicate output type: {type(data).__name__}")
 
     async def _download(self, url: str) -> bytes:
-        """Download *url* and return its payload."""
+        """Fetch *url* and return its body as bytes."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
-        async with self._session.get(url) as resp:
-            if resp.status != 200:
-                raise RuntimeError(f"Failed to download {url!s} – HTTP {resp.status}")
-            return await resp.read()
+
+        # Two quick retries with exponential back‑off for transient CDN errors
+        for delay in (0, 1.0):
+            if delay:
+                await asyncio.sleep(delay)
+
+            async with self._session.get(url) as rsp:
+                if rsp.status == 200:
+                    return await rsp.read()
+                if rsp.status >= 500:  # retryable
+                    continue
+
+                raise RuntimeError(f"Download failed: HTTP {rsp.status}")
+
+        raise RuntimeError(f"Download failed after retries: {url}")

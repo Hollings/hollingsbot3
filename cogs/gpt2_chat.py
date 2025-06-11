@@ -96,9 +96,9 @@ class GPT2Chat(commands.Cog):
         self._latest[channel_id] = message.id
         reply = await self._generate(prompt)
 
-        # If a newer prompt arrived while we were waiting, drop this response.
-        if self._latest.get(channel_id) != message.id:
-            return
+        # # If a newer prompt arrived while we were waiting, drop this response.
+        # if self._latest.get(channel_id) != message.id:
+        #     return
 
         if reply:
             await message.channel.send(reply[: self._MAX_DISCORD_LEN])

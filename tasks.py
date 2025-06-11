@@ -9,6 +9,7 @@ from celery.utils.log import get_task_logger
 from image_generators import get_image_generator
 from text_generators import get_text_generator
 from prompt_db import update_status
+from inspect import signature
 
 logger = get_task_logger(__name__)
 
@@ -23,22 +24,37 @@ celery_app.conf.task_routes = {
     "tasks.generate_image": {"queue": "image"},
 }
 
+
 @celery_app.task(name="tasks.generate_image", queue="image")
-def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
+def generate_image(
+    prompt_id: int,
+    api: str,
+    model: str,
+    prompt: str,
+    seed: int | None = None,
+) -> str:
     """Generate an image, encode it as base64, and return the string."""
+
     start = time.monotonic()
     logger.info(
-        "generate_image[%s] START | api=%s model=%s prompt=%s",
+        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s",
         prompt_id,
         api,
         model,
+        seed,
         prompt,
     )
 
     update_status(prompt_id, "started")
     try:
         generator = get_image_generator(api, model)
-        image_bytes = asyncio.run(generator.generate(prompt))
+
+        # Pass *seed* only if the generator’s signature supports it
+        gen_sig = signature(generator.generate)
+        if "seed" in gen_sig.parameters:
+            image_bytes = asyncio.run(generator.generate(prompt, seed=seed))
+        else:
+            image_bytes = asyncio.run(generator.generate(prompt))
     except Exception as exc:  # noqa: BLE001
         duration = time.monotonic() - start
         logger.exception(
@@ -59,7 +75,6 @@ def generate_image(prompt_id: int, api: str, model: str, prompt: str) -> str:
         len(image_bytes),
     )
     return base64.b64encode(image_bytes).decode()
-
 
 @celery_app.task(name="tasks.generate_text", queue="text")
 def generate_text(api: str, model: str, prompt: str) -> str:
