@@ -30,7 +30,7 @@ THINKING = "\N{THINKING FACE}"
 SUCCESS  = "\N{WHITE HEAVY CHECK MARK}"
 FAILURE  = "\N{CROSS MARK}"
 
-_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
+_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
 
 
 # --------------------------------------------------------------------------- data model
@@ -46,48 +46,91 @@ class GeneratorSpec:
 
 
 class ImageGenCog(commands.Cog):
-    """Turn specially‑prefixed messages into AI‑generated images.
+    """Turn specially-prefixed messages into AI-generated images.
 
     A user may optionally embed a seed at the very start of the prompt::
 
         !{1234}A photorealistic otter in a suit
 
-    Curly‑braces *must* immediately follow the prefix.  The seed is forwarded
+    Curly-braces *must* immediately follow the prefix.  The seed is forwarded
     to the Replicate backend for deterministic output.
+
+    The generator-prefix mapping is loaded from *image_gen_config.json*.
+    The file is watched for changes on every incoming message so edits take
+    effect immediately – no bot restart required.
     """
 
     _SEED_RE = re.compile(r"^\{\s*(\d+)\s*}", re.ASCII)
+
+    # --------------------------------------------------------------------- init
 
     def __init__(
         self,
         bot: commands.Bot,
         *,
         config: Mapping[str, Mapping[str, str]] | None = None,
+        config_path: Path | None = None,
         task_runner: Callable[..., Awaitable[str]] | None = None,
     ) -> None:
         self.bot = bot
         init_db()
 
-        # ------------ load prefix → GeneratorSpec mapping ------------
-        raw_cfg: Mapping[str, Mapping[str, str]]
-        if config is None:
-            try:
-                raw_cfg = json.loads(_DEFAULT_CONFIG_PATH.read_text("utf8"))
-            except FileNotFoundError:
-                _log.warning("No image_gen_config.json found – cog disabled.")
-                raw_cfg = {}
+        # ------------ dynamic configuration ------------------------------
+        #
+        # If an explicit mapping is supplied we treat it as static.
+        # Otherwise the mapping is loaded from *config_path* (defaults to
+        # _DEFAULT_CONFIG_PATH) and transparently reloaded when the file
+        # changes on disk.
+        #
+        if config is not None:
+            self._prefix_map: dict[str, GeneratorSpec] = {
+                p.strip(): GeneratorSpec(**spec) for p, spec in config.items()
+            }
+            self._cfg_path: Path | None = None
+            self._cfg_mtime: float = 0.0
         else:
-            raw_cfg = config
+            self._cfg_path = config_path or _DEFAULT_CONFIG_PATH
+            self._cfg_mtime = 0.0
+            self._prefix_map = {}
+            self._reload_config()  # initial load
 
-        self._prefix_map: dict[str, GeneratorSpec] = {
-            p.strip(): GeneratorSpec(**spec) for p, spec in raw_cfg.items()
-        }
-
-        # ------------ task execution helper --------------------------
+        # ------------ task execution helper ------------------------------
         self._run_task = task_runner or self._default_celery_runner
         self._pending: set[asyncio.Task[None]] = set()
 
-    # ---------------------------------------------------------------- life‑cycle
+    # --------------------------------------------------------------------- config helpers
+
+    def _reload_config(self) -> None:
+        """(Re)load prefix → GeneratorSpec mapping from disk if file changed."""
+        if self._cfg_path is None:
+            return
+
+        try:
+            mtime = self._cfg_path.stat().st_mtime
+        except FileNotFoundError:
+            if self._prefix_map:
+                _log.warning("Config file vanished – keeping last-known map.")
+            return
+
+        # Update only when timestamp changed
+        if mtime == self._cfg_mtime:
+            return
+
+        try:
+            raw_cfg: Mapping[str, Mapping[str, str]] = json.loads(
+                self._cfg_path.read_text("utf8")
+            )
+        except Exception as exc:  # noqa: BLE001
+            _log.exception("Failed to parse %s: %s – keeping old config", self._cfg_path, exc)
+            return
+
+        self._prefix_map = {
+            p.strip(): GeneratorSpec(**spec) for p, spec in raw_cfg.items()
+        }
+        self._cfg_mtime = mtime
+        _log.info("Reloaded image-generator config (%d prefixes).", len(self._prefix_map))
+
+    # ---------------------------------------------------------------- life-cycle
 
     async def cog_unload(self) -> None:
         for task in self._pending:
@@ -104,7 +147,7 @@ class ImageGenCog(commands.Cog):
         prompt: str,
         seed: int | None,
     ) -> str:
-        """Submit the Celery task and wait for the Base‑64 image."""
+        """Submit the Celery task and wait for the Base-64 image."""
 
         task = generate_image.apply_async(
             (prompt_id, api, model, prompt, seed), queue="image"
@@ -113,18 +156,25 @@ class ImageGenCog(commands.Cog):
 
     # ---------------------------------------------------------------- helpers
 
-    @staticmethod
-    async def _react(msg: discord.Message, emoji: str, *, remove: bool = False) -> None:
+    async def _react(self, msg: discord.Message, emoji: str, *, remove: bool = False) -> None:
         try:
             if remove:
                 await msg.clear_reaction(emoji)
             else:
                 await msg.add_reaction(emoji)
         except discord.HTTPException:
-            _log.debug("Could not %s reaction %s on %s", "remove" if remove else "add", emoji, msg.id)
+            _log.debug(
+                "Could not %s reaction %s on %s",
+                "remove" if remove else "add",
+                emoji,
+                msg.id,
+            )
 
     def _split_prompt(self, content: str) -> tuple[str, GeneratorSpec] | None:
-        """If *content* starts with a known prefix return stripped‑prompt & spec."""
+        """If *content* starts with a known prefix return stripped-prompt & spec."""
+        # Ensure we have the latest mapping before matching
+        self._reload_config()
+
         for prefix, spec in self._prefix_map.items():
             if content.startswith(prefix):
                 return content[len(prefix):].lstrip(), spec
@@ -142,7 +192,7 @@ class ImageGenCog(commands.Cog):
 
         await self._react(message, THINKING)
 
-        # 1. Extract `{seed}` if present
+        # 1. Extract `{seed}` if present
         seed: int | None = None
         m = self._SEED_RE.match(raw_prompt)
         if m:
@@ -155,21 +205,23 @@ class ImageGenCog(commands.Cog):
             await message.channel.send("⚠️ Prompt may not be empty.")
             return
 
-        # 2. Persist prompt in DB
+        # 2. Persist prompt in DB
         prompt_id = add_prompt(raw_prompt, str(message.author.id), spec.api, spec.model)
 
-        # 3. Kick off generation worker
+        # 3. Kick off generation worker
         try:
             b64_img = await self._run_task(prompt_id, spec.api, spec.model, raw_prompt, seed)
             image_bytes = base64.b64decode(b64_img, validate=True)
 
             if len(image_bytes) > _MAX_DISCORD_FILESIZE:
                 raise RuntimeError(
-                    f"Image {len(image_bytes)/2**20:.1f} MiB exceeds Discord’s 25 MiB limit."
+                    f"Image {len(image_bytes)/2**20:.1f} MiB exceeds Discord’s 25 MiB limit."
                 )
 
             captioned = add_caption(image_bytes, raw_prompt)
-            await message.channel.send(file=discord.File(BytesIO(captioned), filename="generated.png"))
+            await message.channel.send(
+                file=discord.File(BytesIO(captioned), filename="generated.png")
+            )
 
             await self._react(message, SUCCESS)
         except Exception as exc:  # noqa: BLE001

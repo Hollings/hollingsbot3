@@ -1,8 +1,8 @@
-# cogs/gpt2_chat.py
 from __future__ import annotations
 
 import asyncio
 import os
+import random
 from typing import Callable, Awaitable, Dict
 
 import discord
@@ -29,7 +29,7 @@ class GPT2Chat(commands.Cog):
         channel_id: int | None = None,
         api: str = "huggingface",
         model: str = "gpt2-medium",
-        task_func: Callable[[str, str, str], Awaitable[str]] | None = None,
+        task_func: Callable[[str, str, str, float], Awaitable[str]] | None = None,
         timeout: int | None = None,
     ) -> None:
         self.bot = bot
@@ -60,8 +60,8 @@ class GPT2Chat(commands.Cog):
             return True
         return getattr(message.channel, "id", None) == self.channel_id
 
-    async def _celery_task(self, api: str, model: str, prompt: str) -> str:
-        task = generate_text.apply_async((api, model, prompt), queue="text")
+    async def _celery_task(self, api: str, model: str, prompt: str, temperature: float) -> str:
+        task = generate_text.apply_async((api, model, prompt, temperature), queue="text")
         try:
             # Run the potentially blocking ``task.get`` call in a thread.
             return await asyncio.to_thread(task.get, timeout=self.timeout)
@@ -71,9 +71,14 @@ class GPT2Chat(commands.Cog):
             )
 
     async def _generate(self, prompt: str) -> str:
-        """Wrapper around *task_func* that converts exceptions to friendly text."""
+        """Wrap *task_func* and convert exceptions to friendly text.
+
+        A random temperature between 0.5 and 1.5—biased toward 1.0—is chosen for
+        each call using ``random.triangular``.
+        """
+        temperature = random.triangular(0.5, 1.5, 1.0)
         try:
-            return await self.task_func(self.api, self.model, prompt)
+            return await self.task_func(self.api, self.model, prompt, temperature)
         except Exception as exc:  # noqa: BLE001
             return f"⚠️ Error generating response: {exc}"
 

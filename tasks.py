@@ -2,6 +2,7 @@ import asyncio
 import base64
 import os
 import time
+from inspect import signature
 
 from celery import Celery
 from celery.utils.log import get_task_logger
@@ -9,7 +10,6 @@ from celery.utils.log import get_task_logger
 from image_generators import get_image_generator
 from text_generators import get_text_generator
 from prompt_db import update_status
-from inspect import signature
 
 logger = get_task_logger(__name__)
 
@@ -34,7 +34,6 @@ def generate_image(
     seed: int | None = None,
 ) -> str:
     """Generate an image, encode it as base64, and return the string."""
-
     start = time.monotonic()
     logger.info(
         "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s",
@@ -48,8 +47,6 @@ def generate_image(
     update_status(prompt_id, "started")
     try:
         generator = get_image_generator(api, model)
-
-        # Pass *seed* only if the generator’s signature supports it
         gen_sig = signature(generator.generate)
         if "seed" in gen_sig.parameters:
             image_bytes = asyncio.run(generator.generate(prompt, seed=seed))
@@ -76,20 +73,31 @@ def generate_image(
     )
     return base64.b64encode(image_bytes).decode()
 
+
 @celery_app.task(name="tasks.generate_text", queue="text")
-def generate_text(api: str, model: str, prompt: str) -> str:
-    """Generate text using the specified provider with detailed logging."""
+def generate_text(
+    api: str,
+    model: str,
+    prompt: str,
+    temperature: float = 1.0,
+) -> str:
+    """Generate text with detailed logging, supporting a configurable temperature."""
     start = time.monotonic()
     logger.info(
-        "generate_text START | api=%s model=%s prompt_len=%d",
+        "generate_text START | api=%s model=%s temp=%.2f prompt_len=%d",
         api,
         model,
+        temperature,
         len(prompt),
     )
 
     try:
         generator = get_text_generator(api, model)
-        text = asyncio.run(generator.generate(prompt))
+        gen_sig = signature(generator.generate)
+        if "temperature" in gen_sig.parameters:
+            text = asyncio.run(generator.generate(prompt, temperature=temperature))
+        else:
+            text = asyncio.run(generator.generate(prompt))
     except Exception as exc:  # noqa: BLE001
         duration = time.monotonic() - start
         logger.exception("generate_text FAILED after %.2fs | %s", duration, exc)
