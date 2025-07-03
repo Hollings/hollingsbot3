@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import re
 from dataclasses import dataclass
 from inspect import signature
@@ -146,13 +147,28 @@ class ImageGenCog(commands.Cog):
         model: str,
         prompt: str,
         seed: int | None,
+        *,
+        poll_interval: float = 0.5,
     ) -> str:
-        """Submit the Celery task and wait for the Base-64 image."""
+        """
+        Launch an image‑generation task on the “image” queue and poll Redis
+        until the result is ready.
 
-        task = generate_image.apply_async(
-            (prompt_id, api, model, prompt, seed), queue="image"
+        Polling sidesteps Celery’s thread‑unsafe Pub/Sub consumer, so many
+        image requests can be awaited concurrently inside the Discord bot.
+        The text queue logic remains untouched, keeping GPU usage serialized.
+        """
+        async_result = generate_image.apply_async(
+            (prompt_id, api, model, prompt, seed),
+            queue="image",
         )
-        return await asyncio.to_thread(task.get)
+
+        # Simple polling loop – cheap GET per iteration, no shared socket
+        while not async_result.ready():
+            await asyncio.sleep(poll_interval)
+
+        # Task completed: fetch (and propagate) the result or remote exception
+        return await asyncio.to_thread(async_result.get)
 
     # ---------------------------------------------------------------- helpers
 
@@ -171,29 +187,63 @@ class ImageGenCog(commands.Cog):
             )
 
     def _split_prompt(self, content: str) -> tuple[str, GeneratorSpec] | None:
-        """If *content* starts with a known prefix return stripped-prompt & spec."""
-        # Ensure we have the latest mapping before matching
+        """Return (*prompt_without_prefix*, *generator_spec*) if *content*
+        begins with a configured prefix.
+
+        Multiple-character prefixes are supported and disambiguated by always
+        preferring the *longest* matching prefix (e.g. `'$$'` has priority over
+        `'$'` when both exist).  Prefix comparison is case-sensitive.
+        """
+        # Always start with the freshest prefix-to-spec mapping
         self._reload_config()
 
-        for prefix, spec in self._prefix_map.items():
+        # Try the longest prefixes first so that more-specific matches win
+        for prefix in sorted(self._prefix_map, key=len, reverse=True):
             if content.startswith(prefix):
+                spec = self._prefix_map[prefix]
                 return content[len(prefix):].lstrip(), spec
+
         return None
+
+
+    # ---------------------------------------------------------------- main pipeline
+
+    def _build_filename(
+            self,
+            prompt: str,
+            spec: GeneratorSpec,
+            seed: int | None,
+            *,
+            max_len: int = 32,
+    ) -> str:
+        """Return a Discord-friendly filename based on *prompt*, *spec*, and *seed*.
+
+        Format:
+            <prompt_snippet>_<api>-<model>_<seed|rand>.png
+        """
+        snippet = re.sub(r"[^A-Za-z0-9]+", "_", prompt).strip("_")
+        if not snippet:
+            snippet = "image"
+        if len(snippet) > max_len:
+            snippet = snippet[:max_len].rstrip("_")
+
+        api_model = f"{spec.api}-{spec.model}".replace("/", "-")
+        seed_part = str(seed) if seed is not None else "rand"
+        return f"{snippet}_{api_model}_seed_{seed_part}.png".lower()
 
     # ---------------------------------------------------------------- main pipeline
 
     async def _handle_generation(
-        self,
-        message: discord.Message,
-        raw_prompt: str,
-        spec: GeneratorSpec,
+            self,
+            message: discord.Message,
+            raw_prompt: str,
+            spec: GeneratorSpec,
     ) -> None:
         """Extract seed, call Celery, upload image, manage UX reactions."""
-
         await self._react(message, THINKING)
 
         # 1. Extract `{seed}` if present
-        seed: int | None = None
+        seed: int = random.randint(1,1000)
         m = self._SEED_RE.match(raw_prompt)
         if m:
             seed = int(m.group(1))
@@ -210,17 +260,20 @@ class ImageGenCog(commands.Cog):
 
         # 3. Kick off generation worker
         try:
-            b64_img = await self._run_task(prompt_id, spec.api, spec.model, raw_prompt, seed)
+            b64_img = await self._run_task(
+                prompt_id, spec.api, spec.model, raw_prompt, seed
+            )
             image_bytes = base64.b64decode(b64_img, validate=True)
 
             if len(image_bytes) > _MAX_DISCORD_FILESIZE:
                 raise RuntimeError(
-                    f"Image {len(image_bytes)/2**20:.1f} MiB exceeds Discord’s 25 MiB limit."
+                    f"Image {len(image_bytes) / 2 ** 20:.1f} MiB exceeds Discord’s 25 MiB limit."
                 )
 
             captioned = add_caption(image_bytes, raw_prompt)
+            filename = self._build_filename(raw_prompt, spec, seed)
             await message.channel.send(
-                file=discord.File(BytesIO(captioned), filename="generated.png")
+                file=discord.File(BytesIO(captioned), filename=filename)
             )
 
             await self._react(message, SUCCESS)
