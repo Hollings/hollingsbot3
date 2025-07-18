@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import random
 import re
 from dataclasses import dataclass
@@ -31,7 +32,7 @@ THINKING = "\N{THINKING FACE}"
 SUCCESS  = "\N{WHITE HEAVY CHECK MARK}"
 FAILURE  = "\N{CROSS MARK}"
 
-_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
+_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
 
 
 # --------------------------------------------------------------------------- data model
@@ -47,31 +48,11 @@ class GeneratorSpec:
 
 
 class ImageGenCog(commands.Cog):
-    """Turn specially‑prefixed messages into AI‑generated images.
-
-    A user may optionally embed a seed at the very start of the prompt::
-
-        !{1234}A photorealistic otter in a suit
-
-    Curly‑braces *must* immediately follow the prefix.  The seed is forwarded
-    to the Replicate backend for deterministic output.
-
-    Additionally, a single list of comma‑separated items wrapped in ``<>`` is
-    expanded so that one image is generated for *each* item using **the same
-    seed**::
-
-        A picture of a <dog, cat, bird>
-
-    generates three images with identical seeds for the dog, cat, and bird
-    variants.
-
-    The generator‑prefix mapping is loaded from *image_gen_config.json*.
-    The file is watched for changes on every incoming message so edits take
-    effect immediately – no bot restart required.
-    """
+    """Generate images **only** in channels listed in the
+    ``STABLE_DIFFUSION_CHANNEL_IDS`` environment variable (comma-separated)."""
 
     _SEED_RE = re.compile(r"^\{\s*(\d+)\s*}", re.ASCII)
-    _LIST_RE = re.compile(r"<([^<>]+)>", re.ASCII)  # first (outer‑most) <> list
+    _LIST_RE = re.compile(r"<([^<>]+)>", re.ASCII)  # first (outer-most) <> list
 
     # --------------------------------------------------------------------- init
 
@@ -85,6 +66,16 @@ class ImageGenCog(commands.Cog):
     ) -> None:
         self.bot = bot
         init_db()
+
+        # ------------ channel allow-list ---------------------------------
+        env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
+        self._allowed_channel_ids: set[int] = {
+            int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()
+        }
+        if not self._allowed_channel_ids:
+            _log.warning(
+                "STABLE_DIFFUSION_CHANNEL_IDS is empty – image generation disabled."
+            )
 
         # ------------ dynamic configuration ------------------------------
         if config is not None:
@@ -106,7 +97,7 @@ class ImageGenCog(commands.Cog):
     # --------------------------------------------------------------------- config helpers
 
     def _reload_config(self) -> None:
-        """(Re)load prefix → GeneratorSpec mapping from disk if file changed."""
+        """(Re)load prefix → GeneratorSpec mapping from disk if file changed."""
         if self._cfg_path is None:
             return
 
@@ -114,7 +105,7 @@ class ImageGenCog(commands.Cog):
             mtime = self._cfg_path.stat().st_mtime
         except FileNotFoundError:
             if self._prefix_map:
-                _log.warning("Config file vanished – keeping last‑known map.")
+                _log.warning("Config file vanished – keeping last-known map.")
             return
 
         if mtime == self._cfg_mtime:
@@ -132,9 +123,9 @@ class ImageGenCog(commands.Cog):
             p.strip(): GeneratorSpec(**spec) for p, spec in raw_cfg.items()
         }
         self._cfg_mtime = mtime
-        _log.info("Reloaded image‑generator config (%d prefixes).", len(self._prefix_map))
+        _log.info("Reloaded image-generator config (%d prefixes).", len(self._prefix_map))
 
-    # ---------------------------------------------------------------- life‑cycle
+    # ---------------------------------------------------------------- life-cycle
 
     async def cog_unload(self) -> None:
         for task in self._pending:
@@ -154,7 +145,7 @@ class ImageGenCog(commands.Cog):
         poll_interval: float = 0.5,
     ) -> str:
         """
-        Launch an image‑generation task on the “image” queue and poll Redis
+        Launch an image-generation task on the “image” queue and poll Redis
         until the result is ready.
         """
         async_result = generate_image.apply_async(
@@ -203,7 +194,7 @@ class ImageGenCog(commands.Cog):
         *,
         max_len: int = 32,
     ) -> str:
-        """Return a Discord‑friendly filename based on *prompt*, *spec*, and *seed*."""
+        """Return a Discord-friendly filename based on *prompt*, *spec*, and *seed*."""
         snippet = re.sub(r"[^A-Za-z0-9]+", "_", prompt).strip("_")
         if not snippet:
             snippet = "image"
@@ -225,7 +216,7 @@ class ImageGenCog(commands.Cog):
         """Extract seed, optionally expand <item, …>, kick off workers and upload images."""
         await self._react(message, THINKING)
 
-        # 1. Seed handling – random unless {seed} prefix present
+        # 1. Seed handling – random unless {seed} prefix present
         seed = random.randint(1, 1000)
         m_seed = self._SEED_RE.match(raw_prompt)
         if m_seed:
@@ -279,7 +270,7 @@ class ImageGenCog(commands.Cog):
             try:
                 if len(img_bytes) > _MAX_DISCORD_FILESIZE:
                     raise RuntimeError(
-                        f"Image {len(img_bytes) / 2 ** 20:.1f} MiB exceeds Discord’s 25 MiB limit."
+                        f"Image {len(img_bytes) / 2 ** 20:.1f} MiB exceeds Discord’s 25 MiB limit."
                     )
 
                 captioned = add_caption(img_bytes, prompt_text)
@@ -289,9 +280,9 @@ class ImageGenCog(commands.Cog):
                 )
             except Exception as exc:  # noqa: BLE001
                 overall_success = False
-                _log.exception("Post‑processing failed: %s", exc)
+                _log.exception("Post-processing failed: %s", exc)
                 await message.channel.send(
-                    f"⚠️ Image post‑processing failed for **{prompt_variant}**:\n> {exc}"
+                    f"⚠️ Image post-processing failed for **{prompt_variant}**:\n> {exc}"
                 )
 
         await self._react(message, THINKING, remove=True)
@@ -301,6 +292,10 @@ class ImageGenCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
+        # Only respond in whitelisted channels
+        if message.channel.id not in self._allowed_channel_ids:
+            return
+
         if message.author.bot or message.guild is None:
             return
 
