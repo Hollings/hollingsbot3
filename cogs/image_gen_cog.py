@@ -262,11 +262,19 @@ class ImageGenCog(commands.Cog):
                     prompt_id, spec.api, spec.model, p, seed
                 )
                 img_path = Path(file_path_str)
-                img_bytes = img_path.read_bytes()
-                try:
-                    img_path.unlink(missing_ok=True)
-                except Exception:
-                    _log.debug("Temp image %s could not be deleted", img_path)
+                if img_path.exists():
+                    img_bytes = img_path.read_bytes()
+                    try:
+                        img_path.unlink(missing_ok=True)
+                    except Exception:
+                        _log.debug("Temp image %s could not be deleted", img_path)
+                else:
+                    try:
+                        img_bytes = base64.b64decode(file_path_str)
+                    except Exception:
+                        raise RuntimeError(
+                            "Task output is neither a file path nor base64 bytes"
+                        )
                 return p, img_bytes
             except Exception as exc:  # noqa: BLE001
                 return exc
@@ -278,9 +286,8 @@ class ImageGenCog(commands.Cog):
         for prompt_variant, result in zip(prompts, results):
             if isinstance(result, Exception):
                 overall_success = False
-                _log.exception("Generation failed for '%s': %s", prompt_variant, result)
-                await message.channel.send(
-                    f"⚠️ Image generation failed for **{prompt_variant}**:\n> {result}"
+                _log.exception(
+                    "Generation failed for '%s': %s", prompt_variant, result
                 )
                 continue
 
