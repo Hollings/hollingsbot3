@@ -1,7 +1,8 @@
 import os
 from dotenv import load_dotenv
 import discord
-from discord.ext import commands
+from discord.ext import commands, tasks
+import asyncio
 
 load_dotenv()
 
@@ -16,6 +17,18 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 async def on_ready():
     print(f'Logged in as {bot.user} (ID: {bot.user.id})')
     print('------')
+    if not restart_task.is_running():
+        restart_task.start()
+
+
+RESTART_INTERVAL = int(os.getenv('BOT_RESTART_INTERVAL', 6 * 60 * 60))
+
+
+@tasks.loop(seconds=RESTART_INTERVAL)
+async def restart_task():
+    print('Restart interval reached; exiting for restart')
+    await bot.close()
+    os._exit(0)
 
 async def main():
     async with bot:
