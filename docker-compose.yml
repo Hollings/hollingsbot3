@@ -10,6 +10,8 @@ services:
     restart: unless-stopped
     volumes:
       - ./:/app
+      - ./generated:/app/generated
+
     deploy:
       resources:
         reservations:
@@ -34,8 +36,12 @@ services:
     build: .
     command: celery -A tasks worker --loglevel=info --concurrency=2 -Q image
     env_file: .env
-    volumes: [ ./:/app ]
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
     depends_on: [ redis ]
+
 
 
   redis:

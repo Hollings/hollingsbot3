@@ -3,6 +3,7 @@ import base64
 import os
 import time
 from inspect import signature
+from pathlib import Path
 
 from celery import Celery
 from celery.utils.log import get_task_logger
@@ -24,16 +25,33 @@ celery_app.conf.task_routes = {
     "tasks.generate_image": {"queue": "image"},
 }
 
+# Directory that both the worker *and* the Discord bot container can see
+OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-@celery_app.task(name="tasks.generate_image", queue="image")
-def generate_image(
+
+@celery_app.task(
+    name="tasks.generate_image",
+    queue="image",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+)
+def generate_image(  # noqa: C901
+    self,
     prompt_id: int,
     api: str,
     model: str,
     prompt: str,
     seed: int | None = None,
+    *,
+    timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
 ) -> str:
-    """Generate an image, encode it as base64, and return the string."""
+    """
+    Generate an image, **write it to disk**, and return the file‑path.
+
+    No raw image bytes are pushed through Redis anymore.
+    """
     start = time.monotonic()
     logger.info(
         "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s",
@@ -43,36 +61,50 @@ def generate_image(
         seed,
         prompt,
     )
-
     update_status(prompt_id, "started")
+
+    generator = get_image_generator(api, model)
+    gen_sig = signature(generator.generate)
+
+    async def _run() -> bytes:
+        kwargs = {"seed": seed} if "seed" in gen_sig.parameters else {}
+        return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
+
     try:
-        generator = get_image_generator(api, model)
-        gen_sig = signature(generator.generate)
-        if "seed" in gen_sig.parameters:
-            image_bytes = asyncio.run(generator.generate(prompt, seed=seed))
-        else:
-            image_bytes = asyncio.run(generator.generate(prompt))
-    except Exception as exc:  # noqa: BLE001
+        image_bytes: bytes = asyncio.run(_run())
+    except asyncio.TimeoutError as exc:
+        err = f"Generation exceeded {timeout}s timeout."
+        logger.error("generate_image[%s] TIMEOUT: %s", prompt_id, err)
+        update_status(prompt_id, f"failed: {err}")
+        raise RuntimeError(err) from exc
+    except Exception as exc:
         duration = time.monotonic() - start
         logger.exception(
-            "generate_image[%s] FAILED after %.2fs | %s",
-            prompt_id,
-            duration,
-            exc,
+            "generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc
         )
         update_status(prompt_id, f"failed: {exc}")
         raise
+    finally:
+        try:
+            asyncio.run(generator.aclose())
+        except Exception:
+            logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
+
+    # Persist to shared directory
+    filename = f"{prompt_id}_{int(time.time())}.png"
+    file_path = OUTPUT_DIR / filename
+    file_path.write_bytes(image_bytes)
 
     update_status(prompt_id, "completed")
     duration = time.monotonic() - start
     logger.info(
-        "generate_image[%s] FINISH in %.2fs | size=%d bytes",
+        "generate_image[%s] FINISH in %.2fs | wrote %s (size=%d bytes)",
         prompt_id,
         duration,
+        file_path,
         len(image_bytes),
     )
-    return base64.b64encode(image_bytes).decode()
-
+    return str(file_path)
 
 @celery_app.task(name="tasks.generate_text", queue="text")
 def generate_text(

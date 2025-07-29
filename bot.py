@@ -23,11 +23,13 @@ async def main():
         await bot.load_extension('cogs.image_gen_cog')
         await bot.load_extension('cogs.gpt2_chat')
         await bot.load_extension('cogs.enhance_cog')
+        # await bot.load_extension('cogs.image_edit')
         enable_starboard = os.getenv('ENABLE_STARBOARD', '0')
         if enable_starboard not in {'0', 'false', 'False'}:
             await bot.load_extension('cogs.starboard')
-        await bot.load_extension('cogs.pr_manager')
+        # await bot.load_extension('cogs.pr_manager')
         await bot.start(token)
+
 
 if __name__ == '__main__':
     import asyncio
