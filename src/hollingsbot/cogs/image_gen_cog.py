@@ -14,9 +14,9 @@ from typing import Awaitable, Callable, Mapping
 import discord
 from discord.ext import commands
 
-from caption import add_caption
-from prompt_db import add_prompt, init_db
-from tasks import generate_image
+from hollingsbot.caption import add_caption
+from hollingsbot.prompt_db import add_prompt, init_db
+from hollingsbot.tasks import generate_image
 
 __all__ = ["ImageGenCog"]
 

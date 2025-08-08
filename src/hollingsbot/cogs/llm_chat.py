@@ -9,8 +9,8 @@ from typing import Iterable
 import discord
 from discord.ext import commands
 
-from tasks import generate_text
-from prompt_db import get_model_pref, set_model_pref
+from hollingsbot.tasks import generate_text
+from hollingsbot.prompt_db import get_model_pref, set_model_pref
 
 # Env config
 WHITELIST = {int(x) for x in os.getenv("LLM_WHITELIST_CHANNELS", "").split(",") if x.strip().isdigit()}

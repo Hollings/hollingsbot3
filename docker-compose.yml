@@ -1,50 +1,54 @@
-# docker-compose.yml
 version: '3.9'
 
 services:
   bot:
-    build: .
-    # Auto-reload the Discord bot whenever *.py files change inside /app
-    command: watchfiles --filter python "python bot.py" /app
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: watchfiles --filter python "python -m hollingsbot" /app
     env_file: .env
     restart: unless-stopped
     volumes:
       - ./:/app
       - ./generated:/app/generated
+    depends_on:
+      - redis
+    # No GPU needed here
 
+  celery_text:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=1 -Q text
+    env_file: .env
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+    # No GPU needed here
+
+  celery_image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=2 -Q image
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
+    depends_on:
+      - redis
     deploy:
       resources:
         reservations:
           devices:
             - driver: nvidia
               capabilities: [gpu]
-    depends_on:
-      - redis
-
-  celery_text:
-    build: .
-    command: celery -A tasks worker --loglevel=info --concurrency=1 -Q text
-    env_file: .env
-    volumes: [ ./:/app ]
-    depends_on: [ redis ]
-    deploy:
-      resources:
-        reservations:
-          devices: [{ driver: nvidia, capabilities: [gpu] }]
-
-  celery_image:
-    build: .
-    command: celery -A tasks worker --loglevel=info --concurrency=2 -Q image
-    env_file: .env
-    restart: unless-stopped
-    volumes:
-      - ./:/app
-      - ./generated:/app/generated
-    depends_on: [ redis ]
 
   redis:
     image: redis:7
     restart: unless-stopped
     volumes:
-      - ./redis.conf:/usr/local/etc/redis/redis.conf:ro
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]

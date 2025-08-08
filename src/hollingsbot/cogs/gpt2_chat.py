@@ -9,7 +9,7 @@ import discord
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from discord.ext import commands
 
-from tasks import generate_text
+from hollingsbot.tasks import generate_text
 
 
 class GPT2Chat(commands.Cog):

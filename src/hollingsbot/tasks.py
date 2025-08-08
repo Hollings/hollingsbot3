@@ -7,9 +7,9 @@ from pathlib import Path
 from celery import Celery
 from celery.utils.log import get_task_logger
 
-from image_generators import get_image_generator
-from text_generators import get_text_generator
-from prompt_db import update_status
+from hollingsbot.image_generators import get_image_generator
+from hollingsbot.text_generators import get_text_generator
+from hollingsbot.prompt_db import update_status
 
 logger = get_task_logger(__name__)
 
