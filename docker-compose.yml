@@ -42,8 +42,6 @@ services:
       - ./generated:/app/generated
     depends_on: [ redis ]
 
-
-
   redis:
     image: redis:7
     restart: unless-stopped

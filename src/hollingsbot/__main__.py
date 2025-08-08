@@ -1,3 +1,4 @@
+# bot.py
 import os
 from dotenv import load_dotenv
 import discord
@@ -28,6 +29,10 @@ async def main():
         if enable_starboard not in {'0', 'false', 'False'}:
             await bot.load_extension('cogs.starboard')
         # await bot.load_extension('cogs.pr_manager')
+
+        # New: LLM chat router (ChatGPT / Claude)
+        await bot.load_extension('cogs.llm_chat')
+
         await bot.start(token)
 
 

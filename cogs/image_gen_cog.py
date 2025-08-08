@@ -1,14 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-import base64
 import json
 import logging
 import os
 import random
 import re
 from dataclasses import dataclass
-from inspect import signature
 from io import BytesIO
 from pathlib import Path
 from typing import Awaitable, Callable, Mapping
