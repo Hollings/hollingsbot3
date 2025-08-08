@@ -1,3 +1,4 @@
+# prompt_db.py
 import os
 import sqlite3
 from pathlib import Path
@@ -24,6 +25,18 @@ def init_db() -> None:
         )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)"
+        )
+        # Per-user model preference (scoped to guild)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_prefs (
+                guild_id INTEGER NOT NULL,
+                user_id  INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                model    TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+            """
         )
         conn.commit()
 
@@ -63,3 +76,26 @@ def update_pr_status(number: int, status: str) -> None:
             (number, status),
         )
         conn.commit()
+
+
+# ------------------------- Model preferences -------------------------
+
+def set_model_pref(guild_id: int, user_id: int, provider: str, model: str) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO model_prefs (guild_id, user_id, provider, model) VALUES (?, ?, ?, ?)",
+            (guild_id, user_id, provider, model),
+        )
+        conn.commit()
+
+
+def get_model_pref(guild_id: int, user_id: int) -> tuple[str, str] | None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT provider, model FROM model_prefs WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        row = cur.fetchone()
+        return (row[0], row[1]) if row else None

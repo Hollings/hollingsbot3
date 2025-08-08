@@ -1,5 +1,4 @@
 import asyncio
-import base64
 import os
 import time
 from inspect import signature
