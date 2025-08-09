@@ -1,6 +1,0 @@
-{
-  "!": {"api": "replicate", "model": "black-forest-labs/flux-schnell"},
-  "$": {"api": "replicate", "model": "black-forest-labs/flux-1.1-pro-ultra"},
-  "$$": {"api": "replicate", "model": "google/imagen-4"},
-  "%": {"api": "replicate", "model": "prunaai/sdxl-lightning:123d4264aec4d1c81d8bf142e0d90d6fd4c346f1a869406019f6d1653882d7c3"}
-}

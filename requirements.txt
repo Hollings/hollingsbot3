@@ -13,3 +13,4 @@ torch
 watchfiles
 anthropic
 openai
+cairosvg

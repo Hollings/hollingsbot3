@@ -24,7 +24,6 @@ celery_app.conf.task_routes = {
     "tasks.generate_image": {"queue": "image"},
 }
 
-# Directory that both the worker *and* the Discord bot container can see
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
 OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

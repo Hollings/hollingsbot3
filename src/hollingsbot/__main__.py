@@ -23,8 +23,8 @@ async def on_ready():
     print(f"Loaded cogs: {list(bot.cogs.keys())}")
     print(f"Commands: {[c.name for c in bot.commands]}")
 
-    if not restart_task.is_running():
-        restart_task.start()
+    # if not restart_task.is_running():
+    #     restart_task.start()
 
 
 RESTART_INTERVAL = int(os.getenv('BOT_RESTART_INTERVAL', 6 * 60 * 60))
@@ -38,21 +38,21 @@ async def restart_task():
 
 async def main():
     async with bot:
-        # await bot.load_extension('cogs.general')
-        # await bot.load_extension('cogs.image_gen_cog')
-        # await bot.load_extension('cogs.gpt2_chat')
+        await bot.load_extension('hollingsbot.cogs.general')
+        await bot.load_extension('hollingsbot.cogs.image_gen_cog')
+        await bot.load_extension('hollingsbot.cogs.gpt2_chat')
         # await bot.load_extension('cogs.enhance_cog')
         # # await bot.load_extension('cogs.image_edit')
-        # enable_starboard = os.getenv('ENABLE_STARBOARD', '0')
-        # if enable_starboard not in {'0', 'false', 'False'}:
-        #     await bot.load_extension('cogs.starboard')
+        enable_starboard = os.getenv('ENABLE_STARBOARD', '0')
+        if enable_starboard not in {'0', 'false', 'False'}:
+            await bot.load_extension('hollingsbot.cogs.starboard')
         # # await bot.load_extension('cogs.pr_manager')
         #
         # # New: LLM chat router (ChatGPT / Claude)
-        # await bot.load_extension('cogs.llm_chat')
+        await bot.load_extension('hollingsbot.cogs.llm_chat')
         logger.info("starting bot")
-        logging.getLogger("discord").setLevel(logging.DEBUG)
-        logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
+        # logging.getLogger("discord").setLevel(logging.DEBUG)
+        # logging.getLogger("discord.gateway").setLevel(logging.DEBUG)
         await bot.start(token)
 
 @bot.event
