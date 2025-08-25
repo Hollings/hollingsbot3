@@ -26,13 +26,36 @@ AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split("
 
 def _chunks(s: str, limit: int = 1900) -> Iterable[str]:
     for i in range(0, len(s), limit):
-        yield s[i : i + limit]
+        yield s[i: i + limit]
 
 
 def _is_image_attachment(att: discord.Attachment) -> bool:
     if att.content_type and att.content_type.startswith("image/"):
         return True
     return any(att.filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
+
+
+def _is_text_attachment(att: discord.Attachment) -> bool:
+    """
+    Treat common text-like uploads as inlineable for a single turn.
+    These are read and sent to the model only for the current message.
+    They are not persisted in history. History stores a placeholder instead.
+    """
+    ct = (att.content_type or "").lower()
+    if ct.startswith("text/"):
+        return True
+    if ct in {"application/json", "application/xml", "application/javascript"}:
+        return True
+    name = att.filename.lower()
+    text_exts = (
+        ".txt", ".md", ".markdown", ".json", ".csv", ".tsv",
+        ".py", ".js", ".ts", ".html", ".css", ".xml",
+        ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+        ".log", ".sql", ".sh", ".bat", ".ps1",
+        ".java", ".kt", ".rs", ".go", ".rb", ".php",
+        ".c", ".h", ".cpp", ".hpp", ".cs",
+    )
+    return any(name.endswith(ext) for ext in text_exts)
 
 
 def _build_internal_parts(user_text: str, images: List[discord.Attachment]) -> List[Dict[str, Any]]:
@@ -123,7 +146,13 @@ class LLMAPIChat(commands.Cog):
             return
         gid = ctx.guild.id if ctx.guild else 0
         key = (gid, ctx.author.id)
-        if not text or text.lower().strip() in {"clear", "reset"}:
+        current = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
+        # No args shows current prompt and does not change it
+        if text is None or not text.strip():
+            await ctx.reply(f"Your current system prompt is:\n```\n{current}\n```")
+            return
+        cmd = text.strip().lower()
+        if cmd in {"clear", "reset"}:
             self.system_prompts[key] = DEFAULT_SYSTEM_PROMPT
             await ctx.reply(f"Your system prompt has been reset to the default:\n```\n{DEFAULT_SYSTEM_PROMPT}\n```")
             return
@@ -146,8 +175,26 @@ class LLMAPIChat(commands.Cog):
         provider, model = pref
 
         images = [att for att in message.attachments if _is_image_attachment(att)]
-        user_text = f"<{message.author.display_name}> {message.content}".strip()
-        user_parts = _build_internal_parts(user_text, images)
+        text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
+
+        user_text_base = f"<{message.author.display_name}> {message.content}".strip()
+        provider_user_text = user_text_base
+        history_user_text = user_text_base
+
+        # Inline text files for the model for this turn only. Persist a small note instead.
+        if text_files:
+            for att in text_files:
+                try:
+                    raw = await att.read()
+                    decoded = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    decoded = "[error reading file]"
+                provider_user_text += f"\n\n[begin uploaded file: {att.filename}]\n{decoded}\n[end uploaded file]"
+                history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+
+        # Build parts separately so history never contains the file contents
+        user_parts_for_provider = _build_internal_parts(provider_user_text, images)
+        user_parts_for_history = _build_internal_parts(history_user_text, images)
 
         convo = [{"role": "system", "content": sys_prompt}]
         for m in self.history[message.channel.id]:
@@ -155,9 +202,10 @@ class LLMAPIChat(commands.Cog):
             if content_or_parts is None:
                 continue
             convo.append({"role": m.get("role", "user"), "content": _to_provider_content(content_or_parts, provider)})
-        convo.append({"role": "user", "content": _to_provider_content(user_parts, provider)})
+        convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
 
-        self.history[message.channel.id].append({"role": "user", "parts": user_parts})
+        # Store only the sanitized version in history
+        self.history[message.channel.id].append({"role": "user", "parts": user_parts_for_history})
 
         async with message.channel.typing():
             async_result = await asyncio.to_thread(generate_text.delay, provider, model, convo)
@@ -167,10 +215,10 @@ class LLMAPIChat(commands.Cog):
                 await message.channel.send(f"Generation failed: {exc}")
                 return
 
-        # SVG handling FIRST: detect, render/attach (or fallback), and strip with a note.
+        # SVG handling FIRST: detect, render or attach, and strip with a note.
         cleaned_text, svg_files = extract_render_and_strip_svgs(reply_text)
 
-        # Then do large-reply code/file extraction on the already cleaned text.
+        # Then do large-reply code or file extraction on the already cleaned text.
         attachments = []
         if len(cleaned_text) > 2000:
             def repl(match: re.Match) -> str:
@@ -182,7 +230,7 @@ class LLMAPIChat(commands.Cog):
                 return f"[see file: {filename}]"
             cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
 
-        assistant_text = f"<sent by: {self.bot.user.display_name if self.bot.user else 'Bot'}> {cleaned_text}"
+        assistant_text = f"{cleaned_text}"
         self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text}]})
 
         for chunk in _chunks(cleaned_text):
@@ -201,19 +249,21 @@ class LLMAPIChat(commands.Cog):
         help_text = (
             "**LLM Bot Commands & Features**\n\n"
             "__Model Selection__\n"
-            "`!model` — List available models and show your current one.\n"
-            "`!model <name>` — Set your preferred model from the list.\n"
+            "`!model` - List available models and show your current one.\n"
+            "`!model <name>` - Set your preferred model from the list.\n"
             "\n"
             "__System Prompt__\n"
-            "`!system <text>` — Set a custom system prompt for your replies.\n"
-            "`!system clear` or `!system reset` — Reset your system prompt to the default.\n"
+            "`!system` - Show your current system prompt.\n"
+            "`!system <text>` - Set a custom system prompt for your replies.\n"
+            "`!system clear` or `!system reset` - Reset your system prompt to the default.\n"
             "\n"
             "__Conversation Behavior__\n"
             "- The bot responds automatically to all non-command messages in allowed channels.\n"
             "- It remembers the last N messages in the channel for conversation context.\n"
-            "- Messages starting with `!` or `-` are ignored (and not added to history).\n"
-            "- **Images are supported**: attach images to your message and they will be preserved in the chat history and sent to the model when supported by the selected provider.\n"
-            "- **SVG blocks in model replies** are rendered to PNG (if possible) and attached; otherwise the original `.svg` is attached. The SVG code block is replaced in the text with a note.\n"
+            "- Messages starting with `!` or `-` are ignored and not added to history.\n"
+            "- Images are supported. Attach images to your message and they are preserved in chat history and sent to the model when supported by the selected provider.\n"
+            "- Text file uploads are supported for a single turn. The model reads the file contents for that message only, and chat history records a note like `[uploaded file filename.txt removed]` instead of the full contents.\n"
+            "- SVG blocks in model replies are rendered to PNG if possible and attached. Otherwise the original `.svg` is attached. The SVG code block is replaced in the text with a note.\n"
             "\n"
             "__Code Blocks__\n"
             "- If a response is over 2000 characters, code blocks are removed from the text and uploaded as files.\n"
@@ -221,7 +271,7 @@ class LLMAPIChat(commands.Cog):
             "- When extracted, the text will contain `[see file: filename]` where the code block was.\n"
             "\n"
             "__Model Info__\n"
-            "`!models` — List all models from the configured environment variable (if separate command is kept).\n"
+            "`!models` - List all models from the configured environment variable if that separate command is kept.\n"
         )
         await ctx.reply(help_text)
 

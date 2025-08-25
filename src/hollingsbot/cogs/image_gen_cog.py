@@ -29,23 +29,24 @@ THINKING = "\N{THINKING FACE}"
 SUCCESS = "\N{WHITE HEAVY CHECK MARK}"
 FAILURE = "\N{CROSS MARK}"
 
-_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
-
+_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
 
 @dataclass(frozen=True, slots=True)
 class GeneratorSpec:
     api: str
     model: str
 
-
 class ImageGenCog(commands.Cog):
-    """Generate images **only** in channels listed in the
-    ``STABLE_DIFFUSION_CHANNEL_IDS`` environment variable (comma‑separated).
-    Responds to ``!models`` with a listing of configured generators.
+    """
+    Generate images in:
+      - DMs (enabled by default; can be disabled with STABLE_DIFFUSION_ALLOW_DMS=0)
+      - Guild channels. If STABLE_DIFFUSION_CHANNEL_IDS is set, only those IDs.
+        If it is empty, all guild channels are allowed.
+    Responds to `!models` with a listing of configured generators.
     """
 
     _SEED_RE = re.compile(r"^\{\s*(\d+)\s*}", re.ASCII)
-    _LIST_RE = re.compile(r"<([^<>]+)>", re.ASCII)  # first (outer‑most) <> list
+    _LIST_RE = re.compile(r"<([^<>]+)>", re.ASCII)  # first (outer-most) <> list
 
     # ------------------------------------------------------------------ init
 
@@ -60,17 +61,17 @@ class ImageGenCog(commands.Cog):
         self.bot = bot
         init_db()
 
-        # channel allow‑list
+        # Guild channel allowlist. Empty set means "all guild channels allowed".
         env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
         self._allowed_channel_ids: set[int] = {
             int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()
         }
-        if not self._allowed_channel_ids:
-            _log.warning(
-                "STABLE_DIFFUSION_CHANNEL_IDS is empty – image generation disabled."
-            )
 
-        # dynamic configuration
+        # DMs allowed by default. Set STABLE_DIFFUSION_ALLOW_DMS=0 to disable.
+        allow_str = os.getenv("STABLE_DIFFUSION_ALLOW_DMS", "1").strip().lower()
+        self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
+
+        # Dynamic configuration
         if config is not None:
             self._prefix_map: dict[str, GeneratorSpec] = {
                 p.strip(): GeneratorSpec(**spec) for p, spec in config.items()
@@ -83,14 +84,14 @@ class ImageGenCog(commands.Cog):
             self._prefix_map = {}
             self._reload_config()  # initial load
 
-        # task execution helper
+        # Task execution helper
         self._run_task = task_runner or self._default_celery_runner
         self._pending: set[asyncio.Task[None]] = set()
 
     # ---------------------------------------------------------------- config helpers
 
     def _reload_config(self) -> None:
-        """(Re)load prefix → GeneratorSpec mapping from disk if file changed."""
+        """(Re)load prefix → GeneratorSpec mapping from disk if file changed."""
         if self._cfg_path is None:
             return
 
@@ -98,7 +99,7 @@ class ImageGenCog(commands.Cog):
             mtime = self._cfg_path.stat().st_mtime
         except FileNotFoundError:
             if self._prefix_map:
-                _log.warning("Config file vanished – keeping last‑known map.")
+                _log.warning("Config file vanished; keeping last-known map.")
             return
 
         if mtime == self._cfg_mtime:
@@ -109,30 +110,37 @@ class ImageGenCog(commands.Cog):
                 self._cfg_path.read_text("utf8")
             )
         except Exception as exc:  # noqa: BLE001
-            _log.exception("Failed to parse %s: %s – keeping old config", self._cfg_path, exc)
+            _log.exception("Failed to parse %s: %s; keeping old config", self._cfg_path, exc)
             return
 
         self._prefix_map = {
             p.strip(): GeneratorSpec(**spec) for p, spec in raw_cfg.items()
         }
         self._cfg_mtime = mtime
-        _log.info("Reloaded image‑generator config (%d prefixes).", len(self._prefix_map))
+        _log.info("Reloaded image-generator config (%d prefixes).", len(self._prefix_map))
 
-    # ---------------------------------------------------------------- new helper
+    # ---------------------------------------------------------------- helper
 
     def _format_model_listing(self) -> str:
-        """Return a human‑readable description of all configured generators."""
+        """Return a human-readable description of all configured generators."""
         self._reload_config()
         if not self._prefix_map:
-            return "⚠️ No image generators are configured."
+            return "No image generators are configured."
 
-        lines: list[str] = ["**Available image generators:**"]
+        lines: list[str] = ["Available image generators:"]
         for prefix, spec in sorted(self._prefix_map.items()):
             prefix_display = f"`{prefix}`" if prefix else "(default)"
-            lines.append(f"- {prefix_display}: **{spec.api}** / **{spec.model}**")
+            lines.append(f"- {prefix_display}: {spec.api} / {spec.model}")
+        lines.append(f"\nDM support: {'enabled' if self._allow_dms else 'disabled'}")
+        allowlist_desc = (
+            "all guild channels"
+            if not self._allowed_channel_ids
+            else f"{len(self._allowed_channel_ids)} whitelisted channel(s)"
+        )
+        lines.append(f"Guild scope: {allowlist_desc}")
         return "\n".join(lines)
 
-    # ---------------------------------------------------------------- life‑cycle
+    # ---------------------------------------------------------------- life-cycle
 
     async def cog_unload(self) -> None:
         for task in self._pending:
@@ -151,18 +159,13 @@ class ImageGenCog(commands.Cog):
         *,
         poll_interval: float = 0.5,
     ) -> str:
-        """
-        Launch an image‑generation task on the “image” queue and poll Redis
-        until the result is ready.
-        """
+        """Launch an image-generation task on the “image” queue and poll until ready."""
         async_result = generate_image.apply_async(
             (prompt_id, api, model, prompt, seed),
             queue="image",
         )
-
         while not async_result.ready():
             await asyncio.sleep(poll_interval)
-
         return await asyncio.to_thread(async_result.get)
 
     # ---------------------------------------------------------------- helpers
@@ -174,23 +177,15 @@ class ImageGenCog(commands.Cog):
             else:
                 await msg.add_reaction(emoji)
         except discord.HTTPException:
-            _log.debug(
-                "Could not %s reaction %s on %s",
-                "remove" if remove else "add",
-                emoji,
-                msg.id,
-            )
+            _log.debug("Could not %s reaction %s on %s", "remove" if remove else "add", emoji, msg.id)
 
     def _split_prompt(self, content: str) -> tuple[str, GeneratorSpec] | None:
-        """Return (prompt_without_prefix, generator_spec) if *content*
-        begins with a configured prefix."""
+        """Return (prompt_without_prefix, generator_spec) if content begins with a configured prefix."""
         self._reload_config()
-
         for prefix in sorted(self._prefix_map, key=len, reverse=True):
             if content.startswith(prefix):
                 spec = self._prefix_map[prefix]
                 return content[len(prefix):].lstrip(), spec
-
         return None
 
     def _build_filename(
@@ -201,13 +196,12 @@ class ImageGenCog(commands.Cog):
         *,
         max_len: int = 32,
     ) -> str:
-        """Return a Discord‑friendly filename based on *prompt*, *spec*, and *seed*."""
+        """Return a Discord-friendly filename based on prompt, spec, and seed."""
         snippet = re.sub(r"[^A-Za-z0-9]+", "_", prompt).strip("_")
         if not snippet:
             snippet = "image"
         if len(snippet) > max_len:
             snippet = snippet[:max_len].rstrip("_")
-
         api_model = f"{spec.api}-{spec.model}".replace("/", "-")
         seed_part = str(seed) if seed is not None else "rand"
         return f"{snippet}_{api_model}_seed_{seed_part}.png".lower()
@@ -220,10 +214,10 @@ class ImageGenCog(commands.Cog):
         raw_prompt: str,
         spec: GeneratorSpec,
     ) -> None:
-        """Extract seed, optionally expand <item, …>, kick off workers and upload images."""
+        """Extract seed, optionally expand <a, b, c>, run workers and upload images."""
         await self._react(message, THINKING)
 
-        # 1 – Seed handling
+        # 1) Seed handling
         seed = random.randint(1, 1000)
         m_seed = self._SEED_RE.match(raw_prompt)
         if m_seed:
@@ -233,34 +227,31 @@ class ImageGenCog(commands.Cog):
         if not raw_prompt:
             await self._react(message, THINKING, remove=True)
             await self._react(message, FAILURE)
-            await message.channel.send("⚠️ Prompt may not be empty.")
+            await message.channel.send("Prompt may not be empty.")
             return
 
-        # 2 – Expand optional “<a, b, c>” list
+        # 2) Expand optional “<a, b, c>” list
         m_list = self._LIST_RE.search(raw_prompt)
         if m_list:
             items = [s.strip() for s in m_list.group(1).split(",") if s.strip()]
             if not items:
-                items = [m_list.group(0)]  # treat “<>” as literal if empty
+                items = [m_list.group(0)]
             prefix = raw_prompt[:m_list.start()]
             suffix = raw_prompt[m_list.end():]
             prompts = [f"{prefix}{item}{suffix}".strip() for item in items]
         else:
             prompts = [raw_prompt]
 
-        # 3 – Kick off generation workers concurrently
-
+        # 3) Kick off generation workers concurrently
         async def _launch_prompt(p: str) -> tuple[str, bytes] | Exception:
             """
-            Launch a single Celery task and return (prompt_text, image_bytes) on success.
-            The worker now gives us a **file‑path**, so we read the file and delete it.
+            Launch a Celery task and return (prompt_text, image_bytes) on success.
+            Worker returns a file path by default; privacy-mode variants may return base64.
             """
             prompt_id = add_prompt(p, str(message.author.id), spec.api, spec.model)
             try:
-                file_path_str = await self._run_task(
-                    prompt_id, spec.api, spec.model, p, seed
-                )
-                img_path = Path(file_path_str)
+                file_or_b64 = await self._run_task(prompt_id, spec.api, spec.model, p, seed)
+                img_path = Path(file_or_b64)
                 if img_path.exists():
                     img_bytes = img_path.read_bytes()
                     try:
@@ -268,46 +259,31 @@ class ImageGenCog(commands.Cog):
                     except Exception:
                         _log.debug("Temp image %s could not be deleted", img_path)
                 else:
-                    try:
-                        img_bytes = base64.b64decode(file_path_str)
-                    except Exception:
-                        raise RuntimeError(
-                            "Task output is neither a file path nor base64 bytes"
-                        )
+                    img_bytes = base64.b64decode(file_or_b64)
                 return p, img_bytes
             except Exception as exc:  # noqa: BLE001
                 return exc
 
-        coros = [_launch_prompt(p) for p in prompts]
-        results = await asyncio.gather(*coros, return_exceptions=True)
+        results = await asyncio.gather(*(_launch_prompt(p) for p in prompts), return_exceptions=True)
 
         overall_success = True
         for prompt_variant, result in zip(prompts, results):
             if isinstance(result, Exception):
                 overall_success = False
-                _log.exception(
-                    "Generation failed for '%s': %s", prompt_variant, result
-                )
+                _log.exception("Generation failed for %r: %s", prompt_variant, result)
                 continue
 
             prompt_text, img_bytes = result
             try:
                 if len(img_bytes) > _MAX_DISCORD_FILESIZE:
-                    raise RuntimeError(
-                        f"Image {len(img_bytes) / 2 ** 20:.1f} MiB exceeds Discord’s 25 MiB limit."
-                    )
-
+                    raise RuntimeError("Image exceeds Discord 25 MiB limit.")
                 captioned = add_caption(img_bytes, prompt_text)
                 filename = self._build_filename(prompt_text, spec, seed)
-                await message.channel.send(
-                    file=discord.File(BytesIO(captioned), filename=filename)
-                )
+                await message.channel.send(file=discord.File(BytesIO(captioned), filename=filename))
             except Exception as exc:  # noqa: BLE001
                 overall_success = False
-                _log.exception("Post‑processing failed: %s", exc)
-                await message.channel.send(
-                    f"⚠️ Image post‑processing failed for **{prompt_variant}**:\n> {exc}"
-                )
+                _log.exception("Post-processing failed: %s", exc)
+                await message.channel.send(f"Image post-processing failed for **{prompt_variant}**:\n> {exc}")
 
         await self._react(message, THINKING, remove=True)
         await self._react(message, SUCCESS if overall_success else FAILURE)
@@ -316,15 +292,20 @@ class ImageGenCog(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:
-        # Only respond in whitelisted channels
-        if message.channel.id not in self._allowed_channel_ids:
+        if message.author.bot:
             return
-        if message.author.bot or message.guild is None:
-            return
+
+        is_dm = message.guild is None
+        if is_dm:
+            if not self._allow_dms:
+                return
+        else:
+            # If allowlist is empty, allow all guild channels; otherwise require membership.
+            if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
+                return
 
         cleaned = message.content.strip()
 
-        # ---- new command: !models ---------------------------------------
         if cleaned.lower() == "!models":
             await message.channel.send(self._format_model_listing())
             return
@@ -337,7 +318,6 @@ class ImageGenCog(commands.Cog):
         task = asyncio.create_task(self._handle_generation(message, prompt, spec))
         self._pending.add(task)
         task.add_done_callback(self._pending.discard)
-
 
 async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(ImageGenCog(bot))

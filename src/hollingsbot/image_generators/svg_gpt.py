@@ -49,33 +49,96 @@ def _client() -> AsyncOpenAI:
 # --- Helpers ------------------------------------------------------------------------------------
 _CODE_BLOCK_RE = re.compile(r"```(?:svg)?\s*([\s\S]*?)```", re.IGNORECASE)
 _SVG_OPEN_RE = re.compile(r"<svg\b([^>]*)>", re.IGNORECASE | re.MULTILINE)
+_SVG_BLOCK_RE = re.compile(r"<svg\b[\s\S]*?</svg>", re.IGNORECASE)
 
-
-def _extract_svg(text: str) -> str:
-    """Extract a single standalone <svg>...</svg> from model text (optionally inside a code fence)."""
-    code_block = _CODE_BLOCK_RE.search(text)
-    if code_block:
-        logger.debug("SVG found inside code fence")
-        text = code_block.group(1)
-
-    # Strip stray code fences or language hints
-    text = text.strip().strip("`").strip()
-
-    if text.lower().startswith("xml"):
-        text = text[3:].lstrip()
-
-    # Ensure we have exactly one <svg> ... </svg>
-    if "<svg" not in text.lower():
-        logger.error("Model output did not contain an <svg> root element")
-        raise ValueError("Model did not return an <svg> document.")
-    start = text.lower().find("<svg")
-    end = text.lower().rfind("</svg>")
-    if start == -1 or end == -1:
-        logger.error("Model output contained incomplete SVG content (missing start or end tag)")
-        raise ValueError("Incomplete SVG content.")
-    svg = text[start : end + len("</svg>")].strip()
-    logger.debug("Extracted SVG length=%d", len(svg))
+# Remove clearly-problematic constructs but keep the rest of the SVG intact.
+def _strip_disallowed(svg: str) -> str:
+    svg = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<foreignObject\b[^>]*>[\s\S]*?</foreignObject>", "", svg, flags=re.IGNORECASE)
+    # Drop base64-embedded rasters (keep the rest of the SVG)
+    svg = re.sub(
+        r"<image\b[^>]*(?:href|xlink:href)\s*=\s*['\"]data:[^'\"]*['\"][^>]*\/?>",
+        "",
+        svg,
+        flags=re.IGNORECASE,
+    )
+    # Remove event handlers
+    svg = re.sub(r"\son[a-z]+\s*=\s*['\"][^'\"]*['\"]", "", svg, flags=re.IGNORECASE)
     return svg
+
+
+def _simplify_svg(svg: str) -> str:
+    """Aggressively simplify features that often break rasterizers (filters, masks, etc.)."""
+    # Remove filter references and definitions
+    svg = re.sub(r"\sfilter\s*=\s*['\"]url\([^'\"]*\)['\"]", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<filter\b[^>]*>[\s\S]*?</filter>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<fe[A-Za-z]+\b[^>]*\/?>", "", svg, flags=re.IGNORECASE)
+    # Remove masks/clipPaths and their uses
+    svg = re.sub(r"<mask\b[^>]*>[\s\S]*?</mask>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<clipPath\b[^>]*>[\s\S]*?</clipPath>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"\sclip-path\s*=\s*['\"][^'\"]*['\"]", "", svg, flags=re.IGNORECASE)
+    # Remove animations
+    svg = re.sub(r"<animate(?:Transform)?\b[^>]*>[\s\S]*?</animate(?:Transform)?>", "", svg, flags=re.IGNORECASE)
+    return svg
+
+
+def _extract_svg(text: str, *, prompt: str | None = None) -> str:
+    """
+    Extract (or salvage) a single standalone <svg>...</svg> from model text.
+    Be generous: accept fenced blocks, auto-close if needed, or wrap stray markup.
+    As a last resort, synthesize a minimal SVG that shows the prompt text.
+    """
+    original = text or ""
+    # Handle code fences
+    m = _CODE_BLOCK_RE.search(original)
+    if m:
+        logger.debug("SVG found inside code fence")
+        text = m.group(1)
+    else:
+        text = original
+
+    # Clean stray backticks/newlines/unicode separators
+    text = (text or "").strip().strip("`").replace("\u2028", "\n").replace("\u2029", "\n")
+
+    # Happy path: exact <svg>...</svg> block
+    m = _SVG_BLOCK_RE.search(text)
+    if m:
+        svg = m.group(0).strip()
+        logger.debug("Extracted full <svg> block (len=%d)", len(svg))
+        return svg
+
+    # If we have an <svg ...> start but no close tag, auto-close.
+    lower = text.lower()
+    start = lower.find("<svg")
+    if start != -1:
+        logger.warning("Model output contained an unterminated <svg>; auto-closing.")
+        body = text[start:].rstrip()
+        if not body.lower().endswith("</svg>"):
+            body = body + "</svg>"
+        return body
+
+    # If there is *some* markup, wrap it so we still show something.
+    if "<" in text and ">" in text:
+        logger.warning("No <svg> root found; wrapping returned markup inside an SVG root.")
+        inner = re.sub(r"^(\s*<!DOCTYPE[^>]*>)", "", text, flags=re.IGNORECASE).strip()
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" '
+            f'viewBox="0 0 1024 1024"><g>{inner}</g></svg>'
+        )
+
+    # Last resort: synthesize a minimally-informative SVG
+    logger.error("Model did not return usable markup; synthesizing fallback SVG.")
+    prompt_label = (prompt or "Generated image").strip()
+    prompt_label = (prompt_label[:120] + "…") if len(prompt_label) > 120 else prompt_label
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">'
+        '<defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">'
+        '<stop offset="0" stop-color="#f7f7fb"/><stop offset="1" stop-color="#e8f0ff"/></linearGradient></defs>'
+        '<rect width="1024" height="1024" fill="url(#bg)"/>'
+        '<circle cx="512" cy="512" r="220" fill="#0b0d15" opacity=".08"/>'
+        f'<text x="48" y="96" font-family="DejaVu Sans, Arial, sans-serif" font-size="28" fill="#111">{prompt_label}</text>'
+        "</svg>"
+    )
 
 
 def _enforce_canvas(svg: str, size: int = 1024) -> str:
@@ -93,7 +156,7 @@ def _enforce_canvas(svg: str, size: int = 1024) -> str:
         return f"<svg{core}>"
 
     out = _SVG_OPEN_RE.sub(_repl, svg, count=1)
-    if out == svg:
+    if out != svg:
         logger.debug("Applied canvas normalization to SVG (size=%d)", size)
     return out
 
@@ -160,8 +223,8 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             "Output must be concise (< 1000 characters). "
             "Absolutely DO NOT embed base64 data URIs or external images; no <image href='data:'>. "
             "Avoid <foreignObject>. No scripts. "
-            "Prefer simple shapes and paths. Provide a single <svg> root element."
-            "The token limit for this response is 5000"
+            "Prefer simple shapes and paths. Provide a single <svg> root element. "
+            "End your output with </svg> and do not output anything after it."
         )
 
         user = (
@@ -171,16 +234,20 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             "Canvas: 1024x1024 square."
         )
 
-        t0 = time.time()
-        try:
-            # OpenAI Responses API (correct parameter: max_output_tokens)
-            coro = _client().responses.create(
+        # --- request helper (with retry) --------------------------------------------------------
+        async def _call_openai(max_tokens: int) -> object:
+            return await _client().responses.create(
                 model=self.model,
                 instructions=sys,
                 input=user,
-                max_output_tokens=self.max_output_tokens,
+                max_output_tokens=max_tokens,
+                reasoning={"effort": "medium"},
                 timeout=self.request_timeout,  # per-request client timeout (OpenAI SDK)
             )
+
+        t0 = time.time()
+        try:
+            coro = _call_openai(self.max_output_tokens)
             rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)  # outer guard
         except asyncio.TimeoutError:
             api_ms = int((time.time() - t0) * 1000)
@@ -198,45 +265,70 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         api_ms = int((time.time() - t0) * 1000)
 
         # Extract plain text from Responses API
-        text: str
-        logger.info("rsp:", rsp)
-        try:
-            text = getattr(rsp, "output_text", None)  # preferred
-            logger.info(f"SVG generation result: {text}")
-            if not text:
-                # Fallback: aggregate from .output[].content[].text
-                parts: list[str] = []
-                output = getattr(rsp, "output", None)
-                if output:
-                    for item in output:
-                        for c in getattr(item, "content", []) or []:
-                            t = getattr(c, "text", None)
-                            if t:
-                                parts.append(t)
-                text = "\n".join(parts) if parts else str(rsp)
-        except Exception:
-            text = str(rsp)
+        def _gather_text(r: object) -> str:
+            # preferred (SDK helper)
+            t = getattr(r, "output_text", None)
+            if t:
+                return t
+            # aggregate from .output[].content[].text
+            parts: list[str] = []
+            output = getattr(r, "output", None)
+            if output:
+                for item in output:
+                    for c in getattr(item, "content", []) or []:
+                        tt = getattr(c, "text", None)
+                        if tt:
+                            parts.append(tt)
+            return "\n".join(parts)
 
-        # Extract and normalize SVG
+        text: str = _gather_text(rsp) or ""
+        status = getattr(rsp, "status", "")
+        incomplete_reason = getattr(getattr(rsp, "incomplete_details", None), "reason", None)
+
+        logger.debug(
+            "Responses status=%s incomplete_reason=%s text_len=%d preview=%r",
+            status,
+            incomplete_reason,
+            len(text),
+            text[:120],
+        )
+
+        # If incomplete due to token cap (or empty text), retry once with a bigger cap & stop-seq.
+        if (status != "completed" and incomplete_reason == "max_output_tokens") or not text.strip():
+            try:
+                logger.info("Retrying with higher max_output_tokens and low reasoning.")
+                bigger = max(self.max_output_tokens + 2000, 5000)
+                coro = _call_openai(bigger)
+                rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)
+                text = _gather_text(rsp) or text
+            except Exception as e:
+                logger.warning("Retry failed: %s", e)
+
+        # Extract and normalize SVG (with salvage & sanitization)
         try:
-            svg = _extract_svg(text)
-            # Refuse embedded data URIs which explode output size/time
-            if "data:image" in svg.lower():
-                logger.warning("Model attempted to embed base64 image data; returning placeholder")
-                return _placeholder_png("SVG contained embedded raster data; not allowed.")
+            svg = _extract_svg(text, prompt=prompt)
+            svg = _strip_disallowed(svg)
             svg = _enforce_canvas(svg, 1024)
         except Exception as e:
             logger.exception("Failed to extract/normalize SVG from model output: %s", e)
-            return _placeholder_png("Invalid SVG returned by the model.")
+            # As a last resort, synthesize a minimal SVG to avoid hard failure.
+            svg = _extract_svg("", prompt=prompt)
+            svg = _enforce_canvas(svg, 1024)
 
+        # Render; on failure, simplify then retry once.
         t1 = time.time()
         try:
             png = _render_svg(svg)
         except Exception as e:
-            logger.exception("Failed to render SVG to PNG: %s", e)
-            return _placeholder_png("SVG rasterization failed.")
-        render_ms = int((time.time() - t1) * 1000)
+            logger.warning("Render failed (%s). Retrying with simplified SVG.", e)
+            try:
+                simpler = _simplify_svg(svg)
+                png = _render_svg(simpler)
+            except Exception as e2:
+                logger.exception("Failed to render even after simplification: %s", e2)
+                return _placeholder_png("SVG rasterization failed.")
 
+        render_ms = int((time.time() - t1) * 1000)
         logger.info(
             "SVG generation done bytes=%d timings_ms api=%d render=%d",
             len(png),
