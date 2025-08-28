@@ -2,5 +2,7 @@
   "!":  { "api": "replicate", "model": "black-forest-labs/flux-schnell" },
   "$":  { "api": "replicate", "model": "black-forest-labs/flux-1.1-pro-ultra" },
   "$$": { "api": "replicate", "model": "google/imagen-4" },
-  "^":  { "api": "svg",       "model": "gpt-5" }
+  "^":  { "api": "svg",       "model": "gpt-5" },
+  "*":  { "api": "replicate",       "model": "google/nano-banana",  "mode": "edit" }
+
 }

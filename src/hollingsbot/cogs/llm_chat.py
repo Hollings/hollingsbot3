@@ -19,7 +19,7 @@ DEFAULT_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "anthropic").lower()
 DEFAULT_MODEL = os.getenv("DEFAULT_LLM_MODEL", "claude-4o" if DEFAULT_PROVIDER == "anthropic" else "gpt-4o")
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are a helpful assistant.")
 TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "60"))
-HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "10"))
+HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
 
 AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
 
