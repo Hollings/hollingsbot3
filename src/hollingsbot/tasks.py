@@ -43,21 +43,26 @@ def generate_image(  # noqa: C901
     prompt: str,
     seed: int | None = None,
     *,
+    # New optional kwargs for editing
+    image_input: list[bytes] | None = None,
+    output_format: str | None = None,
+    # Existing kwarg
     timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
 ) -> str:
     """
-    Generate an image, **write it to disk**, and return the file‑path.
-
-    No raw image bytes are pushed through Redis anymore.
+    Generate an image, write it to disk, and return the file path.
+    Supports editing when image_input is provided.
     """
     start = time.monotonic()
     logger.info(
-        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s",
+        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s images=%s fmt=%s",
         prompt_id,
         api,
         model,
         seed,
         prompt,
+        (len(image_input) if image_input else 0),
+        output_format,
     )
     update_status(prompt_id, "started")
 
@@ -65,7 +70,13 @@ def generate_image(  # noqa: C901
     gen_sig = signature(generator.generate)
 
     async def _run() -> bytes:
-        kwargs = {"seed": seed} if "seed" in gen_sig.parameters else {}
+        kwargs = {}
+        if "seed" in gen_sig.parameters:
+            kwargs["seed"] = seed
+        if image_input and "image_input" in gen_sig.parameters:
+            kwargs["image_input"] = image_input
+        if output_format and "output_format" in gen_sig.parameters:
+            kwargs["output_format"] = output_format
         return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
 
     try:
@@ -88,7 +99,6 @@ def generate_image(  # noqa: C901
         except Exception:
             logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
 
-    # Persist to shared directory
     filename = f"{prompt_id}_{int(time.time())}.png"
     file_path = OUTPUT_DIR / filename
     file_path.write_bytes(image_bytes)
@@ -103,6 +113,7 @@ def generate_image(  # noqa: C901
         len(image_bytes),
     )
     return str(file_path)
+
 
 @celery_app.task(name="tasks.generate_text", queue="text")
 def generate_text(

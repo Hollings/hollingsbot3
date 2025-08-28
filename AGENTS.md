@@ -32,7 +32,13 @@
 - Commits: use clear, imperative subjects; Conventional Commits (`feat:`, `fix:`) preferred.
 - PRs: include summary, rationale, test instructions, and linked issues. Add screenshots for user-facing Discord commands when helpful.
 - Keep diffs focused; update README/`image_gen_config.json` if behavior or prefixes change.
-- Agents: do not open pull requests; branching and pushing are fine. Leave PR creation to maintainers.
+ - Agents: branch and commit only; do not push or open PRs, and do not mention PR creation. Maintainers handle pushing and PRs.
+
+## Agent-Specific Instructions
+- Branch locally (e.g., `git switch -c docs/add-agents-md`) and make focused commits.
+- Do not push branches or tags; surface next steps instead.
+- Do not open PRs or suggest opening them; maintainers will do so.
+- Provide suggested branch names and commit messages in output when helpful.
 
 ## Security & Configuration Tips
 - Required env: `DISCORD_TOKEN`, `GITHUB_TOKEN` (repo scope). Common optional: `WEBHOOK_URL`, `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STABLE_DIFFUSION_CHANNEL_IDS`, `STABLE_DIFFUSION_PRIVACY`, `PROMPT_DB_PATH`, `BOT_RESTART_INTERVAL`.
