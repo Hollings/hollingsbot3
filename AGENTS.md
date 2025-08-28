@@ -32,9 +32,9 @@
 - Commits: use clear, imperative subjects; Conventional Commits (`feat:`, `fix:`) preferred.
 - PRs: include summary, rationale, test instructions, and linked issues. Add screenshots for user-facing Discord commands when helpful.
 - Keep diffs focused; update README/`image_gen_config.json` if behavior or prefixes change.
+- Agents: do not open pull requests; branching and pushing are fine. Leave PR creation to maintainers.
 
 ## Security & Configuration Tips
 - Required env: `DISCORD_TOKEN`, `GITHUB_TOKEN` (repo scope). Common optional: `WEBHOOK_URL`, `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STABLE_DIFFUSION_CHANNEL_IDS`, `STABLE_DIFFUSION_PRIVACY`, `PROMPT_DB_PATH`, `BOT_RESTART_INTERVAL`.
 - Do not commit `.env` or tokens; avoid logging secrets.
 - Redis backs Celery; SQLite stores lightweight state. Review data paths before deploying.
-
