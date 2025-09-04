@@ -140,10 +140,38 @@ class ImageGenCog(commands.Cog):
         Launch an image-generation task and poll. Keep routing through Celery.
         The task must accept image_input and output_format as keyword-only.
         """
+        # Celery's default JSON serializer cannot carry raw bytes; encode as data URLs.
+        def _as_data_urls(images: list[bytes]) -> list[str]:
+            def _mime(b: bytes) -> str:
+                try:
+                    if b.startswith(b"\x89PNG"):
+                        return "image/png"
+                    if b.startswith(b"\xff\xd8"):
+                        return "image/jpeg"
+                    if b.startswith(b"RIFF") and b[8:12] == b"WEBP":
+                        return "image/webp"
+                    if b.startswith(b"BM"):
+                        return "image/bmp"
+                except Exception:
+                    pass
+                return "application/octet-stream"
+
+            out: list[str] = []
+            for img in images:
+                b64 = base64.b64encode(img).decode("ascii")
+                out.append(f"data:{_mime(img)};base64,{b64}")
+            return out
+
+        payload_images: list[str] | None
+        if image_input:
+            payload_images = _as_data_urls(image_input)
+        else:
+            payload_images = None
+
         async_result = generate_image.apply_async(
             (prompt_id, api, model, prompt, seed),  # positional args only
             kwargs={
-                "image_input": image_input,  # keyword-only
+                "image_input": payload_images,  # keyword-only
                 "output_format": output_format,  # keyword-only
                 # "timeout": 45.0,  # example if you want to override
             },
@@ -156,16 +184,25 @@ class ImageGenCog(commands.Cog):
     async def _react(self, msg: discord.Message, emoji: str, *, remove: bool = False) -> None:
         try:
             if remove:
-                await msg.clear_reaction(emoji)
+                # Remove only the bot's own reaction to avoid requiring
+                # Manage Messages permission (clear_reaction clears all).
+                if self.bot.user is not None:
+                    await msg.remove_reaction(emoji, self.bot.user)
+                else:
+                    await msg.clear_reaction(emoji)
             else:
                 await msg.add_reaction(emoji)
         except discord.HTTPException:
             _log.debug("Could not %s reaction %s on %s", "remove" if remove else "add", emoji, msg.id)
 
     def _split_prompt(self, content: str) -> tuple[str, GeneratorSpec] | None:
+        """Return (prompt_without_prefix, spec) if content starts with a known prefix.
+        Matching is case-insensitive for human-friendly prefixes like "edit:".
+        """
         self._reload_config()
+        content_l = content.lower()
         for prefix in sorted(self._prefix_map, key=len, reverse=True):
-            if content.startswith(prefix):
+            if content_l.startswith(prefix.lower()):
                 spec = self._prefix_map[prefix]
                 return content[len(prefix):].lstrip(), spec
         return None

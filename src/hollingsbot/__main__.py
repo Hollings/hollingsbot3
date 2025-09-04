@@ -1,5 +1,6 @@
 # bot.py
 import os
+import time
 from dotenv import load_dotenv
 import discord
 from discord.ext import commands, tasks
@@ -34,7 +35,7 @@ def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
             extras.append("!")
     return commands.when_mentioned_or(*extras)(bot, message)
 
-bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents)
+bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True)
 
 @bot.event
 async def on_ready():
@@ -73,4 +74,12 @@ async def on_message(message):
     await bot.process_commands(message)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    # Robust launcher: retry on transient connect errors (e.g., gateway timeouts)
+    while True:
+        try:
+            asyncio.run(main())
+            break  # Normal exit
+        except Exception as e:  # noqa: BLE001
+            # Log and retry with backoff; discord.py sometimes raises during initial connect
+            logger.exception("Bot crashed during startup/connect; retrying in 5s: %s", e)
+            time.sleep(5)

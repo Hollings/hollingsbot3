@@ -4,7 +4,9 @@ import re
 import io
 import asyncio
 import collections
+import logging
 from typing import Iterable, List, Dict, Any
+from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands
@@ -15,13 +17,19 @@ from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
 # Env config
 WHITELIST = {int(x) for x in os.getenv("LLM_WHITELIST_CHANNELS", "").split(",") if x.strip().isdigit()}
-DEFAULT_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "anthropic").lower()
-DEFAULT_MODEL = os.getenv("DEFAULT_LLM_MODEL", "claude-4o" if DEFAULT_PROVIDER == "anthropic" else "gpt-4o")
+DEFAULT_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai").lower()
+# If provider is set to openai (default), prefer gpt-5; otherwise keep a sensible default per provider.
+DEFAULT_MODEL = os.getenv(
+    "DEFAULT_LLM_MODEL",
+    "gpt-5" if DEFAULT_PROVIDER == "openai" else "claude-4o",
+)
 DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are a helpful assistant.")
 TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "60"))
 HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
 
 AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
+
+_log = logging.getLogger(__name__)
 
 
 def _chunks(s: str, limit: int = 1900) -> Iterable[str]:
@@ -71,6 +79,14 @@ def _build_internal_parts(user_text: str, images: List[discord.Attachment]) -> L
     return parts
 
 
+def _fmt_ts(dt: datetime) -> str:
+    try:
+        ts = dt.astimezone(timezone.utc)
+    except Exception:
+        ts = datetime.now(timezone.utc)
+    return ts.strftime("%Y-%m-%d %H:%M UTC")
+
+
 def _to_provider_content(parts_or_text: Any, provider: str) -> Any:
     if isinstance(parts_or_text, str):
         return parts_or_text
@@ -96,6 +112,127 @@ class LLMAPIChat(commands.Cog):
         self.bot = bot
         self.history = collections.defaultdict(lambda: collections.deque(maxlen=HISTORY_LIMIT))
         self.system_prompts = {}
+        self._preload_once = False
+        self._warming: set[int] = set()
+
+    async def _resolve_referenced_message(self, msg: discord.Message) -> discord.Message | None:
+        ref = msg.reference
+        if not ref:
+            return None
+        resolved = getattr(ref, "resolved", None)
+        if isinstance(resolved, discord.Message):
+            return resolved
+        ref_id = getattr(ref, "message_id", None)
+        if ref_id:
+            try:
+                return await msg.channel.fetch_message(ref_id)
+            except Exception:
+                return None
+        return None
+
+    async def _preload_history_for_channel(self, channel_id: int) -> None:
+        # Skip if already has content
+        if self.history.get(channel_id):
+            return
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("LLM preload: cannot fetch channel %s: %s", channel_id, exc)
+                return
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            return
+        # Collect most recent messages and build a lightweight history
+        try:
+            # Fetch newest-first limited slice, then reverse for chronological processing
+            msgs: List[discord.Message] = [m async for m in channel.history(limit=HISTORY_LIMIT, oldest_first=False)]
+            msgs.reverse()
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("LLM preload: history fetch failed for %s: %s", channel_id, exc)
+            return
+
+        dq = collections.deque(maxlen=HISTORY_LIMIT)
+        for m in msgs:
+            try:
+                # Ignore commands and unrelated bots
+                if m.content.startswith(("!", "-")):
+                    continue
+                if m.author.bot and (self.bot.user is None or m.author.id != self.bot.user.id):
+                    continue
+
+                # Assistant messages: store as assistant text
+                if self.bot.user and m.author.id == self.bot.user.id:
+                    assistant_text_raw = (m.content or "").strip()
+                    ts = _fmt_ts(m.created_at)
+                    assistant_text = f"[{ts}] {assistant_text_raw}" if assistant_text_raw else f"[{ts}]"
+                    if assistant_text:
+                        dq.append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text}]})
+                    continue
+
+                # User message
+                images = [att for att in m.attachments if _is_image_attachment(att)]
+                text_files = [att for att in m.attachments if _is_text_attachment(att) and att not in images]
+
+                # Reply prefix + merge reply images (best-effort)
+                reply_prefix = ""
+                replied_msg = await self._resolve_referenced_message(m)
+                if replied_msg is not None:
+                    reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
+                    reply_text = (replied_msg.content or "").strip()
+                    reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n" if reply_text else f"(Replying to <{reply_author}>.)\n"
+                    reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
+                    if reply_images:
+                        seen = {att.url for att in images}
+                        for att in reply_images:
+                            if att.url not in seen:
+                                images.append(att)
+                                seen.add(att.url)
+
+                ts = _fmt_ts(m.created_at)
+                user_text_base = f"[{ts}] <{m.author.display_name}> {(m.content or '').strip()}".strip()
+                history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+
+                # Placeholders for text files, not persisted
+                if text_files:
+                    for att in text_files:
+                        history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+
+                user_parts_for_history = _build_internal_parts(history_user_text, images)
+                dq.append({"role": "user", "parts": user_parts_for_history})
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("LLM preload: skipping message due to error: %s", exc)
+
+        if dq:
+            self.history[channel_id] = dq
+            _log.info("LLM preload: initialized history for channel %s with %d items", channel_id, len(dq))
+
+    async def _ensure_history_for_message_channel(self, message: discord.Message) -> None:
+        """On-demand warmup of history for a channel if empty (e.g., startup race)."""
+        cid = message.channel.id
+        if cid in self._warming:
+            return
+        if self.history.get(cid):
+            return
+        # Only warm whitelisted channels
+        if cid not in WHITELIST:
+            return
+        self._warming.add(cid)
+        try:
+            await self._preload_history_for_channel(cid)
+        finally:
+            self._warming.discard(cid)
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        # Only run once per process
+        if self._preload_once:
+            return
+        self._preload_once = True
+        # Preload for whitelisted channels only
+        tasks = [self._preload_history_for_channel(cid) for cid in WHITELIST]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     @commands.command(name="models")
     async def list_models(self, ctx: commands.Context) -> None:
@@ -168,18 +305,57 @@ class LLMAPIChat(commands.Cog):
         if message.content.startswith(("!", "-")):
             return
 
+        # Ensure history is warmed for this channel in case preload hasn't finished yet
+        await self._ensure_history_for_message_channel(message)
+
         gid = message.guild.id if message.guild else 0
         key = (gid, message.author.id)
         sys_prompt = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
         pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
         provider, model = pref
 
+        # Collect images from this message and, if replying, from the referenced message too.
         images = [att for att in message.attachments if _is_image_attachment(att)]
         text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
 
-        user_text_base = f"<{message.author.display_name}> {message.content}".strip()
-        provider_user_text = user_text_base
-        history_user_text = user_text_base
+        replied_msg: discord.Message | None = None
+        if message.reference is not None:
+            # Try to resolve locally first; fall back to fetch by ID
+            resolved = getattr(message.reference, "resolved", None)
+            if isinstance(resolved, discord.Message):
+                replied_msg = resolved
+            else:
+                ref_id = getattr(message.reference, "message_id", None)
+                if ref_id:
+                    try:
+                        replied_msg = await message.channel.fetch_message(ref_id)
+                    except Exception:
+                        replied_msg = None
+
+        # Build a reply context prefix and merge in images from the replied message
+        reply_prefix = ""
+        if replied_msg is not None:
+            reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
+            reply_text = (replied_msg.content or "").strip()
+            rep_ts = _fmt_ts(replied_msg.created_at)
+            if reply_text:
+                reply_prefix = f"(Replying to [{rep_ts}] <{reply_author}>: {reply_text})\n"
+            else:
+                reply_prefix = f"(Replying to [{rep_ts}] <{reply_author}>.)\n"
+            # Merge in image attachments from the replied message
+            reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
+            if reply_images:
+                # Deduplicate by URL to avoid repeats
+                seen_urls = {att.url for att in images}
+                for att in reply_images:
+                    if att.url not in seen_urls:
+                        images.append(att)
+                        seen_urls.add(att.url)
+
+        ts_now = _fmt_ts(message.created_at)
+        user_text_base = f"[{ts_now}] <{message.author.display_name}> {message.content}".strip()
+        provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+        history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
 
         # Inline text files for the model for this turn only. Persist a small note instead.
         if text_files:
@@ -230,7 +406,9 @@ class LLMAPIChat(commands.Cog):
                 return f"[see file: {filename}]"
             cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
 
-        assistant_text = f"{cleaned_text}"
+        # Timestamp assistant response for context
+        assistant_ts = _fmt_ts(datetime.now(timezone.utc))
+        assistant_text = f"[{assistant_ts}] {cleaned_text}"
         self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text}]})
 
         for chunk in _chunks(cleaned_text):
@@ -262,6 +440,7 @@ class LLMAPIChat(commands.Cog):
             "- It remembers the last N messages in the channel for conversation context.\n"
             "- Messages starting with `!` or `-` are ignored and not added to history.\n"
             "- Images are supported. Attach images to your message and they are preserved in chat history and sent to the model when supported by the selected provider.\n"
+            "- Replies: when you reply to a message, the bot includes that message's text and any of its image attachments as context for your turn.\n"
             "- Text file uploads are supported for a single turn. The model reads the file contents for that message only, and chat history records a note like `[uploaded file filename.txt removed]` instead of the full contents.\n"
             "- SVG blocks in model replies are rendered to PNG if possible and attached. Otherwise the original `.svg` is attached. The SVG code block is replaced in the text with a note.\n"
             "\n"
