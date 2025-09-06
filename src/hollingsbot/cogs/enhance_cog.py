@@ -10,6 +10,7 @@ from discord.ext import commands
 import anthropic
 
 from image_generators import get_image_generator
+from hollingsbot.settings import ENHANCE_PROMPT as DEFAULT_ENHANCE_PROMPT
 
 
 class EnhanceCog(commands.Cog):
@@ -35,7 +36,7 @@ class EnhanceCog(commands.Cog):
         self.bot = bot
 
         # Anthropic / Claude settings --------------------------------------
-        self.prompt = prompt or os.getenv("ENHANCE_PROMPT", "")
+        self.prompt = prompt or DEFAULT_ENHANCE_PROMPT
         self.model = model or os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
         self.enhance_func = enhance_func or self._api_call
         self.client = anthropic.Client(auth_token=os.getenv("ANTHROPIC_API_KEY", ""))

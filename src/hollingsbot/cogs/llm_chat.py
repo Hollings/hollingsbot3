@@ -12,6 +12,7 @@ import discord
 from discord.ext import commands
 
 from hollingsbot.tasks import generate_text
+from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT
 from hollingsbot.prompt_db import get_model_pref, set_model_pref
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
@@ -23,8 +24,7 @@ DEFAULT_MODEL = os.getenv(
     "DEFAULT_LLM_MODEL",
     "gpt-5" if DEFAULT_PROVIDER == "openai" else "claude-4o",
 )
-DEFAULT_SYSTEM_PROMPT = os.getenv("DEFAULT_SYSTEM_PROMPT", "You are a helpful assistant.")
-TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "60"))
+TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "180"))
 HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
 
 AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
@@ -161,13 +161,11 @@ class LLMAPIChat(commands.Cog):
                 if m.author.bot and (self.bot.user is None or m.author.id != self.bot.user.id):
                     continue
 
-                # Assistant messages: store as assistant text
+                # Assistant messages: store as assistant text (no timestamp)
                 if self.bot.user and m.author.id == self.bot.user.id:
                     assistant_text_raw = (m.content or "").strip()
-                    ts = _fmt_ts(m.created_at)
-                    assistant_text = f"[{ts}] {assistant_text_raw}" if assistant_text_raw else f"[{ts}]"
-                    if assistant_text:
-                        dq.append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text}]})
+                    if assistant_text_raw:
+                        dq.append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text_raw}]})
                     continue
 
                 # User message
@@ -189,8 +187,7 @@ class LLMAPIChat(commands.Cog):
                                 images.append(att)
                                 seen.add(att.url)
 
-                ts = _fmt_ts(m.created_at)
-                user_text_base = f"[{ts}] <{m.author.display_name}> {(m.content or '').strip()}".strip()
+                user_text_base = f"<{m.author.display_name}> {(m.content or '').strip()}".strip()
                 history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
 
                 # Placeholders for text files, not persisted
@@ -302,7 +299,11 @@ class LLMAPIChat(commands.Cog):
             return
         if message.channel.id not in WHITELIST:
             return
-        if message.content.startswith(("!", "-")):
+        # Ignore explicit commands and image edit prompts (handled by image cog)
+        content_clean = (message.content or "").strip()
+        if content_clean.startswith(("!", "-")):
+            return
+        if content_clean.lower().startswith("edit:"):
             return
 
         # Ensure history is warmed for this channel in case preload hasn't finished yet
@@ -337,11 +338,10 @@ class LLMAPIChat(commands.Cog):
         if replied_msg is not None:
             reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
             reply_text = (replied_msg.content or "").strip()
-            rep_ts = _fmt_ts(replied_msg.created_at)
             if reply_text:
-                reply_prefix = f"(Replying to [{rep_ts}] <{reply_author}>: {reply_text})\n"
+                reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n"
             else:
-                reply_prefix = f"(Replying to [{rep_ts}] <{reply_author}>.)\n"
+                reply_prefix = f"(Replying to <{reply_author}>.)\n"
             # Merge in image attachments from the replied message
             reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
             if reply_images:
@@ -352,8 +352,8 @@ class LLMAPIChat(commands.Cog):
                         images.append(att)
                         seen_urls.add(att.url)
 
-        ts_now = _fmt_ts(message.created_at)
-        user_text_base = f"[{ts_now}] <{message.author.display_name}> {message.content}".strip()
+        # No timestamps in history or provider content
+        user_text_base = f"<{message.author.display_name}> {message.content}".strip()
         provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
         history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
 
@@ -406,10 +406,8 @@ class LLMAPIChat(commands.Cog):
                 return f"[see file: {filename}]"
             cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
 
-        # Timestamp assistant response for context
-        assistant_ts = _fmt_ts(datetime.now(timezone.utc))
-        assistant_text = f"[{assistant_ts}] {cleaned_text}"
-        self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text}]})
+        # Store assistant reply without timestamp in history
+        self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": cleaned_text}]})
 
         for chunk in _chunks(cleaned_text):
             await message.channel.send(chunk)

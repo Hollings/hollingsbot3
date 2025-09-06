@@ -168,7 +168,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "input": input_messages,
-                "reasoning": {"effort": "low"},
+                "reasoning": {"effort": "medium"},
             }
             if instructions:
                 kwargs["instructions"] = instructions

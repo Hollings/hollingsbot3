@@ -78,6 +78,17 @@ Each prefix maps to an API provider and model name:
 Additional prefixes can be added and will be handled by the configured image
 generator class.
 
+### Text generation configuration
+
+- `TEXT_TIMEOUT` (seconds): max time to wait for LLM replies in `llm_chat` (default 180).
+- `GPT2_RESPONSE_TIMEOUT` (seconds): max time to wait for Celery text tasks in `gpt2_chat` (default 180).
+
+Increase these if your provider/models are slow or you see timeout errors.
+
+Channel allowlists:
+- Set `STABLE_DIFFUSION_CHANNEL_IDS` to a comma-separated list of channel IDs to restrict general image-generation prompts to those channels. If unset or empty, image prompts are allowed in all guild channels.
+- Set `EDIT_CHANNEL_IDS` to a comma-separated list of channel IDs where the `edit:` command is allowed. When set, `edit:` is allowed in the union of `STABLE_DIFFUSION_CHANNEL_IDS` and `EDIT_CHANNEL_IDS`. DMs remain controlled by `STABLE_DIFFUSION_ALLOW_DMS`.
+
 ### Pull request notifications
 
 The `PRManager` cog posts to a Discord webhook when pull requests are opened and

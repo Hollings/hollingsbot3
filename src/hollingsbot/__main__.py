@@ -56,6 +56,7 @@ async def main():
         await bot.load_extension("hollingsbot.cogs.general")
         await bot.load_extension("hollingsbot.cogs.image_gen_cog")
         await bot.load_extension("hollingsbot.cogs.gpt2_chat")
+        await bot.load_extension("hollingsbot.cogs.admin")
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
             await bot.load_extension("hollingsbot.cogs.starboard")

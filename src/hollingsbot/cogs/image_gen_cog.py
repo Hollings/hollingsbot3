@@ -61,6 +61,14 @@ class ImageGenCog(commands.Cog):
             int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()
         }
 
+        # Optional separate allowlist for the "edit:" command specifically.
+        # If set, messages starting with "edit:" are also allowed in these channels
+        # in addition to any general image channels above.
+        edit_ids = os.getenv("EDIT_CHANNEL_IDS", "")
+        self._edit_channel_ids: set[int] = {
+            int(cid.strip()) for cid in edit_ids.split(",") if cid.strip().isdigit()
+        }
+
         allow_str = os.getenv("STABLE_DIFFUSION_ALLOW_DMS", "1").strip().lower()
         self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
 
@@ -117,6 +125,8 @@ class ImageGenCog(commands.Cog):
             else f"{len(self._allowed_channel_ids)} whitelisted channel(s)"
         )
         lines.append(f"Guild scope: {allowlist_desc}")
+        if self._edit_channel_ids:
+            lines.append(f"Edit scope: {len(self._edit_channel_ids)} whitelisted channel(s)")
         return "\n".join(lines)
 
     async def cog_unload(self) -> None:
@@ -256,7 +266,7 @@ class ImageGenCog(commands.Cog):
         else:
             prompts = [raw_prompt]
 
-        # Collect image attachments for possible editing path
+        # Collect image attachments for possible editing path (from this message and, if replying, from the replied message)
         images: list[bytes] = []
         for att in message.attachments:
             ct = (att.content_type or "").lower()
@@ -266,8 +276,41 @@ class ImageGenCog(commands.Cog):
                 except discord.HTTPException:
                     _log.debug("Could not download attachment %s", att.id)
 
-        # Editing is triggered if there are images AND either model indicates nano-banana or mode=="edit"
-        do_edit = bool(images) and ("nano-banana" in spec.model or getattr(spec, "mode", "") == "edit")
+        # If the user is replying to a message with images, include those images as edit inputs too
+        reply_images: list[bytes] = []
+        if message.reference is not None:
+            replied_msg: discord.Message | None = None
+            resolved = getattr(message.reference, "resolved", None)
+            if isinstance(resolved, discord.Message):
+                replied_msg = resolved
+            else:
+                ref_id = getattr(message.reference, "message_id", None)
+                if ref_id:
+                    try:
+                        replied_msg = await message.channel.fetch_message(ref_id)
+                    except Exception:
+                        replied_msg = None
+            if replied_msg is not None:
+                for att in replied_msg.attachments:
+                    ct = (att.content_type or "").lower()
+                    if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                        try:
+                            reply_images.append(await att.read())
+                        except discord.HTTPException:
+                            _log.debug("Could not download replied attachment %s", att.id)
+
+        all_edit_images = images + reply_images
+
+        # Editing is triggered if there are images from either source AND either model indicates nano-banana or mode=="edit"
+        do_edit_mode = ("nano-banana" in spec.model) or (getattr(spec, "mode", "") == "edit")
+        do_edit = bool(all_edit_images) and do_edit_mode
+
+        # If user explicitly asked for edit mode but we found no images anywhere, fail early with guidance
+        if getattr(spec, "mode", "") == "edit" and not all_edit_images:
+            await self._react(message, THINKING, remove=True)
+            await self._react(message, FAILURE)
+            await message.channel.send("No images found to edit. Reply to a message with an image or attach an image with your `edit:` prompt.")
+            return
 
         async def _launch_prompt(p: str) -> tuple[str, bytes] | Exception:
             prompt_id = add_prompt(p, str(message.author.id), spec.api, spec.model)
@@ -275,7 +318,7 @@ class ImageGenCog(commands.Cog):
                 # Route through Celery, passing image_input when editing
                 file_or_b64 = await self._run_task(
                     prompt_id, spec.api, spec.model, p, seed,
-                    image_input=images if do_edit else None,
+                    image_input=all_edit_images if do_edit else None,
                     output_format="png" if do_edit else None,
                 )
                 img_path = Path(file_or_b64)
@@ -327,10 +370,15 @@ class ImageGenCog(commands.Cog):
             if not self._allow_dms:
                 return
         else:
+            # Check content early to allow a separate allowlist for edit:
+            cleaned = (message.content or "").strip()
             if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
-                return
-
-        cleaned = message.content.strip()
+                # Not in general image channels. Allow if this is an edit: prompt
+                # and the channel is in EDIT_CHANNEL_IDS.
+                if not (cleaned.lower().startswith("edit:") and message.channel.id in self._edit_channel_ids):
+                    return
+        # For DMs or allowed guild messages, continue.
+        cleaned = (message.content or "").strip()
 
         if cleaned.lower() == "!models":
             await message.channel.send(self._format_model_listing())

@@ -44,7 +44,7 @@ class GPT2Chat(commands.Cog):
         self.api = api
         self.model = model
         self.task_func = task_func or self._celery_task
-        self.timeout = timeout or int(os.getenv("GPT2_RESPONSE_TIMEOUT", "120"))
+        self.timeout = timeout or int(os.getenv("GPT2_RESPONSE_TIMEOUT", "180"))
 
         # Keep track of the newest message per channel so we can ignore stale jobs
         self._latest: Dict[int, int] = {}

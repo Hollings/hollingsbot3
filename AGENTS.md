@@ -41,6 +41,6 @@
 - Do not suggest branch names or commit messages under any circumstances.
 
 ## Security & Configuration Tips
-- Required env: `DISCORD_TOKEN`, `GITHUB_TOKEN` (repo scope). Common optional: `WEBHOOK_URL`, `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STABLE_DIFFUSION_CHANNEL_IDS`, `STABLE_DIFFUSION_PRIVACY`, `PROMPT_DB_PATH`, `BOT_RESTART_INTERVAL`.
+- Required env: `DISCORD_TOKEN`, `GITHUB_TOKEN` (repo scope). Common optional: `WEBHOOK_URL`, `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STABLE_DIFFUSION_CHANNEL_IDS`, `EDIT_CHANNEL_IDS`, `STABLE_DIFFUSION_PRIVACY`, `PROMPT_DB_PATH`, `BOT_RESTART_INTERVAL`.
 - Do not commit `.env` or tokens; avoid logging secrets.
 - Redis backs Celery; SQLite stores lightweight state. Review data paths before deploying.

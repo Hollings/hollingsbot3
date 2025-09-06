@@ -55,7 +55,12 @@ class AnthropicTextGenerator(TextGeneratorAPI):
         self,
         prompt: Union[str, Sequence[_Message]],
     ) -> str:
-        """Return Claude’s reply for *prompt* as a plain string."""
+        """Return Claude’s reply for *prompt* as a plain string.
+
+        Accepts either a single user string or a list of role/content messages.
+        Any messages with role "system" are moved to the top‑level "system"
+        parameter as required by the Anthropic Messages API.
+        """
         # Normalise the prompt into a list of message dicts.
         if isinstance(prompt, str):
             messages: List[_Message] = [{"role": "user", "content": prompt}]
@@ -74,16 +79,53 @@ class AnthropicTextGenerator(TextGeneratorAPI):
                 "prompt must be either a string or a sequence of message dicts"
             )
 
+        # Extract system messages (Anthropic expects top-level `system`, not a
+        # message role). Concatenate multiple system entries with blank lines.
+        def _content_to_text(content: Any) -> str:
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    try:
+                        t = item.get("type")
+                    except Exception:
+                        t = None
+                    if t == "text":
+                        parts.append(item.get("text", ""))
+                    else:
+                        # Non-text in system is unusual; stringify conservatively
+                        parts.append(str(item))
+                return "\n".join(p for p in parts if p)
+            return str(content)
+
+        system_parts: List[str] = []
+        cleaned: List[_Message] = []
+        for m in messages:
+            role = (m.get("role") or "").lower()
+            if role == "system":
+                system_parts.append(_content_to_text(m.get("content")))
+            else:
+                cleaned.append(m)
+        system_text = "\n\n".join(p for p in system_parts if p).strip() or None
+
         client = self._get_client()
 
-        async def _call_sdk(msgs: Sequence[_Message]) -> str:
-            response = await client.messages.create(
-                model=self.model,
-                max_tokens=1024,
-                messages=msgs,
-            )
-            # SDK returns a list of content blocks; first block is the main text.
-            block = response.content[0]
-            return (block.text if hasattr(block, "text") else str(block)).strip()
+        async def _call_sdk(msgs: Sequence[_Message], system: str | None) -> str:
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": 1024,
+                "messages": msgs,
+            }
+            if system:
+                kwargs["system"] = system
+            response = await client.messages.create(**kwargs)
+            # SDK returns a list of content blocks; aggregate text blocks.
+            parts: List[str] = []
+            for block in getattr(response, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+            return "".join(parts).strip()
 
-        return await _call_sdk(messages)
+        return await _call_sdk(cleaned, system_text)
