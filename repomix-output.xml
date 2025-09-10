@@ -1,0 +1,3646 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitignore
+AGENTS.md
+docker-compose.yml
+docker/Dockerfile
+docker/redis.conf
+FEATURES.md
+README.md
+requirements.txt
+src/hollingsbot/__init__.py
+src/hollingsbot/__main__.py
+src/hollingsbot/caption.py
+src/hollingsbot/cogs/admin.py
+src/hollingsbot/cogs/enhance_cog.py
+src/hollingsbot/cogs/general.py
+src/hollingsbot/cogs/gpt2_chat.py
+src/hollingsbot/cogs/image_edit.py
+src/hollingsbot/cogs/image_gen_cog.py
+src/hollingsbot/cogs/llm_chat.py
+src/hollingsbot/cogs/starboard.py
+src/hollingsbot/image_gen_config.json
+src/hollingsbot/image_generators/__init__.py
+src/hollingsbot/image_generators/base.py
+src/hollingsbot/image_generators/replicate_api.py
+src/hollingsbot/image_generators/svg_gpt.py
+src/hollingsbot/prompt_db.py
+src/hollingsbot/settings.py
+src/hollingsbot/tasks.py
+src/hollingsbot/text_generators/__init__.py
+src/hollingsbot/text_generators/anthropic.py
+src/hollingsbot/text_generators/base.py
+src/hollingsbot/text_generators/huggingface.py
+src/hollingsbot/text_generators/openai_chatgpt.py
+src/hollingsbot/utils/__init__.py
+src/hollingsbot/utils/svg_utils.py
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="FEATURES.md">
+Goal: Extract each feature from Discord cogs into self-contained service classes with clean, Discord-agnostic interfaces for easy use from other code (e.g., LLM tool-calling).
+
+> Feature Checklist (simplest → complex)
+  
+  - [ ] LLM help — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.help_command: !h shows chat help.
+  - [ ] LLM list models — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.list_models: !models lists AVAILABLE_MODELS.
+  - [ ] List image models — src/hollingsbot/cogs/image_gen_cog.py::ImageGenCog.on_message: !models shows prefixes/providers and scopes.
+  - [ ] LLM set model — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.set_or_list_model: !model api/name sets per-user provider/model.
+  - [ ] LLM system prompt — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.set_system_prompt: !system show/set/reset system prompt.
+  - [ ] Starboard — src/hollingsbot/cogs/starboard.py::Starboard.on_reaction_add: reposts reacted bot messages to STARBOARD_CHANNEL_ID; skips ignored channels.
+  - [ ] GPT-2 chat — src/hollingsbot/cogs/gpt2_chat.py::GPT2Chat.on_message: auto-replies in GPT2_CHANNEL_ID via Hugging Face.
+  - [ ] Image generate — src/hollingsbot/cogs/image_gen_cog.py::ImageGenCog.on_message: prefix-based image gen; supports {seed}, <a,b,c>.
+  - [ ] Image edit — src/hollingsbot/cogs/image_gen_cog.py::ImageGenCog.on_message: edit: edits attached/replied images; allowed in channels from STABLE_DIFFUSION_CHANNEL_IDS plus EDIT_CHANNEL_IDS.
+  - [ ] Enhance reply — src/hollingsbot/cogs/enhance_cog.py::EnhanceCog.on_message: reply “enhance” to improve text (Anthropic) and attach image.
+  - [ ] Experimental code-edit — src/hollingsbot/cogs/image_edit.py::ImageEditCog.handle_edit_request: reply to an image; gets Python edit_image(img) from OpenAI and runs it.
+  - [ ] LLM auto-chat — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.on_message: auto-replies in LLM_WHITELIST_CHANNELS; ignores !, -, and edit:; handles images/text files; renders SVGs.
+</file>
+
+<file path="src/hollingsbot/cogs/admin.py">
+import asyncio
+import os
+import shutil
+from pathlib import Path
+from typing import List, Optional
+
+from discord.ext import commands
+
+
+class Admin(commands.Cog):
+    """Operational commands anyone can run."""
+
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @commands.command(name="reset")
+    async def reset(self, ctx: commands.Context):
+        """Restart the project Docker containers (or just the bot if needed)."""
+        # Acknowledge quickly so the message gets out before restart
+        await ctx.send("Restarting containers… I may go offline briefly.")
+        # Run restart asynchronously so we can return control to discord.py
+        asyncio.create_task(self._restart_containers(ctx))
+
+    async def _restart_containers(self, ctx: commands.Context) -> None:
+        """Try docker compose restart; fallback to restarting this bot only."""
+        # Optional override via env
+        override = os.getenv("RESET_COMMAND", "").strip()
+        compose_file = self._find_compose_file()
+
+        async def _run(cmd: List[str], cwd: Optional[Path] = None) -> tuple[int, str, str]:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                cwd=str(cwd) if cwd else None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await proc.communicate()
+            return proc.returncode or 0, out_b.decode(errors="ignore"), err_b.decode(errors="ignore")
+
+        if override:
+            # Run user-specified command string through the shell for flexibility
+            proc = await asyncio.create_subprocess_shell(
+                override,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            out_b, err_b = await proc.communicate()
+            code = proc.returncode or 0
+            if code == 0:
+                return
+            # If override fails, fall back to default behavior
+
+        # Prefer Docker CLI v20+: `docker compose`
+        docker_bin = shutil.which("docker")
+        if docker_bin:
+            cmd = [docker_bin, "compose"]
+            if compose_file is not None:
+                cmd += ["-f", str(compose_file)]
+                cwd = compose_file.parent
+            else:
+                cwd = Path.cwd()
+            cmd += ["restart"]
+            code, _, _ = await _run(cmd, cwd=cwd)
+            if code == 0:
+                return
+
+        # Fallback to legacy docker-compose
+        docker_compose_bin = shutil.which("docker-compose")
+        if docker_compose_bin:
+            cmd = [docker_compose_bin]
+            if compose_file is not None:
+                cmd += ["-f", str(compose_file)]
+                cwd = compose_file.parent
+            else:
+                cwd = Path.cwd()
+            cmd += ["restart"]
+            code, _, _ = await _run(cmd, cwd=cwd)
+            if code == 0:
+                return
+
+        # If we get here, we couldn't control Docker from this process.
+        # Fall back to restarting just the bot process (Compose restart policy will handle it if applicable).
+        await ctx.send("Docker not accessible; restarting bot process only.")
+        # Best-effort process restart; if running under Compose with a restart policy, container will come back.
+        try:
+            await self.bot.close()
+        finally:
+            os._exit(0)
+
+    def _find_compose_file(self) -> Optional[Path]:
+        """Search upwards for a docker-compose.yml file starting from CWD and module dir."""
+        candidates = []
+        try:
+            candidates.append(Path.cwd())
+        except Exception:  # noqa: BLE001
+            pass
+        candidates.append(Path(__file__).resolve().parents[3])  # repo root heuristic: src/hollingsbot/cogs/ -> repo root
+
+        seen = set()
+        for base in candidates:
+            for p in [base, *base.parents]:
+                if p in seen:
+                    continue
+                seen.add(p)
+                for name in ("docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"):
+                    f = p / name
+                    if f.exists() and f.is_file():
+                        return f
+        return None
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Admin(bot))
+</file>
+
+<file path="src/hollingsbot/settings.py">
+"""Centralized constant settings that used to live in .env.
+
+These are non-secret, stable texts better tracked in source control than
+environment variables. Secrets (API keys, tokens) must remain in .env.
+"""
+
+# System prompt used by the text chat cog.
+DEFAULT_SYSTEM_PROMPT: str = (
+    "You are a chat bot in a Discord server.\n\n"
+    "Goal\n"
+    "• Chat naturally: brief, practical, and easy to read.\n"
+    "• Stay on-topic and unobtrusive.\n\n"
+    "What you are given\n"
+    "• A multi-user channel history in role-labeled turns.\n"
+    "• User names may appear like <DisplayName>. Treat these as context only.\n"
+    "• Some turns may include a hint like: (Replying to <Name>: …).\n"
+    "• You may see markers such as [uploaded file filename.ext removed] or [see file: filename].\n"
+    "• Images may be included as part of the history or the current turn.\n\n"
+    "How to interpret the history\n"
+    "• Treat the supplied turns as the live history for this channel only. Do not assume memory beyond it.\n"
+    "• Focus on the author of the current user message that triggered this run.\n"
+    "• Use reply hints to resolve pronouns such as “this” or “that”.\n"
+    "• Do not echo user tags, angle-bracket names, timestamps, or reply-hint text in your reply unless strictly needed.\n\n"
+    "Voice and tone\n"
+    "• Casual and friendly; plain language.\n"
+    "• Keep replies concise. Avoid filler and strong opinions.\n\n"
+    "Behavior\n"
+    "• If context is missing due to removed files or absent details, say so briefly and give the best useful answer with what is visible. Do not invent content from removed files.\n"
+    "• Do not ask clarifying questions or request more details. If the task cannot proceed, give a short note about what is missing and provide the next best actionable guidance.\n"
+    "• Do not end messages with engagement questions.\n"
+    "• Do not generate code unless the user asks for code or the task clearly requires it.\n\n"
+    "Answering about history\n"
+    "• When asked about earlier messages, base your answer only on the provided history. Quote minimally and summarize instead of pasting long excerpts.\n"
+    "• If the history does not contain the needed text because it was removed, state that limitation plainly.\n\n"
+    "Multi-user context\n"
+    "• Address only the current author by default. Do not moderate the whole room.\n"
+    "• If you must mention another user, use their name without tags and keep it brief.\n\n"
+    "Formatting\n"
+    "• Hard limit: 2000 characters for regular text.\n"
+    "• Put long content and any code in fenced code blocks. Content inside code blocks does not count toward the limit.\n"
+    "• Avoid bulleted lists unless the user’s request requires structured steps.\n"
+    "• If you include SVG code, place it in a fenced ```svg block.\n\n"
+    "Capabilities\n"
+    "• If images are provided, you may describe or analyze them when helpful.\n"
+    "• For tasks that need careful reading or calculation, do the work and present the result succinctly.\n\n"
+    "Role\n"
+    "• You are here to chat, not to act like a traditional assistant.\n"
+    "• Treat this channel history as the current conversation you are in.\n"
+)
+
+
+# Prompt used by the EnhanceCog to expand and improve quoted text before
+# generating an accompanying image.
+ENHANCE_PROMPT: str = (
+    "Take this text and enhance it in a way that you choose. Expand on the text,"
+    " make it clearer, make it better, make it longer, etc.  Use your imagination"
+    " but try to keep the same general message. Any quotes should remain as they"
+    " are quoted. Only respond with the enhanced text, no commentary or formatting."
+)
+</file>
+
+<file path="docker/redis.conf">
+loglevel warning
+</file>
+
+<file path="src/hollingsbot/__init__.py">
+# Intentionally empty: marks this as a package.
+</file>
+
+<file path="src/hollingsbot/caption.py">
+from __future__ import annotations
+
+from io import BytesIO
+import textwrap
+
+from PIL import Image, ImageDraw, ImageFont
+
+
+def _load_font(size: int) -> ImageFont.ImageFont:
+    """Return a truetype font or fall back to the default."""
+    font_candidates = (
+        "arial.ttf",
+        "DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    )
+    for font_name in font_candidates:
+        try:
+            return ImageFont.truetype(font_name, size=size)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def calculate_font_size(caption: str) -> int:
+    """Return a font size based on caption length."""
+    if len(caption) < 100:
+        return 40
+    if len(caption) < 200:
+        return 30
+    return 20
+
+
+def _add_caption(img: Image.Image, caption: str) -> Image.Image:
+    """Return a new image with the caption above the original image."""
+    font_size = calculate_font_size(caption)
+    font = _load_font(font_size)
+
+    margin = 20
+    max_width = img.width - 2 * margin
+
+    temp_img = Image.new("RGB", (img.width, img.height), (255, 255, 255))
+    temp_draw = ImageDraw.Draw(temp_img)
+
+    wrap_count = 100
+    wrapped = textwrap.fill(caption, width=wrap_count)
+    bbox = temp_draw.textbbox((0, 0), wrapped, font=font)
+    while bbox[2] > max_width and wrap_count > 1:
+        wrap_count -= 1
+        wrapped = textwrap.fill(caption, width=wrap_count)
+        bbox = temp_draw.textbbox((0, 0), wrapped, font=font)
+
+    caption_height = bbox[3] + 2 * margin
+    new_img = Image.new("RGB", (img.width, img.height + caption_height), (255, 255, 255))
+    new_img.paste(img, (0, caption_height))
+
+    draw = ImageDraw.Draw(new_img)
+    text_width = bbox[2] - bbox[0]
+    x = (new_img.width - text_width) // 2
+    y = margin
+    draw.text((x, y), wrapped, fill="black", font=font)
+
+    return new_img
+
+def add_caption(image_bytes: bytes, text: str) -> bytes:
+    """Return image bytes with a caption rendered above the original."""
+    if not text:
+        return image_bytes
+
+    buf = BytesIO(image_bytes)
+    img = Image.open(buf)
+    img.load()                 # <-- make pixel data independent of `buf`
+    img = img.convert("RGB")   # afterwards you can safely close the buffer
+    buf.close()
+
+    new_img = _add_caption(img, text)
+
+    out = BytesIO()
+    new_img.save(out, format="PNG")
+    out.seek(0)                # Discord will read from the start
+    return out.read()
+</file>
+
+<file path="src/hollingsbot/cogs/enhance_cog.py">
+from __future__ import annotations
+
+import os
+import asyncio
+from io import BytesIO
+from typing import Callable, Awaitable
+
+import discord
+from discord.ext import commands
+import anthropic
+
+from image_generators import get_image_generator
+from hollingsbot.settings import ENHANCE_PROMPT as DEFAULT_ENHANCE_PROMPT
+
+
+class EnhanceCog(commands.Cog):
+    """Reply to quoted messages with an enhanced version *and* a matching image.
+
+    The original behaviour (text enhancement via Claude/Anthropic) is preserved.
+    After generating the improved text we also call a Replicate‑backed image
+    generator and attach the result to the reply.
+    """
+
+    _MAX_TEXT_LEN: int = 2_000
+    _MAX_PROMPT_LEN: int = 300  # feed at most this many chars to the image model
+
+    def __init__(
+        self,
+        bot: commands.Bot,
+        *,
+        prompt: str | None = None,
+        model: str | None = None,
+        image_model: str | None = None,
+        enhance_func: Callable[[str, str], Awaitable[str]] | None = None,
+    ) -> None:
+        self.bot = bot
+
+        # Anthropic / Claude settings --------------------------------------
+        self.prompt = prompt or DEFAULT_ENHANCE_PROMPT
+        self.model = model or os.getenv("ANTHROPIC_MODEL", "claude-3-opus-20240229")
+        self.enhance_func = enhance_func or self._api_call
+        self.client = anthropic.Client(auth_token=os.getenv("ANTHROPIC_API_KEY", ""))
+
+        # Image‑generation settings ----------------------------------------
+        self.image_api: str = "replicate"  # for future extensibility
+        self.image_model: str = (
+            image_model
+            or os.getenv("ENHANCE_IMAGE_MODEL", "black-forest-labs/flux-schnell")
+        )
+        self._image_gen = get_image_generator(self.image_api, self.image_model)
+
+    # ----------------------------------------------------------------- Anthropic
+
+    async def _api_call(self, prompt: str, text: str) -> str:
+        """Call the Anthropic API **without blocking** the event‑loop."""
+        full_prompt = f"{prompt} ```{text}```"
+
+        def _sync_call():
+            return self.client.messages.create(
+                model=self.model,
+                max_tokens=1024,
+                messages=[{"role": "user", "content": full_prompt}],
+            )
+
+        response = await asyncio.to_thread(_sync_call)
+        content = response.content
+        if isinstance(content, str):  # older models
+            return content.strip()
+
+        parts: list[str] = []
+        for block in content:  # type: ignore[arg-type]
+            if hasattr(block, "text"):
+                parts.append(str(block.text))
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text", "")))
+        return "".join(parts).strip()
+
+    # -------------------------------------------------------------- Image helper
+
+    async def _generate_image(self, prompt: str) -> bytes:
+        """Generate an image for *prompt* using the configured provider."""
+        # Truncate: extremely long prompts can blow up token limits/costs.
+        return await self._image_gen.generate(prompt[: self._MAX_PROMPT_LEN])
+
+    async def cog_unload(self) -> None:
+        """Ensure the image generator is cleaned up when the cog is unloaded."""
+        await self._image_gen.aclose()
+
+    # ---------------------------------------------------------------- listeners
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        if message.content.strip().lower() != "enhance":
+            return
+        reference = message.reference
+        if not reference or not reference.message_id:
+            return
+        original: discord.Message | None = getattr(reference, "resolved", None)
+        if original is None:
+            try:
+                original = await message.channel.fetch_message(reference.message_id)
+            except discord.HTTPException:
+                return
+        text = (original.content or "")[: self._MAX_TEXT_LEN]
+        if not text:
+            return
+
+        # Step 1 ─ enhanced text
+        reply_text = await self.enhance_func(self.prompt, text)
+        if not reply_text:
+            return
+
+        # Step 2 ─ generate image (best‑effort)
+        file: discord.File | None = None
+        try:
+            image_bytes = await self._generate_image(reply_text)
+            file = discord.File(BytesIO(image_bytes), filename="enhanced.png")
+        except Exception as exc:  # noqa: BLE001
+            # Don’t fail the whole command – just log and continue.
+            print(f"[EnhanceCog] Image generation failed: {exc}")
+
+        # Step 3 ─ reply with text (+ image if available)
+        await message.reply(reply_text[: self._MAX_TEXT_LEN], file=file)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(EnhanceCog(bot))
+</file>
+
+<file path="src/hollingsbot/cogs/general.py">
+from discord.ext import commands
+
+class General(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+
+    @commands.command()
+    async def ping(self, ctx: commands.Context):
+        """Responds with Pong!"""
+        await ctx.send('Pong!')
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(General(bot))
+</file>
+
+<file path="src/hollingsbot/cogs/gpt2_chat.py">
+from __future__ import annotations
+
+import asyncio
+import os
+import random
+from typing import Callable, Awaitable, Dict
+
+import discord
+from celery.exceptions import TimeoutError as CeleryTimeoutError
+from discord.ext import commands
+
+from hollingsbot.tasks import generate_text
+
+
+class GPT2Chat(commands.Cog):
+    """Respond to messages in a designated channel using GPT-2 (via Celery).
+
+    If multiple messages arrive faster than the model can reply, only the most
+    recent prompt per channel will be answered. Older, still-running generation
+    tasks are allowed to finish but their results are discarded.
+    """
+
+    _MAX_DISCORD_LEN: int = 2_000
+
+    def __init__(
+        self,
+        bot: commands.Bot,
+        *,
+        channel_id: int | None = None,
+        api: str = "huggingface",
+        model: str = "gpt2-medium",
+        task_func: Callable[[str, str, str, float], Awaitable[str]] | None = None,
+        timeout: int | None = None,
+    ) -> None:
+        self.bot = bot
+
+        # Channel configuration ------------------------------------------------
+        if channel_id is None:
+            cid = os.getenv("GPT2_CHANNEL_ID")
+            channel_id = int(cid) if cid else None
+        self.channel_id = channel_id
+
+        # Generation configuration --------------------------------------------
+        self.api = api
+        self.model = model
+        self.task_func = task_func or self._celery_task
+        self.timeout = timeout or int(os.getenv("GPT2_RESPONSE_TIMEOUT", "180"))
+
+        # Keep track of the newest message per channel so we can ignore stale jobs
+        self._latest: Dict[int, int] = {}
+
+    # ---------------------------------------------------------------- helpers
+
+    def _should_respond(self, message: discord.Message) -> bool:
+        if message.content.lower() == "enhance":
+            return False
+        if message.author.bot:
+            return False
+        if self.channel_id is None:
+            return True
+        return getattr(message.channel, "id", None) == self.channel_id
+
+    async def _celery_task(self, api: str, model: str, prompt: str, temperature: float) -> str:
+        task = generate_text.apply_async((api, model, prompt, temperature), queue="text")
+        try:
+            # Run the potentially blocking ``task.get`` call in a thread.
+            return await asyncio.to_thread(task.get, timeout=self.timeout)
+        except CeleryTimeoutError:
+            raise RuntimeError(
+                f"Model did not respond within {self.timeout} s. Please try again."
+            )
+
+    async def _generate(self, prompt: str) -> str:
+        """Wrap *task_func* and convert exceptions to friendly text.
+
+        A random temperature between 0.5 and 1.5—biased toward 1.0—is chosen for
+        each call using ``random.triangular``.
+        """
+        temperature = random.triangular(0.5, 1.5, 1.0)
+        try:
+            return await self.task_func(self.api, self.model, prompt, temperature)
+        except Exception as exc:  # noqa: BLE001
+            return f"⚠️ Error generating response: {exc}"
+
+    # ---------------------------------------------------------------- listeners
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if not self._should_respond(message):
+            return
+
+        prompt = message.content.strip()
+        if not prompt:
+            return
+
+        channel_id = getattr(message.channel, "id", None)
+        if channel_id is None:
+            return  # should never happen
+
+        # Mark this as the newest prompt we care about for *channel_id*
+        self._latest[channel_id] = message.id
+        reply = await self._generate(prompt)
+
+        # # If a newer prompt arrived while we were waiting, drop this response.
+        # if self._latest.get(channel_id) != message.id:
+        #     return
+
+        if reply:
+            await message.channel.send(reply[: self._MAX_DISCORD_LEN])
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(GPT2Chat(bot))
+</file>
+
+<file path="src/hollingsbot/cogs/image_edit.py">
+import asyncio
+import io
+import os
+import re
+import textwrap
+from typing import Optional
+
+import discord
+from discord.ext import commands
+from PIL import Image
+import openai
+
+
+class ImageEditCog(commands.Cog):
+    """
+    Listens for a user reply to a message that contains an image.
+    The reply’s content is forwarded to ChatGPT, which responds with
+    a Python function called `edit_image(img)` taking a PIL.Image and
+    returning a new PIL.Image. That function is executed on the image,
+    and the bot sends the edited result as a reply.
+    """
+
+    CODE_BLOCK_RE = re.compile(r"```(?:python)?\s*(.*?)\s*```", re.DOTALL)
+
+    def __init__(self, bot: commands.Bot, *, model: str = "gpt-4o-mini"):
+        self.bot = bot
+        openai.api_key = os.getenv("OPENAI_API_KEY")
+        self.model = model
+
+    # -------- helpers -------- #
+
+    async def _download_image(self, attachment: discord.Attachment) -> Image.Image:
+        """Download the attachment and return a PIL Image."""
+        data = await attachment.read()
+        return Image.open(io.BytesIO(data)).convert("RGBA")
+
+    def _extract_code(self, response: str) -> Optional[str]:
+        """Grab the first Python code block from ChatGPT’s reply."""
+        match = self.CODE_BLOCK_RE.search(response)
+        return match.group(1) if match else None
+
+    async def _run_edit_function(self, code: str, img: Image.Image) -> Image.Image:
+        """
+        Execute the provided code to obtain `edit_image`
+        and run it in a thread to avoid blocking.
+        """
+        local_ns = {}
+        exec(textwrap.dedent(code), {}, local_ns)
+        func = local_ns.get("edit_image")
+        if not callable(func):
+            raise RuntimeError("No function named `edit_image` was found.")
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, func, img)
+
+    # -------- main listener -------- #
+
+    @commands.Cog.listener("on_message")
+    async def handle_edit_request(self, message: discord.Message) -> None:
+        # Ignore bot messages and DMs
+        if message.author.bot or not message.guild:
+            return
+
+        # Must be a reply to a message with an image attachment
+        ref = message.reference
+        if not ref or not ref.resolved:
+            return
+
+        original: discord.Message = ref.resolved  # type: ignore
+        img_attachments = [
+            a for a in original.attachments if (a.content_type or "").startswith("image/")
+        ]
+        if not img_attachments:
+            return
+
+        # Fetch the image (first one only)
+        try:
+            image = await self._download_image(img_attachments[0])
+        except Exception as exc:
+            await message.reply(f"Failed to download image: {exc}")
+            return
+
+        # Ask ChatGPT for an editing function
+        prompt = (
+            "You are an image‑editing assistant. "
+            "Given the user’s instruction below, return only one Python 3 function "
+            "named `edit_image` that takes a `PIL.Image` and returns a new `PIL.Image`. "
+            "Respond with **just** the code inside a ```python``` block—no prose.\n\n"
+            f"Instruction: {message.content.strip()}"
+        )
+
+        try:
+            resp = await openai.ChatCompletion.acreate(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.4,
+            )
+            gpt_reply = resp.choices[0].message.content
+            code = self._extract_code(gpt_reply)
+            if not code:
+                raise ValueError("No code block returned by ChatGPT.")
+        except Exception as exc:
+            await message.reply(f"ChatGPT error: {exc}")
+            return
+
+        # Execute the code on the image
+        try:
+            edited = await self._run_edit_function(code, image)
+            buf = io.BytesIO()
+            edited.save(buf, format="PNG")
+            buf.seek(0)
+        except Exception as exc:
+            await message.reply(f"Image processing error: {exc}")
+            return
+
+        # Send the edited image as a reply
+        filename = f"edited_{img_attachments[0].filename.rsplit('.',1)[0]}.png"
+        await message.reply(
+            file=discord.File(buf, filename=filename),
+            mention_author=False,
+        )
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(ImageEditCog(bot))
+</file>
+
+<file path="src/hollingsbot/cogs/starboard.py">
+from __future__ import annotations
+
+import os
+from typing import Set
+
+import discord
+from discord.ext import commands
+
+
+class Starboard(commands.Cog):
+    """Repost bot messages that receive reactions."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        channel_id = os.getenv("STARBOARD_CHANNEL_ID")
+        self.channel_id = int(channel_id) if channel_id else None
+        ignore_channels = os.getenv("STARBOARD_IGNORE_CHANNELS", "")
+        self.ignore_channels: Set[int] = {
+            int(cid) for cid in ignore_channels.split(",") if cid.strip()
+        }
+        self._posted: Set[int] = set()
+
+    async def _get_channel(self) -> discord.abc.Messageable | None:
+        if self.channel_id is None:
+            return None
+        channel = self.bot.get_channel(self.channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(self.channel_id)
+            except discord.HTTPException:
+                return None
+        return channel
+
+    @commands.Cog.listener()
+    async def on_reaction_add(self, reaction: discord.Reaction, user: discord.User) -> None:
+        if user.bot:
+            return
+        message = reaction.message
+        if getattr(message.channel, "id", None) in self.ignore_channels:
+            return
+        if not message.author.bot:
+            return
+        if message.id in self._posted:
+            return
+        channel = await self._get_channel()
+        if channel is None:
+            return
+
+        content = message.content or ""
+        link = message.jump_url
+        text = f"{content}\n{link}" if content else link
+        files = []
+        for attachment in message.attachments:
+            try:
+                files.append(await attachment.to_file())
+            except Exception:
+                continue
+        await channel.send(text, files=files)
+        self._posted.add(message.id)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(Starboard(bot))
+</file>
+
+<file path="src/hollingsbot/image_generators/base.py">
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import Final
+
+__all__: Final = ["ImageGeneratorAPI"]
+
+
+class ImageGeneratorAPI(ABC):
+    """Async interface for all image-generation providers.
+
+    Sub-classes **must** implement :meth:`generate` to return raw image
+    bytes for a given prompt.  A default no-op :meth:`aclose` is
+    provided so that callers can safely ``await generator.aclose()``
+    regardless of whether the implementation needs explicit teardown.
+    """
+
+    @abstractmethod
+    async def generate(self, prompt: str) -> bytes: ...
+
+    async def aclose(self) -> None:  # noqa: D401 – “Close …”
+        """Release any open resources (optional)."""
+        return None
+</file>
+
+<file path="src/hollingsbot/prompt_db.py">
+# prompt_db.py
+import os
+import sqlite3
+from pathlib import Path
+from datetime import datetime
+
+DB_PATH = Path(os.getenv("PROMPT_DB_PATH", Path(__file__).resolve().with_name("prompts.db")))
+
+
+def init_db() -> None:
+    """Create required tables if they don't exist."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS prompts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                text TEXT,
+                submitter TEXT,
+                api TEXT,
+                model TEXT,
+                time TEXT,
+                status TEXT
+            )
+            """
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)"
+        )
+        # Per-user model preference (scoped to guild)
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS model_prefs (
+                guild_id INTEGER NOT NULL,
+                user_id  INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                model    TEXT NOT NULL,
+                PRIMARY KEY (guild_id, user_id)
+            )
+            """
+        )
+        conn.commit()
+
+
+def add_prompt(text: str, submitter: str, api: str, model: str, *, status: str = "queued") -> int:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "INSERT INTO prompts (text, submitter, api, model, time, status) VALUES (?, ?, ?, ?, ?, ?)",
+            (text, submitter, api, model, datetime.utcnow().isoformat(), status),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
+def update_status(prompt_id: int, status: str) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE prompts SET status = ? WHERE id = ?", (status, prompt_id))
+        conn.commit()
+
+
+def get_seen_prs() -> dict[int, str]:
+    """Return a mapping of PR numbers to their status."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute("SELECT number, status FROM prs")
+        return {int(row[0]): row[1] for row in cur.fetchall()}
+
+
+def update_pr_status(number: int, status: str) -> None:
+    """Insert or update a PR's status."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO prs (number, status) VALUES (?, ?)",
+            (number, status),
+        )
+        conn.commit()
+
+
+# ------------------------- Model preferences -------------------------
+
+def set_model_pref(guild_id: int, user_id: int, provider: str, model: str) -> None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO model_prefs (guild_id, user_id, provider, model) VALUES (?, ?, ?, ?)",
+            (guild_id, user_id, provider, model),
+        )
+        conn.commit()
+
+
+def get_model_pref(guild_id: int, user_id: int) -> tuple[str, str] | None:
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT provider, model FROM model_prefs WHERE guild_id = ? AND user_id = ?",
+            (guild_id, user_id),
+        )
+        row = cur.fetchone()
+        return (row[0], row[1]) if row else None
+</file>
+
+<file path="src/hollingsbot/text_generators/anthropic.py">
+"""Text-generation backend that calls Anthropic’s Claude models."""
+from __future__ import annotations
+
+import asyncio
+from typing import Dict, Sequence, Union, TypedDict, Any, List
+
+from anthropic import AsyncAnthropic
+
+from .base import TextGeneratorAPI
+
+# --------------------------------------------------------------------------- #
+# A single shared client is plenty; reuse it across all requests              #
+# --------------------------------------------------------------------------- #
+_CLIENT_CACHE: Dict[str, AsyncAnthropic] = {}
+
+
+class _Message(TypedDict):
+    role: str
+    content: str
+
+
+class AnthropicTextGenerator(TextGeneratorAPI):
+    """Generate text using Anthropic’s Claude models (default: **claude-4o**).
+
+    The class relies on the ``anthropic`` package and an ``ANTHROPIC_API_KEY``
+    environment variable being present.
+
+    ``prompt`` may be either:
+
+    • **str** – treated as a single ``{"role": "user", "content": <prompt>}``
+      message.
+
+    • **Sequence[dict]** – exactly the list you would pass to the Anthropic
+      SDK’s ``messages`` parameter (each dict must contain ``role`` and
+      ``content`` keys).
+
+    The response text is returned directly, truncated by Anthropic to the
+    specified ``max_tokens`` server-side (1 024 here).
+    """
+
+    def __init__(self, model: str = "claude-4o") -> None:
+        self.model = model
+
+    # ---------------------------------------------------------------- helpers
+
+    def _get_client(self) -> AsyncAnthropic:
+        """Return (and cache) a shared ``AsyncAnthropic`` client instance."""
+        if "default" not in _CLIENT_CACHE:
+            _CLIENT_CACHE["default"] = AsyncAnthropic()  # picks up API key
+        return _CLIENT_CACHE["default"]
+
+    # ---------------------------------------------------------------- public
+
+    async def generate(
+        self,
+        prompt: Union[str, Sequence[_Message]],
+    ) -> str:
+        """Return Claude’s reply for *prompt* as a plain string.
+
+        Accepts either a single user string or a list of role/content messages.
+        Any messages with role "system" are moved to the top‑level "system"
+        parameter as required by the Anthropic Messages API.
+        """
+        # Normalise the prompt into a list of message dicts.
+        if isinstance(prompt, str):
+            messages: List[_Message] = [{"role": "user", "content": prompt}]
+        elif isinstance(prompt, Sequence):
+            # A very light validation to help catch obvious misuse.
+            if not all(
+                isinstance(m, dict) and "role" in m and "content" in m
+                for m in prompt
+            ):
+                raise TypeError(
+                    "Each message must be a dict with 'role' and 'content' keys"
+                )
+            messages = list(prompt)  # type: ignore[arg-type]
+        else:
+            raise TypeError(
+                "prompt must be either a string or a sequence of message dicts"
+            )
+
+        # Extract system messages (Anthropic expects top-level `system`, not a
+        # message role). Concatenate multiple system entries with blank lines.
+        def _content_to_text(content: Any) -> str:
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts: List[str] = []
+                for item in content:
+                    try:
+                        t = item.get("type")
+                    except Exception:
+                        t = None
+                    if t == "text":
+                        parts.append(item.get("text", ""))
+                    else:
+                        # Non-text in system is unusual; stringify conservatively
+                        parts.append(str(item))
+                return "\n".join(p for p in parts if p)
+            return str(content)
+
+        system_parts: List[str] = []
+        cleaned: List[_Message] = []
+        for m in messages:
+            role = (m.get("role") or "").lower()
+            if role == "system":
+                system_parts.append(_content_to_text(m.get("content")))
+            else:
+                cleaned.append(m)
+        system_text = "\n\n".join(p for p in system_parts if p).strip() or None
+
+        client = self._get_client()
+
+        async def _call_sdk(msgs: Sequence[_Message], system: str | None) -> str:
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "max_tokens": 1024,
+                "messages": msgs,
+            }
+            if system:
+                kwargs["system"] = system
+            response = await client.messages.create(**kwargs)
+            # SDK returns a list of content blocks; aggregate text blocks.
+            parts: List[str] = []
+            for block in getattr(response, "content", []) or []:
+                text = getattr(block, "text", None)
+                if text:
+                    parts.append(text)
+            return "".join(parts).strip()
+
+        return await _call_sdk(cleaned, system_text)
+</file>
+
+<file path="src/hollingsbot/text_generators/base.py">
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+
+
+class TextGeneratorAPI(ABC):
+    """Abstract base class for text generator providers."""
+
+    @abstractmethod
+    async def generate(self, prompt: str) -> str:
+        """Return generated text for the given prompt."""
+        raise NotImplementedError
+</file>
+
+<file path="src/hollingsbot/text_generators/huggingface.py">
+# text_generators/huggingface.py
+from __future__ import annotations
+
+import asyncio
+import threading
+from typing import Any, Dict
+
+from .base import TextGeneratorAPI
+
+# --------------------------------------------------------------------------- #
+# Model-wide cache so multiple tasks/processes don’t reload the same pipeline #
+# --------------------------------------------------------------------------- #
+_PIPELINE_CACHE: Dict[str, Any] = {}
+_LOCKS: Dict[str, threading.Lock] = {}
+
+
+class HuggingFaceTextGenerator(TextGeneratorAPI):
+    """Generate text using a Hugging Face *text-generation* pipeline.
+
+    The underlying model pipeline is cached globally, so repeated calls (even
+    across different generator instances) reuse a single loaded model rather
+    than re-loading it for every request.
+    """
+
+    def __init__(self, model: str = "gpt2-large") -> None:
+        self.model = model
+
+    # ------------------------------------------------------------------ helpers
+
+    def _ensure_pipeline(self) -> Any:  # noqa: D401 – “Ensure …”
+        """Load (or retrieve) the HF pipeline for ``self.model``."""
+        if self.model in _PIPELINE_CACHE:
+            return _PIPELINE_CACHE[self.model]
+
+        # One lock **per** model to avoid serialising unrelated models.
+        lock = _LOCKS.setdefault(self.model, threading.Lock())
+        with lock:
+            # Double-check once inside the lock.
+            if self.model in _PIPELINE_CACHE:
+                return _PIPELINE_CACHE[self.model]
+
+            # Lazy import so that our tests can monkey-patch ``transformers``.
+            from transformers import pipeline  # type: ignore
+
+            try:
+                import torch  # noqa: WPS433 – optional, improves device selection
+
+                device = 0 if torch.cuda.is_available() else -1
+            except ModuleNotFoundError:
+                device = -1
+
+            pipe = pipeline(
+                "text-generation",
+                model=self.model,
+                device=device,
+            )
+            _PIPELINE_CACHE[self.model] = pipe
+            return pipe
+
+    # ------------------------------------------------------------------ public
+
+    async def generate(self, prompt: str) -> str:
+        """Return the model’s response for *prompt* (max 500 new tokens)."""
+        pipe = self._ensure_pipeline()
+
+        def _run(inp: str) -> str:  # heavy CPU/GPU work – run in executor
+            data = pipe(inp, max_new_tokens=500)
+            return data[0]["generated_text"][:2000].strip()
+
+        return await asyncio.to_thread(_run, prompt)
+</file>
+
+<file path="src/hollingsbot/utils/__init__.py">
+# Intentionally empty: marks this as a package.
+</file>
+
+<file path="src/hollingsbot/image_generators/__init__.py">
+from .base import ImageGeneratorAPI
+from .replicate_api import ReplicateImageGenerator
+from .svg_gpt import SvgGPTImageGenerator
+
+__all__ = [
+    "ImageGeneratorAPI",
+    "ReplicateImageGenerator",
+    "SvgGPTImageGenerator",
+    "get_image_generator",
+]
+
+
+def get_image_generator(api: str, model: str) -> ImageGeneratorAPI:
+    """Return an appropriate image generator instance for the given API."""
+    if api == "replicate":
+        return ReplicateImageGenerator(model)
+    if api in ("svg", "openai-svg"):
+        return SvgGPTImageGenerator(model)
+    raise ValueError(f"Unknown API: {api}")
+</file>
+
+<file path="src/hollingsbot/image_generators/replicate_api.py">
+from __future__ import annotations
+
+import asyncio
+import os
+from dataclasses import dataclass, field
+from typing import Any, AsyncIterator, Final, Sequence, BinaryIO
+from tempfile import NamedTemporaryFile
+
+import aiohttp
+import replicate
+
+from .base import ImageGeneratorAPI  # local import
+
+
+@dataclass(slots=True)
+class ReplicateImageGenerator(ImageGeneratorAPI):
+    """
+    Async Replicate-backed generator.
+
+    Supports:
+      - Text to image: generate(prompt=..., seed=...)
+      - Image editing: generate(prompt=..., image_input=[...], output_format="png")
+    """
+
+    model: str = "black-forest-labs/flux-schnell"
+    api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
+
+    def __post_init__(self) -> None:
+        if not self.api_token:
+            raise RuntimeError(
+                "REPLICATE_API_TOKEN is required. "
+                "Pass it explicitly or set the environment variable."
+            )
+        self._client = replicate.Client(api_token=self.api_token)
+        self._session: aiohttp.ClientSession | None = None
+
+    async def __aenter__(self) -> "ReplicateImageGenerator":  # type: ignore[override]
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
+        await self.aclose()
+
+    async def generate(  # type: ignore[override]
+        self,
+        prompt: str,
+        *,
+        seed: int | None = None,
+        image_input: Sequence[Any] | None = None,
+        output_format: str | None = None,
+    ) -> bytes:
+        """
+        Generate or edit an image. When image_input is provided, pass files/URLs
+        to models that expect an `image_input` array (e.g., google/nano-banana).
+        """
+        try:
+            inputs: dict[str, Any] = {"prompt": prompt}
+
+            if image_input:
+                prepared, cleanup = self._prepare_image_inputs(image_input)
+                try:
+                    inputs["image_input"] = prepared
+                    if output_format:
+                        inputs["output_format"] = output_format
+                    # Avoid unsupported fields for some Google models
+                    if seed is not None and not self.model.startswith("google/"):
+                        inputs["seed"] = seed
+                    raw_output = await self._client.async_run(self.model, input=inputs)
+                finally:
+                    self._cleanup_files(cleanup)
+            else:
+                inputs["disable_safety_checker"] = True
+                if seed is not None:
+                    inputs["seed"] = seed
+                raw_output = await self._client.async_run(self.model, input=inputs)
+
+            return await self._normalise_output(raw_output)
+        except Exception as exc:
+            raise RuntimeError(f"Replicate generation failed: {exc}") from exc
+
+    async def aclose(self) -> None:
+        if self._session and not self._session.closed:
+            await self._session.close()
+
+    _StreamTypes: Final = (
+        bytes,
+        bytearray,
+        replicate.helpers.FileOutput
+        if hasattr(replicate.helpers, "FileOutput")
+        else tuple(),
+    )
+
+    async def _normalise_output(self, data: Any) -> bytes:
+        if (
+            isinstance(data, (list, tuple))
+            and data
+            and all(isinstance(x, (bytes, bytearray)) for x in data)
+        ):
+            return b"".join(data)
+
+        if isinstance(data, self._StreamTypes):
+            if not isinstance(data, (bytes, bytearray)):
+                return await self._download(str(data))
+            return bytes(data)
+
+        if isinstance(data, AsyncIterator) or hasattr(data, "__aiter__"):
+            async for chunk in data:
+                return await self._normalise_output(chunk)
+
+        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+            if not data:
+                raise RuntimeError("Model returned an empty sequence.")
+            return await self._normalise_output(data[0])
+
+        if isinstance(data, str) and data.startswith(("http://", "https://")):
+            return await self._download(data)
+
+        raise RuntimeError(f"Unsupported Replicate output type: {type(data).__name__}")
+
+    async def _download(self, url: str) -> bytes:
+        if self._session is None or self._session.closed:
+            self._session = aiohttp.ClientSession()
+        for delay in (0, 1.0):
+            if delay:
+                await asyncio.sleep(delay)
+            async with self._session.get(url) as rsp:
+                if rsp.status == 200:
+                    return await rsp.read()
+                if rsp.status >= 500:
+                    continue
+                raise RuntimeError(f"Download failed: HTTP {rsp.status}")
+        raise RuntimeError(f"Download failed after retries: {url}")
+
+    # ---- helpers for editing ----
+
+    def _prepare_image_inputs(
+        self, items: Sequence[Any]
+    ) -> tuple[list[Any], list[tuple[BinaryIO, str | None]]]:
+        prepared: list[Any] = []
+        cleanup: list[tuple[BinaryIO, str | None]] = []
+        for item in items:
+            if isinstance(item, str) and item.startswith(("http://", "https://", "data:")):
+                prepared.append(item)
+                continue
+            if isinstance(item, (bytes, bytearray)):
+                tmp = NamedTemporaryFile(prefix="nb_", suffix=".png", delete=False)
+                tmp.write(item)
+                tmp.flush()
+                tmp.close()
+                fh = open(tmp.name, "rb")
+                prepared.append(fh)
+                cleanup.append((fh, tmp.name))
+                continue
+            if hasattr(item, "read"):
+                prepared.append(item)
+                continue
+            try:
+                path = os.fspath(item)
+                fh = open(path, "rb")
+                prepared.append(fh)
+                cleanup.append((fh, None))
+            except TypeError as exc:
+                raise RuntimeError(f"Unsupported image_input element: {type(item)}") from exc
+        if not prepared:
+            raise RuntimeError("image_input is empty.")
+        return prepared, cleanup
+
+    def _cleanup_files(self, cleanup: list[tuple[BinaryIO, str | None]]) -> None:
+        for fh, path in cleanup:
+            try:
+                fh.close()
+            finally:
+                if path:
+                    try:
+                        os.unlink(path)
+                    except OSError:
+                        pass
+</file>
+
+<file path="src/hollingsbot/image_generators/svg_gpt.py">
+from __future__ import annotations
+
+import os
+import re
+import io
+import time
+import asyncio
+import logging
+from typing import Optional
+
+from openai import AsyncOpenAI
+from PIL import Image, ImageDraw, ImageFont
+
+logger = logging.getLogger(__name__)
+
+# --- Cairo / rasterization availability ---------------------------------------------------------
+try:
+    import cairosvg  # type: ignore
+
+    _HAS_CAIRO = True
+except Exception as e:  # pragma: no cover - optional dependency
+    _HAS_CAIRO = False
+    logger.warning(
+        "CairoSVG unavailable; PNG rasterization will fall back to a placeholder. %s",
+        e,
+    )
+
+from .base import ImageGeneratorAPI
+
+# --- Client singleton ---------------------------------------------------------------------------
+_CLIENT: Optional[AsyncOpenAI] = None
+
+
+def _client() -> AsyncOpenAI:
+    """Create or return a shared AsyncOpenAI client with reasonable defaults."""
+    global _CLIENT
+    if _CLIENT is None:
+        http_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "30"))
+        max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
+        logger.debug(
+            "Initializing AsyncOpenAI client (timeout=%ss, max_retries=%s)",
+            http_timeout,
+            max_retries,
+        )
+        _CLIENT = AsyncOpenAI(timeout=http_timeout, max_retries=max_retries)
+    return _CLIENT
+
+
+# --- Helpers ------------------------------------------------------------------------------------
+_CODE_BLOCK_RE = re.compile(r"```(?:svg)?\s*([\s\S]*?)```", re.IGNORECASE)
+_SVG_OPEN_RE = re.compile(r"<svg\b([^>]*)>", re.IGNORECASE | re.MULTILINE)
+_SVG_BLOCK_RE = re.compile(r"<svg\b[\s\S]*?</svg>", re.IGNORECASE)
+
+# Remove clearly-problematic constructs but keep the rest of the SVG intact.
+def _strip_disallowed(svg: str) -> str:
+    svg = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<foreignObject\b[^>]*>[\s\S]*?</foreignObject>", "", svg, flags=re.IGNORECASE)
+    # Drop base64-embedded rasters (keep the rest of the SVG)
+    svg = re.sub(
+        r"<image\b[^>]*(?:href|xlink:href)\s*=\s*['\"]data:[^'\"]*['\"][^>]*\/?>",
+        "",
+        svg,
+        flags=re.IGNORECASE,
+    )
+    # Remove event handlers
+    svg = re.sub(r"\son[a-z]+\s*=\s*['\"][^'\"]*['\"]", "", svg, flags=re.IGNORECASE)
+    return svg
+
+
+def _simplify_svg(svg: str) -> str:
+    """Aggressively simplify features that often break rasterizers (filters, masks, etc.)."""
+    # Remove filter references and definitions
+    svg = re.sub(r"\sfilter\s*=\s*['\"]url\([^'\"]*\)['\"]", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<filter\b[^>]*>[\s\S]*?</filter>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<fe[A-Za-z]+\b[^>]*\/?>", "", svg, flags=re.IGNORECASE)
+    # Remove masks/clipPaths and their uses
+    svg = re.sub(r"<mask\b[^>]*>[\s\S]*?</mask>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"<clipPath\b[^>]*>[\s\S]*?</clipPath>", "", svg, flags=re.IGNORECASE)
+    svg = re.sub(r"\sclip-path\s*=\s*['\"][^'\"]*['\"]", "", svg, flags=re.IGNORECASE)
+    # Remove animations
+    svg = re.sub(r"<animate(?:Transform)?\b[^>]*>[\s\S]*?</animate(?:Transform)?>", "", svg, flags=re.IGNORECASE)
+    return svg
+
+
+def _extract_svg(text: str, *, prompt: str | None = None) -> str:
+    """
+    Extract (or salvage) a single standalone <svg>...</svg> from model text.
+    Be generous: accept fenced blocks, auto-close if needed, or wrap stray markup.
+    As a last resort, synthesize a minimal SVG that shows the prompt text.
+    """
+    original = text or ""
+    # Handle code fences
+    m = _CODE_BLOCK_RE.search(original)
+    if m:
+        logger.debug("SVG found inside code fence")
+        text = m.group(1)
+    else:
+        text = original
+
+    # Clean stray backticks/newlines/unicode separators
+    text = (text or "").strip().strip("`").replace("\u2028", "\n").replace("\u2029", "\n")
+
+    # Happy path: exact <svg>...</svg> block
+    m = _SVG_BLOCK_RE.search(text)
+    if m:
+        svg = m.group(0).strip()
+        logger.debug("Extracted full <svg> block (len=%d)", len(svg))
+        return svg
+
+    # If we have an <svg ...> start but no close tag, auto-close.
+    lower = text.lower()
+    start = lower.find("<svg")
+    if start != -1:
+        logger.warning("Model output contained an unterminated <svg>; auto-closing.")
+        body = text[start:].rstrip()
+        if not body.lower().endswith("</svg>"):
+            body = body + "</svg>"
+        return body
+
+    # If there is *some* markup, wrap it so we still show something.
+    if "<" in text and ">" in text:
+        logger.warning("No <svg> root found; wrapping returned markup inside an SVG root.")
+        inner = re.sub(r"^(\s*<!DOCTYPE[^>]*>)", "", text, flags=re.IGNORECASE).strip()
+        return (
+            f'<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" '
+            f'viewBox="0 0 1024 1024"><g>{inner}</g></svg>'
+        )
+
+    # Last resort: synthesize a minimally-informative SVG
+    logger.error("Model did not return usable markup; synthesizing fallback SVG.")
+    prompt_label = (prompt or "Generated image").strip()
+    prompt_label = (prompt_label[:120] + "…") if len(prompt_label) > 120 else prompt_label
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">'
+        '<defs><linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">'
+        '<stop offset="0" stop-color="#f7f7fb"/><stop offset="1" stop-color="#e8f0ff"/></linearGradient></defs>'
+        '<rect width="1024" height="1024" fill="url(#bg)"/>'
+        '<circle cx="512" cy="512" r="220" fill="#0b0d15" opacity=".08"/>'
+        f'<text x="48" y="96" font-family="DejaVu Sans, Arial, sans-serif" font-size="28" fill="#111">{prompt_label}</text>'
+        "</svg>"
+    )
+
+
+def _enforce_canvas(svg: str, size: int = 1024) -> str:
+    """Ensure width/height/viewBox are set to a square canvas."""
+
+    def _repl(m: re.Match) -> str:
+        attrs = m.group(1)
+        # Remove existing conflicting attrs
+        attrs = re.sub(r'\b(width|height)\s*=\s*"[^"]*"', "", attrs, flags=re.IGNORECASE)
+        attrs = re.sub(r'\bviewBox\s*=\s*"[^"]*"', "", attrs, flags=re.IGNORECASE)
+        attrs = " ".join(attrs.split())
+        core = f' width="{size}" height="{size}" viewBox="0 0 {size} {size}"'
+        if attrs:
+            core = f"{core} {attrs}"
+        return f"<svg{core}>"
+
+    out = _SVG_OPEN_RE.sub(_repl, svg, count=1)
+    if out != svg:
+        logger.debug("Applied canvas normalization to SVG (size=%d)", size)
+    return out
+
+
+def _placeholder_png(message: str) -> bytes:
+    """Create a simple PNG with an error message (used when rasterization fails)."""
+    w, h = 1024, 1024
+    img = Image.new("RGB", (w, h), "white")
+    d = ImageDraw.Draw(img)
+    message = f"{message}\n\n(This is a placeholder image.)"
+    try:
+        font = ImageFont.truetype("DejaVuSans.ttf", size=28)
+    except Exception:
+        font = ImageFont.load_default()
+    d.multiline_text((40, 40), message, fill="black", font=font, spacing=8)
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+    return buf.read()
+
+
+def _render_svg(svg: str) -> bytes:
+    """Render SVG to PNG bytes, or create a placeholder PNG if Cairo is missing."""
+    if _HAS_CAIRO:
+        logger.debug("Rendering SVG with CairoSVG (len=%d)", len(svg))
+        return cairosvg.svg2png(bytestring=svg.encode("utf-8"))
+    logger.warning("CairoSVG not installed; returning placeholder PNG")
+    return _placeholder_png("SVG rasterization not available on this system.")
+
+
+# --- Main implementation ------------------------------------------------------------------------
+class SvgGPTImageGenerator(ImageGeneratorAPI):
+    """
+    Generates an SVG with the model, normalizes it to a 1024x1024 canvas, and returns PNG bytes.
+    Uses the OpenAI Responses API (not Chat Completions). Avoids unsupported parameters.
+    """
+
+    def __init__(self, model: str):
+        self.model = model
+        # Tunables via env for easy ops
+        self.temperature = float(os.getenv("SVG_GPT_TEMPERATURE", "0.2"))
+        self.max_output_tokens = int(os.getenv("SVG_GPT_MAX_TOKENS", "5000"))
+        self.request_timeout = int(os.getenv("SVG_GPT_TIMEOUT", "30"))
+
+    async def generate(self, prompt: str, *, seed: int | None = None) -> bytes:  # type: ignore[override]
+        """
+        Ask the model to produce SVG markup for the given prompt and rasterize it to PNG.
+        If the model request times out, returns a placeholder PNG instead of throwing.
+        """
+        prompt_preview = " ".join(prompt.split())
+        if len(prompt_preview) > 200:
+            prompt_preview = prompt_preview[:200] + "…"
+        logger.info(
+            "SVG generation start model=%s seed=%s prompt_preview=%s",
+            self.model,
+            seed,
+            prompt_preview,
+        )
+
+        sys = (
+            "You produce ONLY valid, standalone SVG markup. "
+            "Do NOT wrap in code fences or any prose. "
+            "Use a 1024x1024 canvas. "
+            "Output must be concise (< 1000 characters). "
+            "Absolutely DO NOT embed base64 data URIs or external images; no <image href='data:'>. "
+            "Avoid <foreignObject>. No scripts. "
+            "Prefer simple shapes and paths. Provide a single <svg> root element. "
+            "End your output with </svg> and do not output anything after it."
+        )
+
+        user = (
+            "Create an illustration as SVG for the following description. "
+            "Your response MUST be only the <svg>…</svg> markup, nothing else.\n\n"
+            f"Description: {prompt}\n"
+            "Canvas: 1024x1024 square."
+        )
+
+        # --- request helper (with retry) --------------------------------------------------------
+        async def _call_openai(max_tokens: int) -> object:
+            return await _client().responses.create(
+                model=self.model,
+                instructions=sys,
+                input=user,
+                max_output_tokens=max_tokens,
+                reasoning={"effort": "medium"},
+                timeout=self.request_timeout,  # per-request client timeout (OpenAI SDK)
+            )
+
+        t0 = time.time()
+        try:
+            coro = _call_openai(self.max_output_tokens)
+            rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)  # outer guard
+        except asyncio.TimeoutError:
+            api_ms = int((time.time() - t0) * 1000)
+            logger.warning(
+                "OpenAI request timed out after %ss (latency_ms=%d)",
+                self.request_timeout,
+                api_ms,
+            )
+            return _placeholder_png(f"SVG generation timed out after {self.request_timeout}s.")
+        except Exception as e:
+            api_ms = int((time.time() - t0) * 1000)
+            logger.exception("OpenAI request failed (latency_ms=%d): %s", api_ms, e)
+            return _placeholder_png("SVG generation failed.")
+
+        api_ms = int((time.time() - t0) * 1000)
+
+        # Extract plain text from Responses API
+        def _gather_text(r: object) -> str:
+            # preferred (SDK helper)
+            t = getattr(r, "output_text", None)
+            if t:
+                return t
+            # aggregate from .output[].content[].text
+            parts: list[str] = []
+            output = getattr(r, "output", None)
+            if output:
+                for item in output:
+                    for c in getattr(item, "content", []) or []:
+                        tt = getattr(c, "text", None)
+                        if tt:
+                            parts.append(tt)
+            return "\n".join(parts)
+
+        text: str = _gather_text(rsp) or ""
+        status = getattr(rsp, "status", "")
+        incomplete_reason = getattr(getattr(rsp, "incomplete_details", None), "reason", None)
+
+        logger.debug(
+            "Responses status=%s incomplete_reason=%s text_len=%d preview=%r",
+            status,
+            incomplete_reason,
+            len(text),
+            text[:120],
+        )
+
+        # If incomplete due to token cap (or empty text), retry once with a bigger cap & stop-seq.
+        if (status != "completed" and incomplete_reason == "max_output_tokens") or not text.strip():
+            try:
+                logger.info("Retrying with higher max_output_tokens and low reasoning.")
+                bigger = max(self.max_output_tokens + 2000, 5000)
+                coro = _call_openai(bigger)
+                rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)
+                text = _gather_text(rsp) or text
+            except Exception as e:
+                logger.warning("Retry failed: %s", e)
+
+        # Extract and normalize SVG (with salvage & sanitization)
+        try:
+            svg = _extract_svg(text, prompt=prompt)
+            svg = _strip_disallowed(svg)
+            svg = _enforce_canvas(svg, 1024)
+        except Exception as e:
+            logger.exception("Failed to extract/normalize SVG from model output: %s", e)
+            # As a last resort, synthesize a minimal SVG to avoid hard failure.
+            svg = _extract_svg("", prompt=prompt)
+            svg = _enforce_canvas(svg, 1024)
+
+        # Render; on failure, simplify then retry once.
+        t1 = time.time()
+        try:
+            png = _render_svg(svg)
+        except Exception as e:
+            logger.warning("Render failed (%s). Retrying with simplified SVG.", e)
+            try:
+                simpler = _simplify_svg(svg)
+                png = _render_svg(simpler)
+            except Exception as e2:
+                logger.exception("Failed to render even after simplification: %s", e2)
+                return _placeholder_png("SVG rasterization failed.")
+
+        render_ms = int((time.time() - t1) * 1000)
+        logger.info(
+            "SVG generation done bytes=%d timings_ms api=%d render=%d",
+            len(png),
+            api_ms,
+            render_ms,
+        )
+        return png
+</file>
+
+<file path="src/hollingsbot/text_generators/__init__.py">
+# text_generators/__init__.py
+from .base import TextGeneratorAPI
+from .huggingface import HuggingFaceTextGenerator
+from .anthropic import AnthropicTextGenerator
+from .openai_chatgpt import OpenAIChatTextGenerator
+
+__all__ = [
+    "TextGeneratorAPI",
+    "HuggingFaceTextGenerator",
+    "AnthropicTextGenerator",
+    "OpenAIChatTextGenerator",
+]
+
+
+def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
+    """Return an appropriate text-generator instance for the given API."""
+    if api == "huggingface":
+        return HuggingFaceTextGenerator(model)
+    if api == "anthropic":
+        return AnthropicTextGenerator(model)
+    if api in ("openai", "chatgpt"):
+        return OpenAIChatTextGenerator(model)
+    raise ValueError(f"Unknown API: {api}")
+</file>
+
+<file path="src/hollingsbot/text_generators/openai_chatgpt.py">
+# text_generators/openai_chatgpt.py
+from __future__ import annotations
+
+from typing import Dict, Sequence, TypedDict, Union, List, Any
+import os
+import logging
+
+from openai import AsyncOpenAI
+
+from .base import TextGeneratorAPI
+
+_CLIENT_CACHE: Dict[str, AsyncOpenAI] = {}
+_LOG = logging.getLogger(__name__)
+
+
+class _Message(TypedDict):
+    role: str
+    content: str
+
+
+class OpenAIChatTextGenerator(TextGeneratorAPI):
+    """Text-generation backend for OpenAI models.
+
+    - Defaults to "gpt-5" and uses the Responses API with low reasoning effort.
+    - Falls back to Chat Completions for non-gpt-5 models (e.g., gpt-4o).
+
+    Requires OPENAI_API_KEY in the environment.
+    Accepts either a single string or a list of {role, content} messages.
+    """
+
+    def __init__(self, model: str = "gpt-5") -> None:
+        self.model = model
+
+    def _get_client(self) -> AsyncOpenAI:
+        if "default" not in _CLIENT_CACHE:
+            _CLIENT_CACHE["default"] = AsyncOpenAI()  # picks up OPENAI_API_KEY
+        return _CLIENT_CACHE["default"]
+
+    def _is_gpt5(self) -> bool:
+        name = (self.model or "").lower()
+        return name.startswith("gpt-5") or name == "gpt-5"
+
+    @staticmethod
+    def _content_to_text(content: Any) -> str:
+        """Best-effort conversion of OpenAI-style content into plain text.
+
+        - Strings are returned as-is.
+        - Lists of {type: text|image_url, ...} are flattened with placeholders for images.
+        """
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                try:
+                    t = item.get("type")
+                    if t == "text":
+                        parts.append(item.get("text", ""))
+                    elif t == "image_url":
+                        url = item.get("image_url", {}).get("url") or item.get("image_url")
+                        parts.append(f"[image: {url}]")
+                    else:
+                        parts.append(str(item))
+                except Exception:
+                    parts.append(str(item))
+            return "\n".join(p for p in parts if p)
+        return str(content)
+
+    @staticmethod
+    def _to_responses_easy_input(messages: List[_Message]) -> tuple[str | None, List[Dict[str, Any]]]:
+        """Build Responses API EasyInputMessageParam list preserving roles and content.
+
+        Returns (instructions, input_messages).
+        - Takes the first system message as instructions.
+        - Emits the remaining messages as EasyInput messages with their roles
+          (user/assistant/system/developer) and raw OpenAI-style content.
+        """
+        instructions: str | None = None
+        out: List[Dict[str, Any]] = []
+
+        def _to_resp_content_list(content: Any, role_for_types: str) -> List[Dict[str, Any]]:
+            # Normalize to a list of {type: input_text|input_image|input_file, ...}
+            if isinstance(content, str):
+                tname = "output_text" if role_for_types == "assistant" else "input_text"
+                return [{"type": tname, "text": content}]
+            items: List[Dict[str, Any]] = []
+            if isinstance(content, list):
+                for it in content:
+                    try:
+                        t = it.get("type")
+                    except Exception:
+                        t = None
+                    if role_for_types == "assistant":
+                        # Assistant content must be output_* per Responses types
+                        if t in ("output_text",):
+                            items.append(it)
+                        elif t in ("input_text", "text"):
+                            items.append({"type": "output_text", "text": it.get("text", "")})
+                        else:
+                            # Fallback: stringify as output_text
+                            items.append({"type": "output_text", "text": str(it)})
+                        continue
+
+                    # User/system/developer inputs
+                    if t in ("input_text", "input_image", "input_file"):
+                        items.append(it)
+                    elif t == "text":
+                        items.append({"type": "input_text", "text": it.get("text", "")})
+                    elif t == "image_url":
+                        url = it.get("image_url")
+                        if isinstance(url, dict):
+                            url = url.get("url")
+                        if url:
+                            items.append({"type": "input_image", "image_url": url, "detail": "auto"})
+                    elif t == "image":
+                        # If any generic image object with a URL sneaks through, map to input_image
+                        src = it.get("source") if isinstance(it, dict) else None
+                        url = None
+                        if isinstance(src, dict):
+                            url = src.get("url")
+                        if url:
+                            items.append({"type": "input_image", "image_url": url, "detail": "auto"})
+                    else:
+                        # Fallback to text
+                        items.append({"type": "input_text", "text": str(it)})
+                return items
+            # Unknown type -> coerce to input_text
+            return [{"type": "input_text", "text": str(content)}]
+
+        for m in messages:
+            role = (m.get("role") or "user").lower()
+            content = m.get("content")
+            # First system message becomes instructions
+            if role == "system" and instructions is None:
+                instructions = OpenAIChatTextGenerator._content_to_text(content)
+                continue
+            # Convert to Responses input content list
+            content_list = _to_resp_content_list(content, role)
+            msg: Dict[str, Any] = {"role": role, "content": content_list, "type": "message"}
+            out.append(msg)
+
+        if not out:
+            # Defensive: ensure at least one message exists
+            out = [{"role": "user", "type": "message", "content": ""}]
+
+        return instructions, out
+
+    async def generate(
+        self,
+        prompt: Union[str, Sequence[_Message]],
+        *,
+        temperature: float = 1.0,
+    ) -> str:
+        # Normalize input into a list of messages for unified handling
+        if isinstance(prompt, str):
+            messages: List[_Message] = [{"role": "user", "content": prompt}]
+        elif isinstance(prompt, Sequence):
+            if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
+                raise TypeError("Each message must be a dict with 'role' and 'content' keys")
+            messages = list(prompt)  # type: ignore[arg-type]
+        else:
+            raise TypeError("prompt must be a string or a sequence of message dicts")
+
+        client = self._get_client()
+
+        # gpt-5 path: use Responses API with reasoning={effort: low}; preserve roles and images
+        if self._is_gpt5():
+            instructions, input_messages = self._to_responses_easy_input(messages)
+            # Tune reasoning + cap output to improve latency.
+            effort = os.getenv("OPENAI_REASONING_EFFORT", "low").lower()
+            max_tokens = int(os.getenv("TEXT_MAX_OUTPUT_TOKENS", "800"))
+            kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "input": input_messages,
+                "reasoning": {"effort": effort},
+                "max_output_tokens": max_tokens,
+            }
+            if instructions:
+                kwargs["instructions"] = instructions
+            # Responses API supports temperature; pass it through when provided
+            try:
+                kwargs["temperature"] = float(temperature)  # type: ignore[arg-type]
+            except Exception:
+                pass
+
+            try:
+                _LOG.debug(
+                    "OpenAI Responses: input_messages=%d (first roles: %s; first content types: %s)",
+                    len(input_messages),
+                    ", ".join(m.get("role", "?") for m in input_messages[:3]),
+                    ", ".join(
+                        (c.get("type", "?")) for c in (input_messages[0].get("content", []) or [])
+                    ) if input_messages else "",
+                )
+            except Exception:
+                pass
+
+            # Optional per-request timeout; falls back to client default if unset
+            req_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "0"))
+            if req_timeout > 0:
+                resp = await client.responses.create(**kwargs, timeout=req_timeout)
+            else:
+                resp = await client.responses.create(**kwargs)
+
+            # Extract text similar to our SVG generator helper
+            text = getattr(resp, "output_text", None)
+            if not text:
+                parts: List[str] = []
+                output = getattr(resp, "output", None)
+                if output:
+                    for item in output:
+                        for c in getattr(item, "content", []) or []:
+                            tt = getattr(c, "text", None)
+                            if tt:
+                                parts.append(tt)
+                text = "\n".join(parts)
+            return (text or "").strip()
+
+        # Fallback for non-gpt-5 models: Chat Completions with temperature
+        resp = await client.chat.completions.create(
+            model=self.model,
+            messages=messages,      # type: ignore[arg-type]
+            temperature=temperature,
+        )
+        choice = resp.choices[0]
+        return (choice.message.content or "").strip()
+</file>
+
+<file path="src/hollingsbot/utils/svg_utils.py">
+# /mnt/data/svg_utils.py
+from __future__ import annotations
+import io
+import re
+import logging
+from typing import List, Tuple
+import html
+
+# Try to enable SVG rendering; degrade gracefully if native Cairo is missing.
+try:
+    import cairosvg  # type: ignore
+    _SVG_RENDERING_AVAILABLE = True
+except Exception as e:  # pragma: no cover
+    cairosvg = None  # type: ignore
+    _SVG_RENDERING_AVAILABLE = False
+    logging.getLogger(__name__).warning("CairoSVG unavailable; will attach .svg instead of PNG. %s", e)
+
+# Old behavior: fenced code blocks ```svg ... ```
+SVG_BLOCK_RE = re.compile(r"```svg\s*([\s\S]*?)```", re.IGNORECASE)
+
+# New behavior: find any <svg ...> ... </svg> anywhere, even inside non-labeled code blocks
+INLINE_SVG_RE = re.compile(r"(?is)<svg\b[^>]*>[\s\S]*?</svg>")
+
+# Control chars that XML parsers reject
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F]")
+
+# Closing tag finder
+_SVG_OPEN_TAG_RE = re.compile(r"(?is)<svg\b([^>]*)>")
+_SVG_CLOSE_TAG_RE = re.compile(r"(?is)</svg\s*>")
+
+
+def svg_rendering_available() -> bool:
+    return _SVG_RENDERING_AVAILABLE
+
+
+def _render_svg_to_png_bytes(svg_xml: str) -> bytes:
+    if not _SVG_RENDERING_AVAILABLE:
+        raise RuntimeError("CairoSVG not available")
+    # CairoSVG expects valid UTF-8 bytes
+    return cairosvg.svg2png(bytestring=svg_xml.encode("utf-8"))  # type: ignore[attr-defined]
+
+
+def _ensure_svg_root_has_namespaces(svg_xml: str) -> str:
+    """
+    Make sure the root <svg> tag has at least the SVG namespace, plus xlink if needed.
+    """
+    m = _SVG_OPEN_TAG_RE.search(svg_xml)
+    if not m:
+        return svg_xml  # no root tag found; caller handles wrapping/closing recovery
+
+    tag_full = m.group(0)
+    attrs = m.group(1) or ""
+
+    needs_xmlns = "xmlns=" not in attrs
+    uses_xlink = "xlink:" in svg_xml
+    has_xlink_ns = "xmlns:xlink=" in attrs
+
+    extras = []
+    if needs_xmlns:
+        extras.append('xmlns="http://www.w3.org/2000/svg"')
+    if uses_xlink and not has_xlink_ns:
+        extras.append('xmlns:xlink="http://www.w3.org/1999/xlink"')
+
+    if not extras:
+        return svg_xml
+
+    # Insert the missing namespace attrs before the closing ">"
+    new_open = f"<svg{attrs} {' '.join(extras)}>"
+    return svg_xml[:m.start()] + new_open + svg_xml[m.end():]
+
+
+def _strip_doctype_and_scripts(svg_xml: str) -> str:
+    # Remove DOCTYPE and any internal subset to avoid entity expansion issues
+    svg_xml = re.sub(r"(?is)<!DOCTYPE[\s\S]*?>", "", svg_xml)
+    # Remove XML entity declarations if present
+    svg_xml = re.sub(r"(?is)<!ENTITY[\s\S]*?>", "", svg_xml)
+    # Drop <script> blocks for safety and to avoid parser quirks
+    svg_xml = re.sub(r"(?is)<script[\s\S]*?</script>", "", svg_xml)
+    return svg_xml
+
+
+def _fix_common_entities(svg_xml: str) -> str:
+    """
+    Fixes the most common reasons for:
+    'Invalid character in entity name'
+    1) Named HTML entities that are not valid in XML (like &nbsp;).
+    2) Ampersands without a terminating semicolon.
+    3) Bare ampersands in text.
+    Strategy:
+      - First, add missing semicolons for a small set of common entities.
+      - Convert HTML5 named entities to their unicode characters with html.unescape.
+      - Re-escape any bare ampersands that do not start a numeric or named XML entity.
+    """
+    # Add semicolons when commonly omitted
+    common = ("amp", "lt", "gt", "quot", "apos", "nbsp", "copy", "reg", "times", "euro", "mdash", "ndash")
+    svg_xml = re.sub(r"&(" + "|".join(common) + r")(?!;)", r"&\1;", svg_xml, flags=re.IGNORECASE)
+
+    # Convert HTML entities to characters
+    svg_xml = html.unescape(svg_xml)
+
+    # Re-escape stray ampersands that are not entities like &#123; or &#xAF; or &name;
+    svg_xml = re.sub(r"&(?!(?:#\d+|#x[0-9a-fA-F]+|\w+);)", "&amp;", svg_xml)
+
+    return svg_xml
+
+
+def _sanitize_svg(svg_xml: str) -> str:
+    """
+    Sanitize and toughen SVG markup so that CairoSVG has a better chance to parse it.
+    """
+    # Strip BOM
+    svg_xml = svg_xml.lstrip("\ufeff")
+
+    # Remove control chars
+    svg_xml = _CONTROL_CHARS_RE.sub("", svg_xml)
+
+    # Normalize newlines
+    svg_xml = svg_xml.replace("\r\n", "\n").replace("\r", "\n")
+
+    # If there is an opening <svg> without a closing tag, append one
+    if _SVG_OPEN_TAG_RE.search(svg_xml) and not _SVG_CLOSE_TAG_RE.search(svg_xml):
+        svg_xml = svg_xml + "\n</svg>"
+
+    # Remove doctype and scripts
+    svg_xml = _strip_doctype_and_scripts(svg_xml)
+
+    # Fix entities and ampersands
+    svg_xml = _fix_common_entities(svg_xml)
+
+    # Ensure required namespaces on the root tag
+    svg_xml = _ensure_svg_root_has_namespaces(svg_xml)
+
+    # Ensure XML declaration for parsers that prefer it
+    stripped = svg_xml.lstrip()
+    if not stripped.startswith("<?xml"):
+        svg_xml = '<?xml version="1.0" encoding="UTF-8"?>\n' + svg_xml
+
+    return svg_xml
+
+
+def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]:
+    """
+    Try to render as-is, then try a sanitized version, then give up.
+    Returns (ok, png_bytes_or_none, error_message_or_none).
+    """
+    # Try raw first
+    try:
+        png = _render_svg_to_png_bytes(svg_xml)
+        return True, png, None
+    except Exception as e1:
+        # Try sanitized
+        try:
+            cleaned = _sanitize_svg(svg_xml)
+            png = _render_svg_to_png_bytes(cleaned)
+            return True, png, None
+        except Exception as e2:
+            # Final attempt: sanitize again after forcing a minimal wrapper if root is missing
+            try:
+                if "<svg" not in svg_xml.lower():
+                    # Wrap standalone fragments in a minimal svg shell
+                    wrapped = '<svg xmlns="http://www.w3.org/2000/svg">%s</svg>' % svg_xml
+                else:
+                    wrapped = svg_xml
+                wrapped = _sanitize_svg(wrapped)
+                png = _render_svg_to_png_bytes(wrapped)
+                return True, png, None
+            except Exception as e3:
+                # Report the last error, keep earlier for logs
+                logging.getLogger(__name__).debug("SVG render failed. First error: %r; Second: %r; Third: %r", e1, e2, e3)
+                return False, None, str(e3)
+
+
+def _attach_bytes(name: str, data: bytes) -> io.BytesIO:
+    buf = io.BytesIO(data)
+    buf.seek(0)
+    return buf
+
+
+def extract_render_and_strip_svgs(text: str) -> Tuple[str, List[Tuple[str, io.BytesIO]]]:
+    """
+    Find any SVG fragments and render each to a PNG when possible.
+    Strategy:
+      1) Replace ```svg ...``` fenced blocks first
+      2) Then find any inline <svg>...</svg> fragments anywhere else in the text
+      3) For each fragment, try rendering raw, then sanitized. If all fail, attach the raw .svg
+    Returns:
+      cleaned_text: original text with svg fragments replaced by short notes
+      svg_files: list of (filename, BytesIO) for sending as attachments (PNG if possible, otherwise raw .svg)
+    """
+    svg_files: List[Tuple[str, io.BytesIO]] = []
+    idx = 0
+
+    def _process_svg_fragment(svg_xml: str) -> str:
+        nonlocal idx
+        idx += 1
+
+        if _SVG_RENDERING_AVAILABLE:
+            ok, png_bytes, err = _render_with_recovery(svg_xml)
+            if ok and png_bytes is not None:
+                filename = f"svg_render_{idx}.png"
+                svg_files.append((filename, _attach_bytes(filename, png_bytes)))
+                return f"[SVG rendered and attached: {filename}]"
+            else:
+                # Attach sanitized original SVG so the user still gets something
+                fallback = f"svg_render_{idx}.svg"
+                # Even for fallback, store a sanitized svg so it opens cleanly
+                safe_svg = _sanitize_svg(svg_xml)
+                svg_files.append((fallback, _attach_bytes(fallback, safe_svg.encode("utf-8"))))
+                return f"[SVG render failed, attached original SVG: {fallback}. Error: {err}]"
+        else:
+            filename = f"svg_render_{idx}.svg"
+            safe_svg = _sanitize_svg(svg_xml)
+            svg_files.append((filename, _attach_bytes(filename, safe_svg.encode("utf-8"))))
+            return f"[SVG attached (SVG format) because rendering is unavailable: {filename}]"
+
+    # Pass 1: fenced code blocks ```svg ... ```
+    def _sub_fenced(match: re.Match) -> str:
+        svg_xml = match.group(1).strip()
+        return _process_svg_fragment(svg_xml)
+
+    cleaned_text = SVG_BLOCK_RE.sub(_sub_fenced, text)
+
+    # Pass 2: any inline <svg>...</svg> that remain in the text
+    def _sub_inline(match: re.Match) -> str:
+        svg_xml = match.group(0)
+        return _process_svg_fragment(svg_xml)
+
+    cleaned_text = INLINE_SVG_RE.sub(_sub_inline, cleaned_text)
+
+    return cleaned_text, svg_files
+</file>
+
+<file path="docker/Dockerfile">
+FROM pytorch/pytorch:2.7.1-cuda12.6-cudnn9-runtime
+
+WORKDIR /app
+
+# Make src importable everywhere (bot, celery)
+ENV PYTHONPATH=/app/src:/app
+
+# System deps for CairoSVG rendering + basic fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 libpangocairo-1.0-0 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI and Compose plugin so the bot can control Docker when the socket is mounted
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && . /etc/os-release \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/$ID $VERSION_CODENAME stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Bring the whole repo in (src/, config/, etc.)
+COPY . .
+
+# Default for `docker run` (compose can override)
+CMD ["python", "-m", "hollingsbot"]
+</file>
+
+<file path="src/hollingsbot/image_gen_config.json">
+{
+  "!":  { "api": "replicate", "model": "black-forest-labs/flux-schnell" },
+  "$":  { "api": "replicate", "model": "black-forest-labs/flux-1.1-pro-ultra" },
+  "$$": { "api": "replicate", "model": "google/imagen-4" },
+  "^":  { "api": "svg",       "model": "gpt-5" },
+  "edit:":  { "api": "replicate",       "model": "google/nano-banana",  "mode": "edit" }
+}
+</file>
+
+<file path=".gitignore">
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment files
+.env
+.env.*
+
+# Database files
+prompts.db
+*.db
+*.sqlite*
+
+# IDE/Editor directories
+.vscode/
+.idea/
+
+# Test and type checking caches
+.pytest_cache/
+.mypy_cache/
+
+# Virtual environments
+venv/
+.venv/
+/output.txt
+</file>
+
+<file path="src/hollingsbot/tasks.py">
+import asyncio
+import os
+import time
+from inspect import signature
+from pathlib import Path
+
+from celery import Celery
+from celery.utils.log import get_task_logger
+
+from hollingsbot.image_generators import get_image_generator
+from hollingsbot.text_generators import get_text_generator
+from hollingsbot.prompt_db import update_status
+
+logger = get_task_logger(__name__)
+
+celery_app = Celery(
+    "tasks",
+    broker=os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
+    backend=os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/0"),
+)
+
+celery_app.conf.task_routes = {
+    "tasks.generate_text":  {"queue": "text"},
+    "tasks.generate_image": {"queue": "image"},
+}
+
+OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@celery_app.task(
+    name="tasks.generate_image",
+    queue="image",
+    bind=True,
+    autoretry_for=(Exception,),
+    retry_backoff=True,
+)
+def generate_image(  # noqa: C901
+    self,
+    prompt_id: int,
+    api: str,
+    model: str,
+    prompt: str,
+    seed: int | None = None,
+    *,
+    # New optional kwargs for editing
+    image_input: list[bytes] | None = None,
+    output_format: str | None = None,
+    # Existing kwarg
+    timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
+) -> str:
+    """
+    Generate an image, write it to disk, and return the file path.
+    Supports editing when image_input is provided.
+    """
+    start = time.monotonic()
+    logger.info(
+        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s images=%s fmt=%s",
+        prompt_id,
+        api,
+        model,
+        seed,
+        prompt,
+        (len(image_input) if image_input else 0),
+        output_format,
+    )
+    update_status(prompt_id, "started")
+
+    generator = get_image_generator(api, model)
+    gen_sig = signature(generator.generate)
+
+    async def _run() -> bytes:
+        kwargs = {}
+        if "seed" in gen_sig.parameters:
+            kwargs["seed"] = seed
+        if image_input and "image_input" in gen_sig.parameters:
+            kwargs["image_input"] = image_input
+        if output_format and "output_format" in gen_sig.parameters:
+            kwargs["output_format"] = output_format
+        return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
+
+    try:
+        image_bytes: bytes = asyncio.run(_run())
+    except asyncio.TimeoutError as exc:
+        err = f"Generation exceeded {timeout}s timeout."
+        logger.error("generate_image[%s] TIMEOUT: %s", prompt_id, err)
+        update_status(prompt_id, f"failed: {err}")
+        raise RuntimeError(err) from exc
+    except Exception as exc:
+        duration = time.monotonic() - start
+        logger.exception(
+            "generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc
+        )
+        update_status(prompt_id, f"failed: {exc}")
+        raise
+    finally:
+        try:
+            asyncio.run(generator.aclose())
+        except Exception:
+            logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
+
+    filename = f"{prompt_id}_{int(time.time())}.png"
+    file_path = OUTPUT_DIR / filename
+    file_path.write_bytes(image_bytes)
+
+    update_status(prompt_id, "completed")
+    duration = time.monotonic() - start
+    logger.info(
+        "generate_image[%s] FINISH in %.2fs | wrote %s (size=%d bytes)",
+        prompt_id,
+        duration,
+        file_path,
+        len(image_bytes),
+    )
+    return str(file_path)
+
+
+@celery_app.task(name="tasks.generate_text", queue="text")
+def generate_text(
+    api: str,
+    model: str,
+    prompt: str,
+    temperature: float = 1.0,
+) -> str:
+    """Generate text with detailed logging, supporting a configurable temperature."""
+    start = time.monotonic()
+    logger.info(
+        "generate_text START | api=%s model=%s temp=%.2f prompt_len=%d",
+        api,
+        model,
+        temperature,
+        len(prompt),
+    )
+
+    try:
+        generator = get_text_generator(api, model)
+        gen_sig = signature(generator.generate)
+        if "temperature" in gen_sig.parameters:
+            text = asyncio.run(generator.generate(prompt, temperature=temperature))
+        else:
+            text = asyncio.run(generator.generate(prompt))
+    except Exception as exc:  # noqa: BLE001
+        duration = time.monotonic() - start
+        logger.exception("generate_text FAILED after %.2fs | %s", duration, exc)
+        raise
+
+    duration = time.monotonic() - start
+    logger.info(
+        "generate_text FINISH in %.2fs | output_len=%d",
+        duration,
+        len(text),
+    )
+    return text
+</file>
+
+<file path="src/hollingsbot/__main__.py">
+# bot.py
+import os
+import time
+from dotenv import load_dotenv
+import discord
+from discord.ext import commands, tasks
+import asyncio
+import logging
+
+load_dotenv()
+
+token = os.getenv("DISCORD_TOKEN")
+logger = logging.getLogger("hollingsbot")
+logging.basicConfig(level=logging.INFO)
+
+intents = discord.Intents.default()
+intents.message_content = True
+
+def _ids_from_env(name: str) -> set[int]:
+    raw = os.getenv(name, "") or ""
+    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
+
+_IMG_CHANNEL_IDS = _ids_from_env("STABLE_DIFFUSION_CHANNEL_IDS")
+
+def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
+    """
+    Allow mention prefix everywhere.
+    Allow "!" only outside image-gen channels and outside DMs.
+    This prevents the command layer from consuming bang-prefixed image prompts
+    where the image cog should handle them.
+    """
+    extras = []
+    if message.guild is not None:
+        if getattr(message.channel, "id", None) not in _IMG_CHANNEL_IDS:
+            extras.append("!")
+    return commands.when_mentioned_or(*extras)(bot, message)
+
+bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True)
+
+@bot.event
+async def on_ready():
+    print(f"Bot is ready. Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Loaded cogs: {list(bot.cogs.keys())}")
+    print(f"Commands: {[c.name for c in bot.commands]}")
+
+RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
+
+@tasks.loop(seconds=RESTART_INTERVAL)
+async def restart_task():
+    print("Restart interval reached; exiting for restart")
+    await bot.close()
+    os._exit(0)
+
+async def main():
+    async with bot:
+        await bot.load_extension("hollingsbot.cogs.general")
+        await bot.load_extension("hollingsbot.cogs.image_gen_cog")
+        await bot.load_extension("hollingsbot.cogs.gpt2_chat")
+        await bot.load_extension("hollingsbot.cogs.admin")
+        enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
+        if enable_starboard not in {"0", "false", "False"}:
+            await bot.load_extension("hollingsbot.cogs.starboard")
+        await bot.load_extension("hollingsbot.cogs.llm_chat")
+        logger.info("starting bot")
+        await bot.start(token)
+
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    privacy = os.getenv("STABLE_DIFFUSION_PRIVACY", "0").strip().lower() in {"1", "true", "yes", "on"}
+    if not privacy:
+        logger.info("on_message: %s: %s", message.author, message.content[:120])
+    # Important: keep this so other command cogs still work
+    await bot.process_commands(message)
+
+if __name__ == "__main__":
+    # Robust launcher: retry on transient connect errors (e.g., gateway timeouts)
+    while True:
+        try:
+            asyncio.run(main())
+            break  # Normal exit
+        except Exception as e:  # noqa: BLE001
+            # Log and retry with backoff; discord.py sometimes raises during initial connect
+            logger.exception("Bot crashed during startup/connect; retrying in 5s: %s", e)
+            time.sleep(5)
+</file>
+
+<file path="src/hollingsbot/cogs/image_gen_cog.py">
+from __future__ import annotations
+
+import asyncio
+import base64
+import json
+import logging
+import os
+import random
+import re
+from dataclasses import dataclass
+from io import BytesIO
+from pathlib import Path
+from typing import Awaitable, Callable, Mapping
+
+import discord
+from discord.ext import commands
+
+from hollingsbot.caption import add_caption
+from hollingsbot.prompt_db import add_prompt, init_db
+from hollingsbot.tasks import generate_image  # celery task
+
+__all__ = ["ImageGenCog"]
+
+_log = logging.getLogger(__name__)
+
+_DEFAULT_CONFIG_PATH = Path(__file__).resolve().parents[1] / "image_gen_config.json"
+
+THINKING = "\N{THINKING FACE}"
+SUCCESS = "\N{WHITE HEAVY CHECK MARK}"
+FAILURE = "\N{CROSS MARK}"
+
+_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratorSpec:
+    api: str
+    model: str
+    # Optional: enable editing route by config
+    # Example: {"nb:": {"api":"replicate","model":"google/nano-banana","mode":"edit"}}
+    mode: str = "generate"
+
+
+class ImageGenCog(commands.Cog):
+    _SEED_RE = re.compile(r"^\{\s*(\d+)\s*}", re.ASCII)
+    _LIST_RE = re.compile(r"<([^<>]+)>", re.ASCII)
+
+    def __init__(
+        self,
+        bot: commands.Bot,
+        *,
+        config: Mapping[str, Mapping[str, str]] | None = None,
+        config_path: Path | None = None,
+        task_runner: Callable[..., Awaitable[str]] | None = None,
+    ) -> None:
+        self.bot = bot
+        init_db()
+
+        env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
+        self._allowed_channel_ids: set[int] = {
+            int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()
+        }
+
+        # Optional separate allowlist for the "edit:" command specifically.
+        # If set, messages starting with "edit:" are also allowed in these channels
+        # in addition to any general image channels above.
+        edit_ids = os.getenv("EDIT_CHANNEL_IDS", "")
+        self._edit_channel_ids: set[int] = {
+            int(cid.strip()) for cid in edit_ids.split(",") if cid.strip().isdigit()
+        }
+
+        allow_str = os.getenv("STABLE_DIFFUSION_ALLOW_DMS", "1").strip().lower()
+        self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
+
+        if config is not None:
+            self._prefix_map: dict[str, GeneratorSpec] = {
+                p.strip(): GeneratorSpec(**spec) for p, spec in config.items()
+            }
+            self._cfg_path: Path | None = None
+            self._cfg_mtime: float = 0.0
+        else:
+            self._cfg_path = config_path or _DEFAULT_CONFIG_PATH
+            self._cfg_mtime = 0.0
+            self._prefix_map = {}
+            self._reload_config()
+
+        self._run_task = task_runner or self._default_celery_runner
+        self._pending: set[asyncio.Task[None]] = set()
+
+    def _reload_config(self) -> None:
+        if self._cfg_path is None:
+            return
+        try:
+            mtime = self._cfg_path.stat().st_mtime
+        except FileNotFoundError:
+            if self._prefix_map:
+                _log.warning("Config file vanished; keeping last-known map.")
+            return
+        if mtime == self._cfg_mtime:
+            return
+        try:
+            raw_cfg: Mapping[str, Mapping[str, str]] = json.loads(
+                self._cfg_path.read_text("utf8")
+            )
+        except Exception as exc:
+            _log.exception("Failed to parse %s: %s; keeping old config", self._cfg_path, exc)
+            return
+        self._prefix_map = {p.strip(): GeneratorSpec(**spec) for p, spec in raw_cfg.items()}
+        self._cfg_mtime = mtime
+        _log.info("Reloaded image-generator config (%d prefixes).", len(self._prefix_map))
+
+    def _format_model_listing(self) -> str:
+        self._reload_config()
+        if not self._prefix_map:
+            return "No image generators are configured."
+        lines: list[str] = ["Available image generators:"]
+        for prefix, spec in sorted(self._prefix_map.items()):
+            prefix_display = f"`{prefix}`" if prefix else "(default)"
+            mode_display = f" / mode={spec.mode}" if getattr(spec, "mode", "generate") != "generate" else ""
+            lines.append(f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}")
+        lines.append(f"\nDM support: {'enabled' if self._allow_dms else 'disabled'}")
+        allowlist_desc = (
+            "all guild channels"
+            if not self._allowed_channel_ids
+            else f"{len(self._allowed_channel_ids)} whitelisted channel(s)"
+        )
+        lines.append(f"Guild scope: {allowlist_desc}")
+        if self._edit_channel_ids:
+            lines.append(f"Edit scope: {len(self._edit_channel_ids)} whitelisted channel(s)")
+        return "\n".join(lines)
+
+    async def cog_unload(self) -> None:
+        for task in self._pending:
+            task.cancel()
+        await asyncio.gather(*self._pending, return_exceptions=True)
+
+    async def _default_celery_runner(
+            self,
+            prompt_id: int,
+            api: str,
+            model: str,
+            prompt: str,
+            seed: int | None,
+            *,
+            image_input: list[bytes] | None = None,
+            output_format: str | None = None,
+            poll_interval: float = 0.5,
+    ) -> str:
+        """
+        Launch an image-generation task and poll. Keep routing through Celery.
+        The task must accept image_input and output_format as keyword-only.
+        """
+        # Celery's default JSON serializer cannot carry raw bytes; encode as data URLs.
+        def _as_data_urls(images: list[bytes]) -> list[str]:
+            def _mime(b: bytes) -> str:
+                try:
+                    if b.startswith(b"\x89PNG"):
+                        return "image/png"
+                    if b.startswith(b"\xff\xd8"):
+                        return "image/jpeg"
+                    if b.startswith(b"RIFF") and b[8:12] == b"WEBP":
+                        return "image/webp"
+                    if b.startswith(b"BM"):
+                        return "image/bmp"
+                except Exception:
+                    pass
+                return "application/octet-stream"
+
+            out: list[str] = []
+            for img in images:
+                b64 = base64.b64encode(img).decode("ascii")
+                out.append(f"data:{_mime(img)};base64,{b64}")
+            return out
+
+        payload_images: list[str] | None
+        if image_input:
+            payload_images = _as_data_urls(image_input)
+        else:
+            payload_images = None
+
+        async_result = generate_image.apply_async(
+            (prompt_id, api, model, prompt, seed),  # positional args only
+            kwargs={
+                "image_input": payload_images,  # keyword-only
+                "output_format": output_format,  # keyword-only
+                # "timeout": 45.0,  # example if you want to override
+            },
+            queue="image",
+        )
+        while not async_result.ready():
+            await asyncio.sleep(poll_interval)
+        return await asyncio.to_thread(async_result.get)
+
+    async def _react(self, msg: discord.Message, emoji: str, *, remove: bool = False) -> None:
+        try:
+            if remove:
+                # Remove only the bot's own reaction to avoid requiring
+                # Manage Messages permission (clear_reaction clears all).
+                if self.bot.user is not None:
+                    await msg.remove_reaction(emoji, self.bot.user)
+                else:
+                    await msg.clear_reaction(emoji)
+            else:
+                await msg.add_reaction(emoji)
+        except discord.HTTPException:
+            _log.debug("Could not %s reaction %s on %s", "remove" if remove else "add", emoji, msg.id)
+
+    def _split_prompt(self, content: str) -> tuple[str, GeneratorSpec] | None:
+        """Return (prompt_without_prefix, spec) if content starts with a known prefix.
+        Matching is case-insensitive for human-friendly prefixes like "edit:".
+        """
+        self._reload_config()
+        content_l = content.lower()
+        for prefix in sorted(self._prefix_map, key=len, reverse=True):
+            if content_l.startswith(prefix.lower()):
+                spec = self._prefix_map[prefix]
+                return content[len(prefix):].lstrip(), spec
+        return None
+
+    def _build_filename(
+        self,
+        prompt: str,
+        spec: GeneratorSpec,
+        seed: int | None,
+        *,
+        max_len: int = 32,
+    ) -> str:
+        snippet = re.sub(r"[^A-Za-z0-9]+", "_", prompt).strip("_")
+        if not snippet:
+            snippet = "image"
+        if len(snippet) > max_len:
+            snippet = snippet[:max_len].rstrip("_")
+        api_model = f"{spec.api}-{spec.model}".replace("/", "-")
+        seed_part = str(seed) if seed is not None else "rand"
+        return f"{snippet}_{api_model}_seed_{seed_part}.png".lower()
+
+    async def _handle_generation(
+        self,
+        message: discord.Message,
+        raw_prompt: str,
+        spec: GeneratorSpec,
+    ) -> None:
+        await self._react(message, THINKING)
+
+        seed = random.randint(1, 1000)
+        m_seed = self._SEED_RE.match(raw_prompt)
+        if m_seed:
+            seed = int(m_seed.group(1))
+            raw_prompt = raw_prompt[m_seed.end():].lstrip()
+
+        if not raw_prompt:
+            await self._react(message, THINKING, remove=True)
+            await self._react(message, FAILURE)
+            await message.channel.send("Prompt may not be empty.")
+            return
+
+        # Expand optional "<a, b, c>"
+        m_list = self._LIST_RE.search(raw_prompt)
+        if m_list:
+            items = [s.strip() for s in m_list.group(1).split(",") if s.strip()]
+            if not items:
+                items = [m_list.group(0)]
+            prefix = raw_prompt[:m_list.start()]
+            suffix = raw_prompt[m_list.end():]
+            prompts = [f"{prefix}{item}{suffix}".strip() for item in items]
+        else:
+            prompts = [raw_prompt]
+
+        # Collect image attachments for possible editing path (from this message and, if replying, from the replied message)
+        images: list[bytes] = []
+        for att in message.attachments:
+            ct = (att.content_type or "").lower()
+            if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                try:
+                    images.append(await att.read())
+                except discord.HTTPException:
+                    _log.debug("Could not download attachment %s", att.id)
+
+        # If the user is replying to a message with images, include those images as edit inputs too
+        reply_images: list[bytes] = []
+        if message.reference is not None:
+            replied_msg: discord.Message | None = None
+            resolved = getattr(message.reference, "resolved", None)
+            if isinstance(resolved, discord.Message):
+                replied_msg = resolved
+            else:
+                ref_id = getattr(message.reference, "message_id", None)
+                if ref_id:
+                    try:
+                        replied_msg = await message.channel.fetch_message(ref_id)
+                    except Exception:
+                        replied_msg = None
+            if replied_msg is not None:
+                for att in replied_msg.attachments:
+                    ct = (att.content_type or "").lower()
+                    if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                        try:
+                            reply_images.append(await att.read())
+                        except discord.HTTPException:
+                            _log.debug("Could not download replied attachment %s", att.id)
+
+        all_edit_images = images + reply_images
+
+        # Editing is triggered if there are images from either source AND either model indicates nano-banana or mode=="edit"
+        do_edit_mode = ("nano-banana" in spec.model) or (getattr(spec, "mode", "") == "edit")
+        do_edit = bool(all_edit_images) and do_edit_mode
+
+        # If user explicitly asked for edit mode but we found no images anywhere, fail early with guidance
+        if getattr(spec, "mode", "") == "edit" and not all_edit_images:
+            await self._react(message, THINKING, remove=True)
+            await self._react(message, FAILURE)
+            await message.channel.send("No images found to edit. Reply to a message with an image or attach an image with your `edit:` prompt.")
+            return
+
+        async def _launch_prompt(p: str) -> tuple[str, bytes] | Exception:
+            prompt_id = add_prompt(p, str(message.author.id), spec.api, spec.model)
+            try:
+                # Route through Celery, passing image_input when editing
+                file_or_b64 = await self._run_task(
+                    prompt_id, spec.api, spec.model, p, seed,
+                    image_input=all_edit_images if do_edit else None,
+                    output_format="png" if do_edit else None,
+                )
+                img_path = Path(file_or_b64)
+                if img_path.exists():
+                    img_bytes = img_path.read_bytes()
+                    try:
+                        img_path.unlink(missing_ok=True)
+                    except Exception:
+                        _log.debug("Temp image %s could not be deleted", img_path)
+                else:
+                    img_bytes = base64.b64decode(file_or_b64)
+                return p, img_bytes
+            except Exception as exc:
+                return exc
+
+        results = await asyncio.gather(*(_launch_prompt(p) for p in prompts), return_exceptions=True)
+
+        overall_success = True
+        for prompt_variant, result in zip(prompts, results):
+            if isinstance(result, Exception):
+                overall_success = False
+                _log.exception("Generation failed for %r: %s", prompt_variant, result)
+                continue
+
+            prompt_text, img_bytes = result
+            try:
+                if len(img_bytes) > _MAX_DISCORD_FILESIZE:
+                    raise RuntimeError("Image exceeds Discord 25 MiB limit.")
+
+                captioned = img_bytes if do_edit else add_caption(img_bytes, prompt_text)
+
+                filename = self._build_filename(prompt_text, spec, seed)
+                await message.channel.send(file=discord.File(BytesIO(captioned), filename=filename))
+            except Exception as exc:
+                overall_success = False
+                _log.exception("Post-processing failed: %s", exc)
+                await message.channel.send(f"Image post-processing failed for **{prompt_variant}**:\n> {exc}")
+
+        await self._react(message, THINKING, remove=True)
+        await self._react(message, SUCCESS if overall_success else FAILURE)
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+
+        is_dm = message.guild is None
+        if is_dm:
+            if not self._allow_dms:
+                return
+        else:
+            # Check content early to allow a separate allowlist for edit:
+            cleaned = (message.content or "").strip()
+            if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
+                # Not in general image channels. Allow if this is an edit: prompt
+                # and the channel is in EDIT_CHANNEL_IDS.
+                if not (cleaned.lower().startswith("edit:") and message.channel.id in self._edit_channel_ids):
+                    return
+        # For DMs or allowed guild messages, continue.
+        cleaned = (message.content or "").strip()
+
+        if cleaned.lower() == "!models":
+            await message.channel.send(self._format_model_listing())
+            return
+
+        split = self._split_prompt(cleaned)
+        if not split:
+            return
+
+        prompt, spec = split
+        task = asyncio.create_task(self._handle_generation(message, prompt, spec))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
+
+
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(ImageGenCog(bot))
+</file>
+
+<file path="src/hollingsbot/cogs/llm_chat.py">
+from __future__ import annotations
+import os
+import re
+import io
+import asyncio
+import collections
+import logging
+from typing import Iterable, List, Dict, Any
+from datetime import datetime, timezone
+
+import discord
+from discord.ext import commands
+
+from hollingsbot.tasks import generate_text
+from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT
+from hollingsbot.prompt_db import get_model_pref, set_model_pref
+from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
+
+# Env config
+WHITELIST = {int(x) for x in os.getenv("LLM_WHITELIST_CHANNELS", "").split(",") if x.strip().isdigit()}
+DEFAULT_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai").lower()
+# If provider is set to openai (default), prefer gpt-5; otherwise keep a sensible default per provider.
+DEFAULT_MODEL = os.getenv(
+    "DEFAULT_LLM_MODEL",
+    "gpt-5" if DEFAULT_PROVIDER == "openai" else "claude-4o",
+)
+TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "180"))
+HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
+# Cap how many recent turns we actually send to the model (slice of history)
+SEND_TURNS_LIMIT = int(os.getenv("LLM_MAX_TURNS_SENT", "16"))
+
+AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
+
+_log = logging.getLogger(__name__)
+
+
+def _chunks(s: str, limit: int = 1900) -> Iterable[str]:
+    for i in range(0, len(s), limit):
+        yield s[i: i + limit]
+
+
+def _is_image_attachment(att: discord.Attachment) -> bool:
+    if att.content_type and att.content_type.startswith("image/"):
+        return True
+    return any(att.filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
+
+
+def _is_text_attachment(att: discord.Attachment) -> bool:
+    """
+    Treat common text-like uploads as inlineable for a single turn.
+    These are read and sent to the model only for the current message.
+    They are not persisted in history. History stores a placeholder instead.
+    """
+    ct = (att.content_type or "").lower()
+    if ct.startswith("text/"):
+        return True
+    if ct in {"application/json", "application/xml", "application/javascript"}:
+        return True
+    name = att.filename.lower()
+    text_exts = (
+        ".txt", ".md", ".markdown", ".json", ".csv", ".tsv",
+        ".py", ".js", ".ts", ".html", ".css", ".xml",
+        ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
+        ".log", ".sql", ".sh", ".bat", ".ps1",
+        ".java", ".kt", ".rs", ".go", ".rb", ".php",
+        ".c", ".h", ".cpp", ".hpp", ".cs",
+    )
+    return any(name.endswith(ext) for ext in text_exts)
+
+
+def _build_internal_parts(user_text: str, images: List[discord.Attachment]) -> List[Dict[str, Any]]:
+    parts: List[Dict[str, Any]] = [{"kind": "text", "text": user_text}]
+    for att in images:
+        media_type = att.content_type if (att.content_type and att.content_type.startswith("image/")) else None
+        parts.append({
+            "kind": "image",
+            "url": att.url,
+            "media_type": media_type or "image/png",
+            "filename": att.filename,
+        })
+    return parts
+
+
+def _fmt_ts(dt: datetime) -> str:
+    try:
+        ts = dt.astimezone(timezone.utc)
+    except Exception:
+        ts = datetime.now(timezone.utc)
+    return ts.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _to_provider_content(parts_or_text: Any, provider: str) -> Any:
+    if isinstance(parts_or_text, str):
+        return parts_or_text
+    if not isinstance(parts_or_text, list):
+        return str(parts_or_text)
+    out: List[Dict[str, Any]] = []
+    for p in parts_or_text:
+        kind = p.get("kind")
+        if kind == "text":
+            out.append({"type": "text", "text": p.get("text", "")})
+        elif kind == "image":
+            url = p.get("url")
+            media_type = p.get("media_type") or "image/png"
+            if provider == "openai":
+                out.append({"type": "image_url", "image_url": {"url": url}})
+            else:
+                out.append({"type": "image", "source": {"type": "url", "url": url, "media_type": media_type}})
+    return out if out else ""
+
+
+class LLMAPIChat(commands.Cog):
+    def __init__(self, bot: commands.Bot):
+        self.bot = bot
+        self.history = collections.defaultdict(lambda: collections.deque(maxlen=HISTORY_LIMIT))
+        self.system_prompts = {}
+        self._preload_once = False
+        self._warming: set[int] = set()
+
+    async def _resolve_referenced_message(self, msg: discord.Message) -> discord.Message | None:
+        ref = msg.reference
+        if not ref:
+            return None
+        resolved = getattr(ref, "resolved", None)
+        if isinstance(resolved, discord.Message):
+            return resolved
+        ref_id = getattr(ref, "message_id", None)
+        if ref_id:
+            try:
+                return await msg.channel.fetch_message(ref_id)
+            except Exception:
+                return None
+        return None
+
+    async def _preload_history_for_channel(self, channel_id: int) -> None:
+        # Skip if already has content
+        if self.history.get(channel_id):
+            return
+        channel = self.bot.get_channel(channel_id)
+        if channel is None:
+            try:
+                channel = await self.bot.fetch_channel(channel_id)
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("LLM preload: cannot fetch channel %s: %s", channel_id, exc)
+                return
+        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
+            return
+        # Collect most recent messages and build a lightweight history
+        try:
+            # Fetch newest-first limited slice, then reverse for chronological processing
+            msgs: List[discord.Message] = [m async for m in channel.history(limit=HISTORY_LIMIT, oldest_first=False)]
+            msgs.reverse()
+        except Exception as exc:  # noqa: BLE001
+            _log.debug("LLM preload: history fetch failed for %s: %s", channel_id, exc)
+            return
+
+        dq = collections.deque(maxlen=HISTORY_LIMIT)
+        for m in msgs:
+            try:
+                # Ignore commands and unrelated bots
+                if m.content.startswith(("!", "-")):
+                    continue
+                if m.author.bot and (self.bot.user is None or m.author.id != self.bot.user.id):
+                    continue
+
+                # Assistant messages: store as assistant text (no timestamp)
+                if self.bot.user and m.author.id == self.bot.user.id:
+                    assistant_text_raw = (m.content or "").strip()
+                    if assistant_text_raw:
+                        dq.append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text_raw}]})
+                    continue
+
+                # User message
+                images = [att for att in m.attachments if _is_image_attachment(att)]
+                text_files = [att for att in m.attachments if _is_text_attachment(att) and att not in images]
+
+                # Reply prefix + merge reply images (best-effort)
+                reply_prefix = ""
+                replied_msg = await self._resolve_referenced_message(m)
+                if replied_msg is not None:
+                    reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
+                    reply_text = (replied_msg.content or "").strip()
+                    reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n" if reply_text else f"(Replying to <{reply_author}>.)\n"
+                    reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
+                    if reply_images:
+                        seen = {att.url for att in images}
+                        for att in reply_images:
+                            if att.url not in seen:
+                                images.append(att)
+                                seen.add(att.url)
+
+                user_text_base = f"<{m.author.display_name}> {(m.content or '').strip()}".strip()
+                history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+
+                # Placeholders for text files, not persisted
+                if text_files:
+                    for att in text_files:
+                        history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+
+                user_parts_for_history = _build_internal_parts(history_user_text, images)
+                dq.append({"role": "user", "parts": user_parts_for_history})
+            except Exception as exc:  # noqa: BLE001
+                _log.debug("LLM preload: skipping message due to error: %s", exc)
+
+        if dq:
+            self.history[channel_id] = dq
+            _log.info("LLM preload: initialized history for channel %s with %d items", channel_id, len(dq))
+
+    async def _ensure_history_for_message_channel(self, message: discord.Message) -> None:
+        """On-demand warmup of history for a channel if empty (e.g., startup race)."""
+        cid = message.channel.id
+        if cid in self._warming:
+            return
+        if self.history.get(cid):
+            return
+        # Only warm whitelisted channels
+        if cid not in WHITELIST:
+            return
+        self._warming.add(cid)
+        try:
+            await self._preload_history_for_channel(cid)
+        finally:
+            self._warming.discard(cid)
+
+    @commands.Cog.listener()
+    async def on_ready(self) -> None:
+        # Only run once per process
+        if self._preload_once:
+            return
+        self._preload_once = True
+        # Preload for whitelisted channels only
+        tasks = [self._preload_history_for_channel(cid) for cid in WHITELIST]
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    @commands.command(name="models")
+    async def list_models(self, ctx: commands.Context) -> None:
+        if ctx.channel.id not in WHITELIST:
+            return
+        if not AVAILABLE_MODELS:
+            await ctx.reply("No models configured in AVAILABLE_MODELS.")
+            return
+        await ctx.reply("Available models:\n" + "\n".join(f"- `{m}`" for m in AVAILABLE_MODELS))
+
+    @commands.command(name="model")
+    async def set_or_list_model(self, ctx: commands.Context, *, spec: str = None) -> None:
+        if ctx.channel.id not in WHITELIST:
+            return
+        if not AVAILABLE_MODELS:
+            await ctx.reply("No models configured in AVAILABLE_MODELS.")
+            return
+        gid = ctx.guild.id if ctx.guild else 0
+        pref = get_model_pref(gid, ctx.author.id)
+        current_provider, current_model = pref if pref else (DEFAULT_PROVIDER, DEFAULT_MODEL)
+        current_human = "chatgpt" if current_provider == "openai" else current_provider
+        current_str = f"{current_human}/{current_model}"
+        if not spec:
+            msg_lines = []
+            for m in AVAILABLE_MODELS:
+                if m.lower() == current_str.lower():
+                    msg_lines.append(f"- **{m}** (current)")
+                else:
+                    msg_lines.append(f"- {m}")
+            await ctx.reply("Use `!model api/model-name` to select model.\nAvailable models:\n" + "\n".join(msg_lines))
+            return
+        match = None
+        for m in AVAILABLE_MODELS:
+            if m.lower() == spec.lower():
+                match = m
+                break
+        if not match:
+            await ctx.reply("Model not found. Use `!model` to see the list.")
+            return
+        provider_raw, model = match.split("/", 1)
+        provider = "openai" if provider_raw.lower() in ("chatgpt", "openai") else provider_raw.lower()
+        set_model_pref(gid, ctx.author.id, provider, model.strip())
+        await ctx.reply(f"Model set to **{match}** for you.")
+
+    @commands.command(name="system")
+    async def set_system_prompt(self, ctx: commands.Context, *, text: str = None) -> None:
+        if ctx.channel.id not in WHITELIST:
+            return
+        gid = ctx.guild.id if ctx.guild else 0
+        key = (gid, ctx.author.id)
+        current = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
+        # No args shows current prompt and does not change it
+        if text is None or not text.strip():
+            await ctx.reply(f"Your current system prompt is:\n```\n{current}\n```")
+            return
+        cmd = text.strip().lower()
+        if cmd in {"clear", "reset"}:
+            self.system_prompts[key] = DEFAULT_SYSTEM_PROMPT
+            await ctx.reply(f"Your system prompt has been reset to the default:\n```\n{DEFAULT_SYSTEM_PROMPT}\n```")
+            return
+        self.system_prompts[key] = text.strip()
+        await ctx.reply(f"System prompt set for you:\n```\n{text.strip()}\n```")
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message):
+        if message.author.bot:
+            return
+        if message.channel.id not in WHITELIST:
+            return
+        # Ignore explicit commands and image edit prompts (handled by image cog)
+        content_clean = (message.content or "").strip()
+        if content_clean.startswith(("!", "-")):
+            return
+        if content_clean.lower().startswith("edit:"):
+            return
+
+        # Ensure history is warmed for this channel in case preload hasn't finished yet
+        await self._ensure_history_for_message_channel(message)
+
+        gid = message.guild.id if message.guild else 0
+        key = (gid, message.author.id)
+        sys_prompt = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
+        pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
+        provider, model = pref
+
+        # Collect images from this message and, if replying, from the referenced message too.
+        images = [att for att in message.attachments if _is_image_attachment(att)]
+        text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
+
+        replied_msg: discord.Message | None = None
+        if message.reference is not None:
+            # Try to resolve locally first; fall back to fetch by ID
+            resolved = getattr(message.reference, "resolved", None)
+            if isinstance(resolved, discord.Message):
+                replied_msg = resolved
+            else:
+                ref_id = getattr(message.reference, "message_id", None)
+                if ref_id:
+                    try:
+                        replied_msg = await message.channel.fetch_message(ref_id)
+                    except Exception:
+                        replied_msg = None
+
+        # Build a reply context prefix and merge in images from the replied message
+        reply_prefix = ""
+        if replied_msg is not None:
+            reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
+            reply_text = (replied_msg.content or "").strip()
+            if reply_text:
+                reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n"
+            else:
+                reply_prefix = f"(Replying to <{reply_author}>.)\n"
+            # Merge in image attachments from the replied message
+            reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
+            if reply_images:
+                # Deduplicate by URL to avoid repeats
+                seen_urls = {att.url for att in images}
+                for att in reply_images:
+                    if att.url not in seen_urls:
+                        images.append(att)
+                        seen_urls.add(att.url)
+
+        # No timestamps in history or provider content
+        user_text_base = f"<{message.author.display_name}> {message.content}".strip()
+        provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+        history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+
+        # Inline text files for the model for this turn only. Persist a small note instead.
+        if text_files:
+            for att in text_files:
+                try:
+                    raw = await att.read()
+                    decoded = raw.decode("utf-8", errors="replace")
+                except Exception:
+                    decoded = "[error reading file]"
+                provider_user_text += f"\n\n[begin uploaded file: {att.filename}]\n{decoded}\n[end uploaded file]"
+                history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+
+        # Build parts separately so history never contains the file contents
+        user_parts_for_provider = _build_internal_parts(provider_user_text, images)
+        user_parts_for_history = _build_internal_parts(history_user_text, images)
+
+        convo = [{"role": "system", "content": sys_prompt}]
+        # Only send the last N turns to reduce latency and token usage
+        recent_turns = list(self.history[message.channel.id])[-max(SEND_TURNS_LIMIT, 0):]
+        for m in recent_turns:
+            content_or_parts = m.get("parts") if "parts" in m else m.get("content")
+            if content_or_parts is None:
+                continue
+            convo.append({"role": m.get("role", "user"), "content": _to_provider_content(content_or_parts, provider)})
+        convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
+
+        # Store only the sanitized version in history
+        self.history[message.channel.id].append({"role": "user", "parts": user_parts_for_history})
+
+        async with message.channel.typing():
+            async_result = await asyncio.to_thread(generate_text.delay, provider, model, convo)
+            try:
+                reply_text: str = await asyncio.to_thread(async_result.get, timeout=TEXT_TIMEOUT)
+            except Exception as exc:
+                await message.channel.send(f"Generation failed: {exc}")
+                return
+
+        # SVG handling FIRST: detect, render or attach, and strip with a note.
+        cleaned_text, svg_files = extract_render_and_strip_svgs(reply_text)
+
+        # Then do large-reply code or file extraction on the already cleaned text.
+        attachments = []
+        if len(cleaned_text) > 2000:
+            def repl(match: re.Match) -> str:
+                lang = match.group(1) or "txt"
+                code = match.group(2)
+                filename = f"code.{lang.strip() if lang.strip() else 'txt'}"
+                buf = io.BytesIO(code.encode("utf-8"))
+                attachments.append((filename, buf))
+                return f"[see file: {filename}]"
+            cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
+
+        # Store assistant reply without timestamp in history
+        self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": cleaned_text}]})
+
+        for chunk in _chunks(cleaned_text):
+            await message.channel.send(chunk)
+        for filename, buf in attachments:
+            buf.seek(0)
+            await message.channel.send(file=discord.File(buf, filename))
+        for filename, buf in svg_files:
+            buf.seek(0)
+            await message.channel.send(file=discord.File(buf, filename))
+
+    @commands.command(name="h")
+    async def help_command(self, ctx: commands.Context) -> None:
+        if ctx.channel.id not in WHITELIST:
+            return
+        help_text = (
+            "**LLM Bot Commands & Features**\n\n"
+            "__Model Selection__\n"
+            "`!model` - List available models and show your current one.\n"
+            "`!model <name>` - Set your preferred model from the list.\n"
+            "\n"
+            "__System Prompt__\n"
+            "`!system` - Show your current system prompt.\n"
+            "`!system <text>` - Set a custom system prompt for your replies.\n"
+            "`!system clear` or `!system reset` - Reset your system prompt to the default.\n"
+            "\n"
+            "__Conversation Behavior__\n"
+            "- The bot responds automatically to all non-command messages in allowed channels.\n"
+            "- It remembers the last N messages in the channel for conversation context.\n"
+            "- Messages starting with `!` or `-` are ignored and not added to history.\n"
+            "- Images are supported. Attach images to your message and they are preserved in chat history and sent to the model when supported by the selected provider.\n"
+            "- Replies: when you reply to a message, the bot includes that message's text and any of its image attachments as context for your turn.\n"
+            "- Text file uploads are supported for a single turn. The model reads the file contents for that message only, and chat history records a note like `[uploaded file filename.txt removed]` instead of the full contents.\n"
+            "- SVG blocks in model replies are rendered to PNG if possible and attached. Otherwise the original `.svg` is attached. The SVG code block is replaced in the text with a note.\n"
+            "\n"
+            "__Code Blocks__\n"
+            "- If a response is over 2000 characters, code blocks are removed from the text and uploaded as files.\n"
+            "- Otherwise, code blocks stay inline.\n"
+            "- When extracted, the text will contain `[see file: filename]` where the code block was.\n"
+            "\n"
+            "__Model Info__\n"
+            "`!models` - List all models from the configured environment variable if that separate command is kept.\n"
+        )
+        await ctx.reply(help_text)
+
+
+async def setup(bot: commands.Bot):
+    await bot.add_cog(LLMAPIChat(bot))
+</file>
+
+<file path="AGENTS.md">
+# Repository Guidelines
+
+## Project Structure & Modules
+- Source: `src/hollingsbot/` (entrypoint: `python -m hollingsbot`).
+- Cogs: `src/hollingsbot/cogs/` (commands/features by domain).
+- Workers: Celery tasks in `src/hollingsbot/tasks.py` using Redis.
+- Generators: `src/hollingsbot/image_generators/` and `src/hollingsbot/text_generators/`.
+- Utils/Assets: `src/hollingsbot/utils/`, runtime outputs in `generated/`.
+- Config: `.env` for secrets, `src/hollingsbot/image_gen_config.json` for image prefix→provider mapping.
+
+## Build, Test, and Development
+- Build/run all services: `docker-compose up --build` (bot, Redis, Celery workers).
+- Local bot only: `pip install -r requirements.txt && python -m hollingsbot`.
+- Celery workers (outside Docker):
+  - Text queue: `celery -A hollingsbot.tasks worker -Q text --loglevel=info`
+  - Image queue: `celery -A hollingsbot.tasks worker -Q image --loglevel=info`
+- Tests: `pytest` (supports `pytest-asyncio`). Run a file: `pytest tests/test_image_gen_cog.py -q`.
+
+## Coding Style & Naming
+- Python 3, PEP 8, 4-space indentation. Prefer type hints and short docstrings.
+- Modules under `hollingsbot` use absolute imports (e.g., `from hollingsbot.cogs import ...`).
+- Names: snake_case for functions/variables, PascalCase for classes, lowercase module filenames.
+- Cogs: one feature per file in `cogs/`, expose `async def setup(bot): ...`.
+- Keep tasks idempotent; log clearly without leaking secrets.
+
+## Testing Guidelines
+- Frameworks: `pytest`, `pytest-asyncio` for coroutine tests (`@pytest.mark.asyncio`).
+- Location: create `tests/` with `test_*.py` files mirroring package structure.
+- Aim for fast unit tests of cogs, generators, and task routing. Add regression tests with minimal fixtures.
+
+## Commit & Pull Request Guidelines
+- Commits: use clear, imperative subjects; Conventional Commits (`feat:`, `fix:`) preferred.
+- PRs: include summary, rationale, test instructions, and linked issues. Add screenshots for user-facing Discord commands when helpful.
+- Keep diffs focused; update README/`image_gen_config.json` if behavior or prefixes change.
+- Agents: ignore Git entirely unless explicitly asked. Do not run any `git` commands, do not create branches, do not commit, do not push, and do not open PRs. Maintainers handle all Git operations.
+
+## Agent-Specific Instructions
+- Ignore all Git functions unless explicitly requested. Do not run `git` commands.
+- Do not create or switch branches. Do not commit or push. Surface next steps instead.
+- Do not open PRs or suggest opening them; maintainers will do so.
+- Do not suggest branch names or commit messages under any circumstances.
+
+## Security & Configuration Tips
+- Required env: `DISCORD_TOKEN`, `GITHUB_TOKEN` (repo scope). Common optional: `WEBHOOK_URL`, `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STABLE_DIFFUSION_CHANNEL_IDS`, `EDIT_CHANNEL_IDS`, `STABLE_DIFFUSION_PRIVACY`, `PROMPT_DB_PATH`, `BOT_RESTART_INTERVAL`.
+- Do not commit `.env` or tokens; avoid logging secrets.
+- Redis backs Celery; SQLite stores lightweight state. Review data paths before deploying.
+</file>
+
+<file path="requirements.txt">
+discord.py==2.5.2
+python-dotenv
+replicate
+aiohttp
+celery
+redis
+pytest
+pytest-asyncio
+
+pillow
+transformers
+torch
+watchfiles
+anthropic
+openai
+cairosvg
+</file>
+
+<file path="docker-compose.yml">
+version: '3.9'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: watchfiles --filter python "python -m hollingsbot" /app
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+    # No GPU needed here
+
+  celery_text:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=1 -Q text
+    env_file: .env
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+    # No GPU needed here
+
+  celery_image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=2 -Q image
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
+    depends_on:
+      - redis
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              capabilities: [gpu]
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+</file>
+
+<file path="README.md">
+# hollingsbot3
+
+This is a minimal Discord bot project using [discord.py](https://discordpy.readthedocs.io/).
+It is set up to run inside Docker using docker-compose. Image generation tasks
+are handled by a separate Celery worker communicating through Redis.
+
+## Requirements
+- Docker
+- Docker Compose
+
+## Setup
+1. Create a `.env` file (already provided) and fill in the required tokens and IDs.
+   The `GITHUB_TOKEN` must include the `repo` scope so the bot can merge pull requests.
+2. Build and start the bot and worker:
+   ```bash
+   docker-compose up --build
+   ```
+
+This command launches the Discord bot, a Celery worker, and a Redis instance
+used for task queueing.
+
+### Celery worker reloading
+
+Celery 5 removed the old `--autoreload` flag. The `docker-compose.yml` file now
+starts the worker via [watchfiles](https://github.com/samuelcolvin/watchfiles),
+which monitors Python files and restarts the worker when they change.
+
+With local sources mounted into the container you can simply run:
+
+```bash
+docker-compose up
+```
+
+Whenever you edit `tasks.py` or other modules, the worker process will restart
+and pick up the new code automatically. You can also invoke the command
+directly:
+
+```bash
+watchfiles --filter python "celery -A tasks worker --loglevel=info" /app
+```
+
+If you prefer not to use auto reload you can still rebuild the containers
+manually or run `watch_for_updates.py`.
+
+### GPU acceleration
+
+The Docker setup now uses a CUDA-enabled PyTorch image. Ensure your host has the
+NVIDIA Container Toolkit installed so containers can access the GPU. The
+`docker-compose.yml` file reserves a GPU for both the bot and the Celery worker.
+
+### Automatic updates
+
+Run `watch_for_updates.py` to poll the repository for new commits and
+automatically rebuild the containers when updates are available:
+
+```bash
+python watch_for_updates.py
+```
+
+The script checks for changes every 60 seconds by default. Set the
+`UPDATE_INTERVAL` environment variable to adjust the polling interval. By
+default the script monitors the branch that is currently checked out. Override
+this by setting the `WATCH_BRANCH` environment variable, e.g. `WATCH_BRANCH=main`.
+
+The bot uses a modular Cog system located in the `cogs/` directory. A sample `ping` command is provided.
+
+### Image generation configuration
+
+Image prompts are routed based on the prefix defined in `image_gen_config.json`.
+Each prefix maps to an API provider and model name:
+
+```json
+{
+  "!": {"api": "replicate", "model": "black-forest-labs/flux-schnell"}
+}
+```
+
+Additional prefixes can be added and will be handled by the configured image
+generator class.
+
+### Text generation configuration
+
+- `TEXT_TIMEOUT` (seconds): max time to wait for LLM replies in `llm_chat` (default 180).
+- `GPT2_RESPONSE_TIMEOUT` (seconds): max time to wait for Celery text tasks in `gpt2_chat` (default 180).
+
+Increase these if your provider/models are slow or you see timeout errors.
+
+Channel allowlists:
+- Set `STABLE_DIFFUSION_CHANNEL_IDS` to a comma-separated list of channel IDs to restrict general image-generation prompts to those channels. If unset or empty, image prompts are allowed in all guild channels.
+- Set `EDIT_CHANNEL_IDS` to a comma-separated list of channel IDs where the `edit:` command is allowed. When set, `edit:` is allowed in the union of `STABLE_DIFFUSION_CHANNEL_IDS` and `EDIT_CHANNEL_IDS`. DMs remain controlled by `STABLE_DIFFUSION_ALLOW_DMS`.
+
+### Pull request notifications
+
+The `PRManager` cog posts to a Discord webhook when pull requests are opened and
+when they are merged via the bot. Set the `WEBHOOK_URL` environment variable to
+override the default webhook, which currently points to:
+
+```
+https://discord.com/api/webhooks/1380252805494738974/wif1p4iK8_hZq41JwNCmHRcFj6E9cxyet1fNlTiLt-nN9dc2qyxclJcYZhoUnfRwG5p5
+```
+Persistent tracking of notified pull requests is stored in the SQLite database
+(`prompts.db` by default). Set `PROMPT_DB_PATH` to change where this state is
+kept.
+
+### Starboard
+
+Set `ENABLE_STARBOARD=1` and `STARBOARD_CHANNEL_ID` to repost bot messages to
+another channel when they receive reactions. The optional
+`STARBOARD_IGNORE_CHANNELS` variable accepts a comma-separated list of channel
+IDs to exclude from reposting.
+
+### Running tests
+
+To run the test suite outside of Docker you must install the Python
+dependencies locally. Failing to install them results in `ModuleNotFoundError`
+for packages such as `discord.py`.
+
+```bash
+pip install -r requirements.txt
+pytest
+```
+</file>
+
+</files>

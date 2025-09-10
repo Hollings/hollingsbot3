@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Dict, Sequence, TypedDict, Union, List, Any
+import os
 import logging
 
 from openai import AsyncOpenAI
@@ -165,13 +166,22 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         # gpt-5 path: use Responses API with reasoning={effort: low}; preserve roles and images
         if self._is_gpt5():
             instructions, input_messages = self._to_responses_easy_input(messages)
+            # Tune reasoning + cap output to improve latency.
+            effort = os.getenv("OPENAI_REASONING_EFFORT", "low").lower()
+            max_tokens = int(os.getenv("TEXT_MAX_OUTPUT_TOKENS", "800"))
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "input": input_messages,
-                "reasoning": {"effort": "medium"},
+                "reasoning": {"effort": effort},
+                "max_output_tokens": max_tokens,
             }
             if instructions:
                 kwargs["instructions"] = instructions
+            # Responses API supports temperature; pass it through when provided
+            try:
+                kwargs["temperature"] = float(temperature)  # type: ignore[arg-type]
+            except Exception:
+                pass
 
             try:
                 _LOG.debug(
@@ -185,7 +195,12 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
             except Exception:
                 pass
 
-            resp = await client.responses.create(**kwargs)
+            # Optional per-request timeout; falls back to client default if unset
+            req_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "0"))
+            if req_timeout > 0:
+                resp = await client.responses.create(**kwargs, timeout=req_timeout)
+            else:
+                resp = await client.responses.create(**kwargs)
 
             # Extract text similar to our SVG generator helper
             text = getattr(resp, "output_text", None)

@@ -6,13 +6,16 @@ import asyncio
 import collections
 import logging
 from typing import Iterable, List, Dict, Any
+import base64
+from PIL import Image
+import aiohttp
 from datetime import datetime, timezone
 
 import discord
 from discord.ext import commands
 
 from hollingsbot.tasks import generate_text
-from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT
+from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT, get_default_system_prompt
 from hollingsbot.prompt_db import get_model_pref, set_model_pref
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
@@ -26,6 +29,8 @@ DEFAULT_MODEL = os.getenv(
 )
 TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "180"))
 HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
+# Cap how many recent turns we actually send to the model (slice of history)
+SEND_TURNS_LIMIT = int(os.getenv("LLM_MAX_TURNS_SENT", "16"))
 
 AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
 
@@ -114,6 +119,187 @@ class LLMAPIChat(commands.Cog):
         self.system_prompts = {}
         self._preload_once = False
         self._warming: set[int] = set()
+
+    async def _attachment_to_data_url(
+        self,
+        att: discord.Attachment,
+        *,
+        max_side: int = 2048,
+        target_bytes: int = 9_500_000,
+    ) -> str:
+        """Download, downscale, and JPEG-compress an image attachment to a data URL.
+
+        - Scales the longest side to at most `max_side`.
+        - Tries multiple scale/quality combinations to fit under `target_bytes`.
+        - Converts to RGB and flattens transparency against white.
+        """
+        raw = await att.read()
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "LA":
+                rgb = img.convert("RGBA")
+                bg.paste(rgb, mask=rgb.split()[-1])
+            else:
+                bg.paste(img, mask=img.split()[-1])
+            base = bg
+        else:
+            base = img.convert("RGB")
+
+        # Initial constrain to max_side
+        w, h = base.size
+        scale0 = 1.0
+        if max(w, h) > max_side:
+            scale0 = max_side / float(max(w, h))
+        def _resized(im: Image.Image, s: float) -> Image.Image:
+            if s >= 0.999:
+                return im
+            nw, nh = max(1, int(im.width * s)), max(1, int(im.height * s))
+            return im.resize((nw, nh), Image.LANCZOS)
+
+        candidates_scale = [scale0, scale0 * 0.85, scale0 * 0.7, scale0 * 0.5]
+        qualities = [85, 75, 65, 50, 40, 30]
+
+        for s in candidates_scale:
+            im = _resized(base, s)
+            for q in qualities:
+                buf = io.BytesIO()
+                try:
+                    im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                except Exception:
+                    buf.seek(0); buf.truncate(0)
+                    im.save(buf, format="JPEG", quality=q)
+                data = buf.getvalue()
+                if len(data) <= target_bytes:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    return f"data:image/jpeg;base64,{b64}"
+        # Fallback: return the smallest we tried anyway
+        b64 = base64.b64encode(data).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+
+    async def _build_provider_parts(
+        self,
+        provider: str,
+        user_text: str,
+        images: List[discord.Attachment],
+    ) -> List[Dict[str, Any]]:
+        parts: List[Dict[str, Any]] = [{"kind": "text", "text": user_text}]
+        for att in images:
+            media_type = att.content_type if (att.content_type and att.content_type.startswith("image/")) else None
+            url = att.url
+            # For OpenAI, reduce images that exceed 9.5 MiB to a data URL below 10 MiB
+            if provider == "openai":
+                try:
+                    if getattr(att, "size", 0) and att.size > 9_500_000:
+                        url = await self._attachment_to_data_url(att)
+                except Exception:
+                    # On failure, fall back to original URL
+                    url = att.url
+            parts.append({
+                "kind": "image",
+                "url": url,
+                "media_type": media_type or "image/png",
+                "filename": att.filename,
+            })
+        return parts
+
+    async def _bytes_to_jpeg_data_url(
+        self,
+        raw: bytes,
+        *,
+        max_side: int = 2048,
+        target_bytes: int = 9_500_000,
+    ) -> str:
+        img = Image.open(io.BytesIO(raw))
+        if img.mode in ("RGBA", "LA"):
+            bg = Image.new("RGB", img.size, (255, 255, 255))
+            if img.mode == "LA":
+                rgb = img.convert("RGBA")
+                bg.paste(rgb, mask=rgb.split()[-1])
+            else:
+                bg.paste(img, mask=img.split()[-1])
+            base = bg
+        else:
+            base = img.convert("RGB")
+
+        w, h = base.size
+        scale0 = 1.0
+        if max(w, h) > max_side:
+            scale0 = max_side / float(max(w, h))
+
+        def _resized(im: Image.Image, s: float) -> Image.Image:
+            if s >= 0.999:
+                return im
+            nw, nh = max(1, int(im.width * s)), max(1, int(im.height * s))
+            return im.resize((nw, nh), Image.LANCZOS)
+
+        candidates_scale = [scale0, scale0 * 0.85, scale0 * 0.7, scale0 * 0.5]
+        qualities = [85, 75, 65, 50, 40, 30]
+        last = raw
+        for s in candidates_scale:
+            im = _resized(base, s)
+            for q in qualities:
+                buf = io.BytesIO()
+                try:
+                    im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
+                except Exception:
+                    buf.seek(0); buf.truncate(0)
+                    im.save(buf, format="JPEG", quality=q)
+                data = buf.getvalue()
+                last = data
+                if len(data) <= target_bytes:
+                    b64 = base64.b64encode(data).decode("ascii")
+                    return f"data:image/jpeg;base64,{b64}"
+        b64 = base64.b64encode(last).decode("ascii")
+        return f"data:image/jpeg;base64,{b64}"
+
+    async def _url_to_data_url(
+        self,
+        url: str,
+        *,
+        max_side: int = 2048,
+        target_bytes: int = 9_500_000,
+        timeout: float = 20.0,
+    ) -> str:
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+                async with session.get(url) as resp:
+                    raw = await resp.read()
+        except Exception:
+            # If fetch fails, just return original URL; provider will decide
+            return url
+        return await self._bytes_to_jpeg_data_url(raw, max_side=max_side, target_bytes=target_bytes)
+
+    async def _prepare_provider_content(self, content_or_parts: Any, provider: str) -> Any:
+        """Like _to_provider_content, but compresses images for OpenAI across history.
+
+        - If provider != openai, falls back to _to_provider_content.
+        - For lists of parts, converts image URLs to compressed data URLs.
+        """
+        if provider != "openai":
+            return _to_provider_content(content_or_parts, provider)
+        if isinstance(content_or_parts, str):
+            return content_or_parts
+        if not isinstance(content_or_parts, list):
+            return _to_provider_content(content_or_parts, provider)
+        new_parts: List[Dict[str, Any]] = []
+        for p in content_or_parts:
+            try:
+                if p.get("kind") == "image":
+                    url = p.get("url")
+                    if isinstance(url, str) and not url.startswith("data:"):
+                        try:
+                            url = await self._url_to_data_url(url)
+                        except Exception:
+                            pass
+                    np = dict(p)
+                    np["url"] = url
+                    new_parts.append(np)
+                else:
+                    new_parts.append(p)
+            except Exception:
+                new_parts.append(p)
+        return _to_provider_content(new_parts, provider)
 
     async def _resolve_referenced_message(self, msg: discord.Message) -> discord.Message | None:
         ref = msg.reference
@@ -280,15 +466,16 @@ class LLMAPIChat(commands.Cog):
             return
         gid = ctx.guild.id if ctx.guild else 0
         key = (gid, ctx.author.id)
-        current = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
+        current = self.system_prompts.get(key, get_default_system_prompt())
         # No args shows current prompt and does not change it
         if text is None or not text.strip():
             await ctx.reply(f"Your current system prompt is:\n```\n{current}\n```")
             return
         cmd = text.strip().lower()
         if cmd in {"clear", "reset"}:
-            self.system_prompts[key] = DEFAULT_SYSTEM_PROMPT
-            await ctx.reply(f"Your system prompt has been reset to the default:\n```\n{DEFAULT_SYSTEM_PROMPT}\n```")
+            new_default = get_default_system_prompt()
+            self.system_prompts[key] = new_default
+            await ctx.reply(f"Your system prompt has been reset to the default:\n```\n{new_default}\n```")
             return
         self.system_prompts[key] = text.strip()
         await ctx.reply(f"System prompt set for you:\n```\n{text.strip()}\n```")
@@ -311,7 +498,7 @@ class LLMAPIChat(commands.Cog):
 
         gid = message.guild.id if message.guild else 0
         key = (gid, message.author.id)
-        sys_prompt = self.system_prompts.get(key, DEFAULT_SYSTEM_PROMPT)
+        sys_prompt = self.system_prompts.get(key, get_default_system_prompt())
         pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
         provider, model = pref
 
@@ -369,15 +556,18 @@ class LLMAPIChat(commands.Cog):
                 history_user_text += f"\n\n[uploaded file {att.filename} removed]"
 
         # Build parts separately so history never contains the file contents
-        user_parts_for_provider = _build_internal_parts(provider_user_text, images)
+        user_parts_for_provider = await self._build_provider_parts(provider, provider_user_text, images)
         user_parts_for_history = _build_internal_parts(history_user_text, images)
 
         convo = [{"role": "system", "content": sys_prompt}]
-        for m in self.history[message.channel.id]:
+        # Only send the last N turns to reduce latency and token usage
+        recent_turns = list(self.history[message.channel.id])[-max(SEND_TURNS_LIMIT, 0):]
+        for m in recent_turns:
             content_or_parts = m.get("parts") if "parts" in m else m.get("content")
             if content_or_parts is None:
                 continue
-            convo.append({"role": m.get("role", "user"), "content": _to_provider_content(content_or_parts, provider)})
+            content_prepared = await self._prepare_provider_content(content_or_parts, provider)
+            convo.append({"role": m.get("role", "user"), "content": content_prepared})
         convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
 
         # Store only the sanitized version in history

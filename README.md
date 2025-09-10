@@ -85,6 +85,12 @@ generator class.
 
 Increase these if your provider/models are slow or you see timeout errors.
 
+System prompt (LLM chat):
+- Default prompt loads from `config/system_prompt.txt` if present.
+- Override path with env var `SYSTEM_PROMPT_FILE` (absolute or repo-root relative).
+- If no file is found/readable, a built-in fallback prompt is used.
+- The bot checks the file’s mtime at runtime and picks up changes without a restart. Users with a custom prompt set via `!system` are unaffected until they `!system reset`.
+
 Channel allowlists:
 - Set `STABLE_DIFFUSION_CHANNEL_IDS` to a comma-separated list of channel IDs to restrict general image-generation prompts to those channels. If unset or empty, image prompts are allowed in all guild channels.
 - Set `EDIT_CHANNEL_IDS` to a comma-separated list of channel IDs where the `edit:` command is allowed. When set, `edit:` is allowed in the union of `STABLE_DIFFUSION_CHANNEL_IDS` and `EDIT_CHANNEL_IDS`. DMs remain controlled by `STABLE_DIFFUSION_ALLOW_DMS`.

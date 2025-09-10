@@ -4,8 +4,17 @@ These are non-secret, stable texts better tracked in source control than
 environment variables. Secrets (API keys, tokens) must remain in .env.
 """
 
-# System prompt used by the text chat cog.
-DEFAULT_SYSTEM_PROMPT: str = (
+from __future__ import annotations
+
+import os
+from pathlib import Path
+from typing import Optional
+
+
+# --------------------- System prompt (LLM chat) ---------------------
+
+# Fallback default (used if no file is provided or readable).
+_FALLBACK_SYSTEM_PROMPT: str = (
     "You are a chat bot in a Discord server.\n\n"
     "Goal\n"
     "• Chat naturally: brief, practical, and easy to read.\n"
@@ -49,6 +58,78 @@ DEFAULT_SYSTEM_PROMPT: str = (
 )
 
 
+_SYSTEM_PROMPT_CACHE: Optional[str] = None
+_SYSTEM_PROMPT_MTIME: Optional[float] = None
+_SYSTEM_PROMPT_PATH: Optional[Path] = None
+
+
+def _project_root() -> Path:
+    """Return the repository root path if determinable from this file.
+
+    settings.py lives at src/hollingsbot/settings.py.
+    repo root is two levels up from src/hollingsbot -> src -> repo.
+    """
+    return Path(__file__).resolve().parents[2]
+
+
+def _candidate_prompt_paths() -> list[Path]:
+    """Return possible paths for the system prompt file.
+
+    Priority order:
+    1) SYSTEM_PROMPT_FILE (as-is); if relative, also try as repo-root-relative.
+    2) config/system_prompt.txt (repo-root-relative).
+    """
+    env_val = os.getenv("SYSTEM_PROMPT_FILE", "").strip()
+    candidates: list[Path] = []
+    if env_val:
+        p = Path(env_val).expanduser()
+        candidates.append(p)
+        if not p.is_absolute():
+            try:
+                candidates.append(_project_root() / p)
+            except Exception:
+                pass
+    try:
+        candidates.append(_project_root() / "config" / "system_prompt.txt")
+    except Exception:
+        pass
+    return candidates
+
+
+def get_default_system_prompt() -> str:
+    """Load the default system prompt from a file if available.
+
+    - If SYSTEM_PROMPT_FILE is set, use that path (absolute or repo-root-relative).
+    - Else, try repo-root `config/system_prompt.txt`.
+    - Fall back to the built-in prompt if none found/readable.
+
+    Uses a simple mtime cache to avoid re-reading unchanged files.
+    """
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH  # noqa: PLW0603
+
+    for path in _candidate_prompt_paths():
+        try:
+            if path.exists() and path.is_file():
+                mtime = path.stat().st_mtime
+                if _SYSTEM_PROMPT_PATH == path and _SYSTEM_PROMPT_CACHE is not None and _SYSTEM_PROMPT_MTIME == mtime:
+                    return _SYSTEM_PROMPT_CACHE
+                text = path.read_text(encoding="utf-8")
+                _SYSTEM_PROMPT_CACHE = text
+                _SYSTEM_PROMPT_MTIME = mtime
+                _SYSTEM_PROMPT_PATH = path
+                return text
+        except Exception:
+            continue
+    # No candidate usable; clear cache reference but keep last cached text if any
+    if _SYSTEM_PROMPT_CACHE is not None and _SYSTEM_PROMPT_PATH is not None:
+        return _SYSTEM_PROMPT_CACHE
+    return _FALLBACK_SYSTEM_PROMPT
+
+
+# Preserve existing import style for consumers
+DEFAULT_SYSTEM_PROMPT: str = get_default_system_prompt()
+
+
 # Prompt used by the EnhanceCog to expand and improve quoted text before
 # generating an accompanying image.
 ENHANCE_PROMPT: str = (
@@ -57,4 +138,3 @@ ENHANCE_PROMPT: str = (
     " but try to keep the same general message. Any quotes should remain as they"
     " are quoted. Only respond with the enhanced text, no commentary or formatting."
 )
-

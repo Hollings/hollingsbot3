@@ -40,6 +40,20 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
         await self.aclose()
 
+    def _supports_seed(self) -> bool:
+        m = self.model.lower()
+        # Restrict seed to models known to accept it (e.g., FLUX variants).
+        return ("black-forest-labs/" in m) or ("flux" in m)
+
+    def _supports_disable_safety(self) -> bool:
+        m = self.model.lower()
+        # Safety toggle is known for many FLUX models; avoid sending elsewhere.
+        return ("black-forest-labs/" in m) or ("flux" in m)
+
+    def _is_seedream(self) -> bool:
+        m = self.model.lower()
+        return ("bytedance/seedream-4" in m) or ("seedream-4" in m)
+
     async def generate(  # type: ignore[override]
         self,
         prompt: str,
@@ -54,6 +68,9 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         """
         try:
             inputs: dict[str, Any] = {"prompt": prompt}
+            # Prefer maximum resolution by default for Seedream-4
+            if self._is_seedream():
+                inputs["size"] = "4K"
 
             if image_input:
                 prepared, cleanup = self._prepare_image_inputs(image_input)
@@ -61,15 +78,16 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     inputs["image_input"] = prepared
                     if output_format:
                         inputs["output_format"] = output_format
-                    # Avoid unsupported fields for some Google models
-                    if seed is not None and not self.model.startswith("google/"):
+                    # Add seed only for models that are known to support it
+                    if seed is not None and self._supports_seed():
                         inputs["seed"] = seed
                     raw_output = await self._client.async_run(self.model, input=inputs)
                 finally:
                     self._cleanup_files(cleanup)
             else:
-                inputs["disable_safety_checker"] = True
-                if seed is not None:
+                if self._supports_disable_safety():
+                    inputs["disable_safety_checker"] = True
+                if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
                 raw_output = await self._client.async_run(self.model, input=inputs)
 

@@ -309,7 +309,15 @@ class ImageGenCog(commands.Cog):
         if getattr(spec, "mode", "") == "edit" and not all_edit_images:
             await self._react(message, THINKING, remove=True)
             await self._react(message, FAILURE)
-            await message.channel.send("No images found to edit. Reply to a message with an image or attach an image with your `edit:` prompt.")
+            try:
+                await message.reply(
+                    "No images found to edit. Reply to a message with an image or attach an image with your `edit:` prompt.",
+                    mention_author=False,
+                )
+            except Exception:
+                await message.channel.send(
+                    "No images found to edit. Reply to a message with an image or attach an image with your `edit:` prompt."
+                )
             return
 
         async def _launch_prompt(p: str) -> tuple[str, bytes] | Exception:
@@ -351,11 +359,22 @@ class ImageGenCog(commands.Cog):
                 captioned = img_bytes if do_edit else add_caption(img_bytes, prompt_text)
 
                 filename = self._build_filename(prompt_text, spec, seed)
-                await message.channel.send(file=discord.File(BytesIO(captioned), filename=filename))
+                file = discord.File(BytesIO(captioned), filename=filename)
+                if do_edit:
+                    await message.reply(file=file, mention_author=False)
+                else:
+                    await message.channel.send(file=file)
             except Exception as exc:
                 overall_success = False
                 _log.exception("Post-processing failed: %s", exc)
-                await message.channel.send(f"Image post-processing failed for **{prompt_variant}**:\n> {exc}")
+                text = f"Image post-processing failed for **{prompt_variant}**:\n> {exc}"
+                if do_edit:
+                    try:
+                        await message.reply(text, mention_author=False)
+                    except Exception:
+                        await message.channel.send(text)
+                else:
+                    await message.channel.send(text)
 
         await self._react(message, THINKING, remove=True)
         await self._react(message, SUCCESS if overall_success else FAILURE)

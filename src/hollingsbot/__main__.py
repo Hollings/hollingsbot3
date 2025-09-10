@@ -35,7 +35,7 @@ def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
             extras.append("!")
     return commands.when_mentioned_or(*extras)(bot, message)
 
-bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True)
+bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True, help_command=None)
 
 @bot.event
 async def on_ready():
@@ -57,6 +57,7 @@ async def main():
         await bot.load_extension("hollingsbot.cogs.image_gen_cog")
         await bot.load_extension("hollingsbot.cogs.gpt2_chat")
         await bot.load_extension("hollingsbot.cogs.admin")
+        await bot.load_extension("hollingsbot.cogs.gif_chain")
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
             await bot.load_extension("hollingsbot.cogs.starboard")
