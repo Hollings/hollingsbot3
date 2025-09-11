@@ -16,6 +16,7 @@ import discord
 from discord.ext import commands
 
 from hollingsbot.caption import add_caption
+from hollingsbot.utils.image_utils import compress_image_to_fit
 from hollingsbot.prompt_db import add_prompt, init_db
 from hollingsbot.tasks import generate_image  # celery task
 
@@ -29,7 +30,7 @@ THINKING = "\N{THINKING FACE}"
 SUCCESS = "\N{WHITE HEAVY CHECK MARK}"
 FAILURE = "\N{CROSS MARK}"
 
-_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB
+_MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB (fallback)
 
 
 @dataclass(frozen=True, slots=True)
@@ -145,7 +146,7 @@ class ImageGenCog(commands.Cog):
             image_input: list[bytes] | None = None,
             output_format: str | None = None,
             poll_interval: float = 0.5,
-    ) -> str:
+    ) -> str | list[str]:
         """
         Launch an image-generation task and poll. Keep routing through Celery.
         The task must accept image_input and output_format as keyword-only.
@@ -320,25 +321,32 @@ class ImageGenCog(commands.Cog):
                 )
             return
 
-        async def _launch_prompt(p: str) -> tuple[str, bytes] | Exception:
+        async def _launch_prompt(p: str) -> tuple[str, list[bytes]] | Exception:
             prompt_id = add_prompt(p, str(message.author.id), spec.api, spec.model)
             try:
                 # Route through Celery, passing image_input when editing
-                file_or_b64 = await self._run_task(
+                result_paths_or_b64 = await self._run_task(
                     prompt_id, spec.api, spec.model, p, seed,
                     image_input=all_edit_images if do_edit else None,
                     output_format="png" if do_edit else None,
                 )
-                img_path = Path(file_or_b64)
-                if img_path.exists():
-                    img_bytes = img_path.read_bytes()
-                    try:
-                        img_path.unlink(missing_ok=True)
-                    except Exception:
-                        _log.debug("Temp image %s could not be deleted", img_path)
+                def _load_one(item: str) -> bytes:
+                    ip = Path(item)
+                    if ip.exists():
+                        data = ip.read_bytes()
+                        try:
+                            ip.unlink(missing_ok=True)
+                        except Exception:
+                            _log.debug("Temp image %s could not be deleted", ip)
+                        return data
+                    return base64.b64decode(item)
+
+                images_bytes: list[bytes]
+                if isinstance(result_paths_or_b64, list):
+                    images_bytes = [_load_one(x) for x in result_paths_or_b64]
                 else:
-                    img_bytes = base64.b64decode(file_or_b64)
-                return p, img_bytes
+                    images_bytes = [_load_one(result_paths_or_b64)]
+                return p, images_bytes
             except Exception as exc:
                 return exc
 
@@ -351,19 +359,54 @@ class ImageGenCog(commands.Cog):
                 _log.exception("Generation failed for %r: %s", prompt_variant, result)
                 continue
 
-            prompt_text, img_bytes = result
+            prompt_text, images_bytes = result
             try:
-                if len(img_bytes) > _MAX_DISCORD_FILESIZE:
-                    raise RuntimeError("Image exceeds Discord 25 MiB limit.")
+                # Determine the actual per-file limit for this guild/channel if available
+                guild_limit = getattr(message.guild, "filesize_limit", None)
+                limit_bytes = int(guild_limit) if guild_limit else (8 * 2**20)
+                # Safety fallback to previous constant if env provides higher limit
+                limit_bytes = max(1, int(limit_bytes))
 
-                captioned = img_bytes if do_edit else add_caption(img_bytes, prompt_text)
+                files: list[discord.File] = []
+                base_name = self._build_filename(prompt_text, spec, seed)
+                root, _orig_ext = (base_name.rsplit('.', 1) + ["png"])[:2]
 
-                filename = self._build_filename(prompt_text, spec, seed)
-                file = discord.File(BytesIO(captioned), filename=filename)
+                for idx, img_b in enumerate(images_bytes, start=1):
+                    # Optionally add caption (generation mode only)
+                    processed = img_b if do_edit else add_caption(img_b, prompt_text)
+
+                    # Compress if needed to fit under Discord's upload limit
+                    if len(processed) > limit_bytes:
+                        processed, new_ext = compress_image_to_fit(processed, limit_bytes)
+                    else:
+                        new_ext = "png" if (not do_edit) else "png"
+
+                    # If still too large even after compression, try a harder squeeze once more
+                    if len(processed) > limit_bytes:
+                        processed, new_ext = compress_image_to_fit(processed, int(limit_bytes * 0.95))
+
+                    if len(processed) > limit_bytes:
+                        # Could not compress under limit; skip this one
+                        _log.warning("Image still exceeds limit after compression: %d > %d", len(processed), limit_bytes)
+                        continue
+
+                    # Name with index if there are multiple results
+                    fname = (
+                        f"{root}.{new_ext}"
+                        if len(images_bytes) == 1
+                        else f"{root}_{idx}.{new_ext}"
+                    )
+                    files.append(discord.File(BytesIO(processed), filename=fname))
+
+                if not files:
+                    raise RuntimeError(
+                        f"All generated images exceed Discord limit (>{limit_bytes} bytes) even after compression."
+                    )
+
                 if do_edit:
-                    await message.reply(file=file, mention_author=False)
+                    await message.reply(files=files, mention_author=False)
                 else:
-                    await message.channel.send(file=file)
+                    await message.channel.send(files=files)
             except Exception as exc:
                 overall_success = False
                 _log.exception("Post-processing failed: %s", exc)

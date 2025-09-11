@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass, field
+import logging
 from typing import Any, AsyncIterator, Final, Sequence, BinaryIO
 from tempfile import NamedTemporaryFile
 
@@ -26,6 +27,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
 
     def __post_init__(self) -> None:
+        self._log = logging.getLogger(__name__)
         if not self.api_token:
             raise RuntimeError(
                 "REPLICATE_API_TOKEN is required. "
@@ -68,9 +70,10 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         """
         try:
             inputs: dict[str, Any] = {"prompt": prompt}
-            # Prefer maximum resolution by default for Seedream-4
+            # Prefer maximum resolution and sequential generation by default for Seedream-4
             if self._is_seedream():
                 inputs["size"] = "4K"
+                inputs["sequential_image_generation"] = "auto"
 
             if image_input:
                 prepared, cleanup = self._prepare_image_inputs(image_input)
@@ -78,17 +81,34 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     inputs["image_input"] = prepared
                     if output_format:
                         inputs["output_format"] = output_format
+                    # For Seedream, cap max_images so (input + generated) <= 15, default target = 4
+                    if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
+                        allowed = max(0, 15 - len(prepared))
+                        if allowed >= 1:
+                            inputs["max_images"] = min(4, allowed)
+                        else:
+                            # No room to generate; disable grouping to avoid API error
+                            inputs["sequential_image_generation"] = "disabled"
                     # Add seed only for models that are known to support it
                     if seed is not None and self._supports_seed():
                         inputs["seed"] = seed
+                    self._log.info(
+                        "Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys())
+                    )
                     raw_output = await self._client.async_run(self.model, input=inputs)
                 finally:
                     self._cleanup_files(cleanup)
             else:
                 if self._supports_disable_safety():
                     inputs["disable_safety_checker"] = True
+                # For Seedream default to up to 4 images when sequential generation is auto
+                if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
+                    inputs["max_images"] = 4
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
+                self._log.info(
+                    "Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys())
+                )
                 raw_output = await self._client.async_run(self.model, input=inputs)
 
             return await self._normalise_output(raw_output)
@@ -133,6 +153,102 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return await self._download(data)
 
         raise RuntimeError(f"Unsupported Replicate output type: {type(data).__name__}")
+
+    async def _collect_all(self, data: Any) -> list[bytes]:
+        """Recursively collect all image bytes from Replicate outputs.
+
+        Supports lists/tuples of URLs or file-like objects, async iterators that yield
+        results, or single URL/bytes. Non-image scalars are ignored.
+        """
+        out: list[bytes] = []
+
+        # Bytes directly
+        if isinstance(data, (bytes, bytearray)):
+            out.append(bytes(data))
+            return out
+
+        # URL or FileOutput-like
+        if isinstance(data, str) and data.startswith(("http://", "https://")):
+            out.append(await self._download(data))
+            return out
+
+        if isinstance(data, self._StreamTypes) and not isinstance(data, (bytes, bytearray)):
+            out.append(await self._download(str(data)))
+            return out
+
+        # Async iterator / stream
+        if isinstance(data, AsyncIterator) or hasattr(data, "__aiter__"):
+            async for item in data:  # type: ignore[assignment]
+                out.extend(await self._collect_all(item))
+            return out
+
+        # Sequences (lists/tuples)
+        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+            for item in data:
+                out.extend(await self._collect_all(item))
+            return out
+
+        # Fallback: nothing recognized
+        return out
+
+    async def generate_many(
+        self,
+        prompt: str,
+        *,
+        seed: int | None = None,
+        image_input: Sequence[Any] | None = None,
+        output_format: str | None = None,
+    ) -> list[bytes]:
+        """Generate one or more images and return all results as a list of bytes.
+
+        - For multi-image-capable models like Seedream-4 (with
+          sequential_image_generation='auto'), this returns all images.
+        - For single-image models, the list has a single element.
+        """
+        inputs: dict[str, Any] = {"prompt": prompt}
+        if self._is_seedream():
+            inputs["size"] = "4K"
+            inputs["sequential_image_generation"] = "auto"
+            inputs.setdefault("max_images", 4)
+
+        if image_input:
+            prepared, cleanup = self._prepare_image_inputs(image_input)
+            try:
+                inputs["image_input"] = prepared
+                if output_format:
+                    inputs["output_format"] = output_format
+                if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
+                    allowed = max(0, 15 - len(prepared))
+                    if allowed >= 1:
+                        inputs["max_images"] = min(inputs.get("max_images", 4), allowed)
+                    else:
+                        inputs["sequential_image_generation"] = "disabled"
+                if seed is not None and self._supports_seed():
+                    inputs["seed"] = seed
+                self._log.info(
+                    "Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys())
+                )
+                raw_output = await self._client.async_run(self.model, input=inputs)
+            finally:
+                self._cleanup_files(cleanup)
+        else:
+            if self._supports_disable_safety():
+                inputs["disable_safety_checker"] = True
+            if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
+                inputs.setdefault("max_images", 4)
+            if seed is not None and self._supports_seed():
+                inputs["seed"] = seed
+            self._log.info(
+                "Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys())
+            )
+            raw_output = await self._client.async_run(self.model, input=inputs)
+
+        results = await self._collect_all(raw_output)
+        # Ensure at least one image (raise if empty to keep callers aware)
+        if not results:
+            # fall back to the single-image normalizer to raise a clearer error
+            await self._normalise_output(raw_output)
+        return results
 
     async def _download(self, url: str) -> bytes:
         if self._session is None or self._session.closed:

@@ -48,7 +48,7 @@ def generate_image(  # noqa: C901
     output_format: str | None = None,
     # Existing kwarg
     timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
-) -> str:
+) -> str | list[str]:
     """
     Generate an image, write it to disk, and return the file path.
     Supports editing when image_input is provided.
@@ -68,8 +68,10 @@ def generate_image(  # noqa: C901
 
     generator = get_image_generator(api, model)
     gen_sig = signature(generator.generate)
+    gen_many = getattr(generator, "generate_many", None)
+    gen_many_sig = signature(gen_many) if callable(gen_many) else None
 
-    async def _run() -> bytes:
+    async def _run_single() -> bytes:
         kwargs = {}
         if "seed" in gen_sig.parameters:
             kwargs["seed"] = seed
@@ -79,8 +81,23 @@ def generate_image(  # noqa: C901
             kwargs["output_format"] = output_format
         return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
 
+    async def _run_many() -> list[bytes]:
+        assert gen_many_sig is not None
+        kwargs = {}
+        if "seed" in gen_many_sig.parameters:
+            kwargs["seed"] = seed
+        if image_input and "image_input" in gen_many_sig.parameters:
+            kwargs["image_input"] = image_input
+        if output_format and "output_format" in gen_many_sig.parameters:
+            kwargs["output_format"] = output_format
+        return await asyncio.wait_for(gen_many(prompt, **kwargs), timeout)  # type: ignore[misc]
+
     try:
-        image_bytes: bytes = asyncio.run(_run())
+        # Prefer multi-image generation when available
+        if callable(gen_many):
+            images_bytes: list[bytes] = asyncio.run(_run_many())
+        else:
+            image_bytes: bytes = asyncio.run(_run_single())
     except asyncio.TimeoutError as exc:
         err = f"Generation exceeded {timeout}s timeout."
         logger.error("generate_image[%s] TIMEOUT: %s", prompt_id, err)
@@ -99,20 +116,38 @@ def generate_image(  # noqa: C901
         except Exception:
             logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
 
-    filename = f"{prompt_id}_{int(time.time())}.png"
-    file_path = OUTPUT_DIR / filename
-    file_path.write_bytes(image_bytes)
+    ts = int(time.time())
+    if callable(gen_many):
+        # Write all images and return list of paths
+        if not images_bytes:
+            raise RuntimeError("Generator returned no images.")
+        paths: list[str] = []
+        for idx, img in enumerate(images_bytes, start=1):
+            filename = f"{prompt_id}_{ts}_{idx:02d}.png"
+            fp = OUTPUT_DIR / filename
+            fp.write_bytes(img)
+            paths.append(str(fp))
+        update_status(prompt_id, "completed")
+        duration = time.monotonic() - start
+        logger.info(
+            "generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths)
+        )
+        return paths
+    else:
+        filename = f"{prompt_id}_{ts}.png"
+        file_path = OUTPUT_DIR / filename
+        file_path.write_bytes(image_bytes)
 
-    update_status(prompt_id, "completed")
-    duration = time.monotonic() - start
-    logger.info(
-        "generate_image[%s] FINISH in %.2fs | wrote %s (size=%d bytes)",
-        prompt_id,
-        duration,
-        file_path,
-        len(image_bytes),
-    )
-    return str(file_path)
+        update_status(prompt_id, "completed")
+        duration = time.monotonic() - start
+        logger.info(
+            "generate_image[%s] FINISH in %.2fs | wrote %s (size=%d bytes)",
+            prompt_id,
+            duration,
+            file_path,
+            len(image_bytes),
+        )
+        return str(file_path)
 
 
 @celery_app.task(name="tasks.generate_text", queue="text")
