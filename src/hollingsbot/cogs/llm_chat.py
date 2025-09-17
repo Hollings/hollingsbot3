@@ -5,7 +5,7 @@ import io
 import asyncio
 import collections
 import logging
-from typing import Iterable, List, Dict, Any
+from typing import Iterable, List, Dict, Any, Optional
 import base64
 from PIL import Image
 import aiohttp
@@ -112,6 +112,56 @@ def _to_provider_content(parts_or_text: Any, provider: str) -> Any:
     return out if out else ""
 
 
+class _DebouncedGeneration:
+    __slots__ = ("channel_id", "message_id", "task", "async_result", "cancel_requested")
+
+    def __init__(self, channel_id: int, message_id: int) -> None:
+        self.channel_id = channel_id
+        self.message_id = message_id
+        self.task: Optional[asyncio.Task] = None
+        self.async_result: Any | None = None
+        self.cancel_requested = False
+
+    async def cancel(self) -> None:
+        if self.cancel_requested:
+            return
+        self.cancel_requested = True
+
+        async_result = self.async_result
+        if async_result is not None:
+            try:
+                ready = getattr(async_result, "ready", None)
+                if callable(ready) and ready():
+                    self.async_result = None
+                    async_result = None
+            except Exception:
+                # If ready() itself fails, continue with revoke attempt.
+                pass
+
+        if async_result is not None:
+            try:
+                await asyncio.to_thread(async_result.revoke, terminate=True)
+            except Exception as exc:  # noqa: BLE001
+                _log.debug(
+                    "Failed to revoke pending LLM generation for channel %s: %s",
+                    self.channel_id,
+                    exc,
+                )
+
+        task = self.task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                _log.debug(
+                    "Debounced generation task for channel %s raised during cancel",
+                    self.channel_id,
+                    exc_info=True,
+                )
+
 class LLMAPIChat(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -119,6 +169,7 @@ class LLMAPIChat(commands.Cog):
         self.system_prompts = {}
         self._preload_once = False
         self._warming: set[int] = set()
+        self._inflight_generations: Dict[int, _DebouncedGeneration] = {}
 
     async def _attachment_to_data_url(
         self,
@@ -187,11 +238,10 @@ class LLMAPIChat(commands.Cog):
         for att in images:
             media_type = att.content_type if (att.content_type and att.content_type.startswith("image/")) else None
             url = att.url
-            # For OpenAI, reduce images that exceed 9.5 MiB to a data URL below 10 MiB
+            # For OpenAI, always prefer a data URL to avoid provider-side fetch failures
             if provider == "openai":
                 try:
-                    if getattr(att, "size", 0) and att.size > 9_500_000:
-                        url = await self._attachment_to_data_url(att)
+                    url = await self._attachment_to_data_url(att)
                 except Exception:
                     # On failure, fall back to original URL
                     url = att.url
@@ -287,11 +337,18 @@ class LLMAPIChat(commands.Cog):
             try:
                 if p.get("kind") == "image":
                     url = p.get("url")
+                    # Only allow http(s) or data URLs; drop anything else to avoid provider 400s
+                    if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://") or url.startswith("data:")):
+                        continue
                     if isinstance(url, str) and not url.startswith("data:"):
                         try:
                             url = await self._url_to_data_url(url)
                         except Exception:
-                            pass
+                            # Failed to fetch/convert -> drop this image from the prompt
+                            continue
+                        # If conversion didn't result in a data URL, drop to avoid provider-side fetch
+                        if not isinstance(url, str) or not url.startswith("data:"):
+                            continue
                     np = dict(p)
                     np["url"] = url
                     new_parts.append(np)
@@ -480,133 +537,230 @@ class LLMAPIChat(commands.Cog):
         self.system_prompts[key] = text.strip()
         await ctx.reply(f"System prompt set for you:\n```\n{text.strip()}\n```")
 
+    async def _start_debounced_generation(self, message: discord.Message) -> None:
+        channel_id = message.channel.id
+        prev = self._inflight_generations.get(channel_id)
+        if prev is not None:
+            await prev.cancel()
+
+        handle = _DebouncedGeneration(channel_id, message.id)
+        task = asyncio.create_task(self._run_generation(message, handle))
+        handle.task = task
+        self._inflight_generations[channel_id] = handle
+
+        def _log_task_result(task_obj: asyncio.Task) -> None:
+            try:
+                task_obj.result()
+            except asyncio.CancelledError:
+                pass
+            except Exception:  # noqa: BLE001
+                _log.exception(
+                    "LLM chat task failed for channel %s during debounce handling",
+                    channel_id,
+                )
+
+        task.add_done_callback(_log_task_result)
+
+    async def _run_generation(self, message: discord.Message, handle: _DebouncedGeneration) -> None:
+        channel_id = message.channel.id
+        appended_user_history = False
+        user_history_entry: Optional[Dict[str, Any]] = None
+
+        images: List[discord.Attachment] = []
+        text_files: List[discord.Attachment] = []
+
+        try:
+            gid = message.guild.id if message.guild else 0
+            key = (gid, message.author.id)
+            sys_prompt = self.system_prompts.get(key, get_default_system_prompt())
+            pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
+            provider, model = pref
+
+            images = [att for att in message.attachments if _is_image_attachment(att)]
+            text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
+
+            replied_msg: discord.Message | None = None
+            if message.reference is not None:
+                resolved = getattr(message.reference, "resolved", None)
+                if isinstance(resolved, discord.Message):
+                    replied_msg = resolved
+                else:
+                    ref_id = getattr(message.reference, "message_id", None)
+                    if ref_id:
+                        try:
+                            replied_msg = await message.channel.fetch_message(ref_id)
+                        except Exception:
+                            replied_msg = None
+
+            reply_prefix = ""
+            if replied_msg is not None:
+                reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
+                reply_text = (replied_msg.content or "").strip()
+                reply_prefix = (
+                    f"(Replying to <{reply_author}>: {reply_text})\n"
+                    if reply_text
+                    else f"(Replying to <{reply_author}>.)\n"
+                )
+                reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
+                if reply_images:
+                    seen_urls = {att.url for att in images}
+                    for att in reply_images:
+                        if att.url not in seen_urls:
+                            images.append(att)
+                            seen_urls.add(att.url)
+
+            user_text_base = f"<{message.author.display_name}> {message.content}".strip()
+            provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+            history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+
+            if text_files:
+                for att in text_files:
+                    history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+
+            user_parts_for_history = _build_internal_parts(history_user_text, images)
+            user_history_entry = {"role": "user", "parts": user_parts_for_history}
+
+            recent_turns = list(self.history[channel_id])[-max(SEND_TURNS_LIMIT, 0):]
+
+            convo = [{"role": "system", "content": sys_prompt}]
+            for m in recent_turns:
+                content_or_parts = m.get("parts") if "parts" in m else m.get("content")
+                if content_or_parts is None:
+                    continue
+                content_prepared = await self._prepare_provider_content(content_or_parts, provider)
+                convo.append({"role": m.get("role", "user"), "content": content_prepared})
+
+            if text_files:
+                for att in text_files:
+                    try:
+                        raw = await att.read()
+                        decoded = raw.decode("utf-8", errors="replace")
+                    except Exception:
+                        decoded = "[error reading file]"
+                    provider_user_text += (
+                        f"\n\n[begin uploaded file: {att.filename}]\n{decoded}\n[end uploaded file]"
+                    )
+
+            user_parts_for_provider = await self._build_provider_parts(provider, provider_user_text, images)
+            convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
+
+            self.history[channel_id].append(user_history_entry)
+            appended_user_history = True
+
+            async with message.channel.typing():
+                async_result = await asyncio.to_thread(generate_text.delay, provider, model, convo)
+                handle.async_result = async_result
+                try:
+                    reply_text: str = await asyncio.to_thread(async_result.get, timeout=TEXT_TIMEOUT)
+                except Exception as exc:
+                    if handle.cancel_requested:
+                        raise asyncio.CancelledError
+                    await message.channel.send(f"Generation failed: {exc}")
+                    return
+                finally:
+                    handle.async_result = None
+
+            if handle.cancel_requested:
+                raise asyncio.CancelledError
+
+            cleaned_text, svg_files = extract_render_and_strip_svgs(reply_text)
+
+            attachments = []
+            if len(cleaned_text) > 2000:
+                def repl(match: re.Match) -> str:
+                    lang = match.group(1) or "txt"
+                    code = match.group(2)
+                    filename = f"code.{lang.strip() if lang.strip() else 'txt'}"
+                    buf = io.BytesIO(code.encode("utf-8"))
+                    attachments.append((filename, buf))
+                    return f"[see file: {filename}]"
+
+                cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
+
+            if handle.cancel_requested:
+                raise asyncio.CancelledError
+
+            self.history[channel_id].append({"role": "assistant", "parts": [{"kind": "text", "text": cleaned_text}]})
+
+            for chunk in _chunks(cleaned_text):
+                if handle.cancel_requested:
+                    raise asyncio.CancelledError
+                await message.channel.send(chunk)
+
+            for filename, buf in attachments:
+                if handle.cancel_requested:
+                    raise asyncio.CancelledError
+                buf.seek(0)
+                await message.channel.send(file=discord.File(buf, filename))
+
+            for filename, buf in svg_files:
+                if handle.cancel_requested:
+                    raise asyncio.CancelledError
+                buf.seek(0)
+                await message.channel.send(file=discord.File(buf, filename))
+
+        except asyncio.CancelledError:
+            if not appended_user_history and user_history_entry is not None:
+                self.history[channel_id].append(user_history_entry)
+                appended_user_history = True
+            elif not appended_user_history:
+                fallback_text = f"<{message.author.display_name}> {(message.content or '').strip()}".strip()
+                fallback_entry = {"role": "user", "parts": _build_internal_parts(fallback_text, images)}
+                self.history[channel_id].append(fallback_entry)
+                appended_user_history = True
+
+            async_result = handle.async_result
+            if async_result is not None:
+                try:
+                    ready = getattr(async_result, "ready", None)
+                    if not (callable(ready) and ready()):
+                        await asyncio.to_thread(async_result.revoke, terminate=True)
+                except Exception:
+                    _log.debug(
+                        "Failed to revoke cancelled LLM generation for channel %s",
+                        channel_id,
+                        exc_info=True,
+                    )
+            handle.async_result = None
+            raise
+
+        except Exception as exc:  # noqa: BLE001
+            if not appended_user_history and user_history_entry is not None:
+                self.history[channel_id].append(user_history_entry)
+                appended_user_history = True
+            elif not appended_user_history:
+                fallback_text = f"<{message.author.display_name}> {(message.content or '').strip()}".strip()
+                fallback_entry = {"role": "user", "parts": _build_internal_parts(fallback_text, images)}
+                self.history[channel_id].append(fallback_entry)
+                appended_user_history = True
+
+            if not handle.cancel_requested:
+                _log.exception("LLM generation failed for channel %s", channel_id)
+                try:
+                    await message.channel.send(f"Generation failed: {exc}")
+                except Exception:  # noqa: BLE001
+                    _log.debug("Unable to notify channel %s about failure", channel_id, exc_info=True)
+
+        finally:
+            handle.async_result = None
+            current = self._inflight_generations.get(channel_id)
+            if current is handle:
+                self._inflight_generations.pop(channel_id, None)
+
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message):
         if message.author.bot:
             return
         if message.channel.id not in WHITELIST:
             return
-        # Ignore explicit commands and image edit prompts (handled by image cog)
         content_clean = (message.content or "").strip()
         if content_clean.startswith(("!", "-")):
             return
         if content_clean.lower().startswith("edit:"):
             return
 
-        # Ensure history is warmed for this channel in case preload hasn't finished yet
         await self._ensure_history_for_message_channel(message)
-
-        gid = message.guild.id if message.guild else 0
-        key = (gid, message.author.id)
-        sys_prompt = self.system_prompts.get(key, get_default_system_prompt())
-        pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
-        provider, model = pref
-
-        # Collect images from this message and, if replying, from the referenced message too.
-        images = [att for att in message.attachments if _is_image_attachment(att)]
-        text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
-
-        replied_msg: discord.Message | None = None
-        if message.reference is not None:
-            # Try to resolve locally first; fall back to fetch by ID
-            resolved = getattr(message.reference, "resolved", None)
-            if isinstance(resolved, discord.Message):
-                replied_msg = resolved
-            else:
-                ref_id = getattr(message.reference, "message_id", None)
-                if ref_id:
-                    try:
-                        replied_msg = await message.channel.fetch_message(ref_id)
-                    except Exception:
-                        replied_msg = None
-
-        # Build a reply context prefix and merge in images from the replied message
-        reply_prefix = ""
-        if replied_msg is not None:
-            reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
-            reply_text = (replied_msg.content or "").strip()
-            if reply_text:
-                reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n"
-            else:
-                reply_prefix = f"(Replying to <{reply_author}>.)\n"
-            # Merge in image attachments from the replied message
-            reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
-            if reply_images:
-                # Deduplicate by URL to avoid repeats
-                seen_urls = {att.url for att in images}
-                for att in reply_images:
-                    if att.url not in seen_urls:
-                        images.append(att)
-                        seen_urls.add(att.url)
-
-        # No timestamps in history or provider content
-        user_text_base = f"<{message.author.display_name}> {message.content}".strip()
-        provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
-        history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
-
-        # Inline text files for the model for this turn only. Persist a small note instead.
-        if text_files:
-            for att in text_files:
-                try:
-                    raw = await att.read()
-                    decoded = raw.decode("utf-8", errors="replace")
-                except Exception:
-                    decoded = "[error reading file]"
-                provider_user_text += f"\n\n[begin uploaded file: {att.filename}]\n{decoded}\n[end uploaded file]"
-                history_user_text += f"\n\n[uploaded file {att.filename} removed]"
-
-        # Build parts separately so history never contains the file contents
-        user_parts_for_provider = await self._build_provider_parts(provider, provider_user_text, images)
-        user_parts_for_history = _build_internal_parts(history_user_text, images)
-
-        convo = [{"role": "system", "content": sys_prompt}]
-        # Only send the last N turns to reduce latency and token usage
-        recent_turns = list(self.history[message.channel.id])[-max(SEND_TURNS_LIMIT, 0):]
-        for m in recent_turns:
-            content_or_parts = m.get("parts") if "parts" in m else m.get("content")
-            if content_or_parts is None:
-                continue
-            content_prepared = await self._prepare_provider_content(content_or_parts, provider)
-            convo.append({"role": m.get("role", "user"), "content": content_prepared})
-        convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
-
-        # Store only the sanitized version in history
-        self.history[message.channel.id].append({"role": "user", "parts": user_parts_for_history})
-
-        async with message.channel.typing():
-            async_result = await asyncio.to_thread(generate_text.delay, provider, model, convo)
-            try:
-                reply_text: str = await asyncio.to_thread(async_result.get, timeout=TEXT_TIMEOUT)
-            except Exception as exc:
-                await message.channel.send(f"Generation failed: {exc}")
-                return
-
-        # SVG handling FIRST: detect, render or attach, and strip with a note.
-        cleaned_text, svg_files = extract_render_and_strip_svgs(reply_text)
-
-        # Then do large-reply code or file extraction on the already cleaned text.
-        attachments = []
-        if len(cleaned_text) > 2000:
-            def repl(match: re.Match) -> str:
-                lang = match.group(1) or "txt"
-                code = match.group(2)
-                filename = f"code.{lang.strip() if lang.strip() else 'txt'}"
-                buf = io.BytesIO(code.encode("utf-8"))
-                attachments.append((filename, buf))
-                return f"[see file: {filename}]"
-            cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
-
-        # Store assistant reply without timestamp in history
-        self.history[message.channel.id].append({"role": "assistant", "parts": [{"kind": "text", "text": cleaned_text}]})
-
-        for chunk in _chunks(cleaned_text):
-            await message.channel.send(chunk)
-        for filename, buf in attachments:
-            buf.seek(0)
-            await message.channel.send(file=discord.File(buf, filename))
-        for filename, buf in svg_files:
-            buf.seek(0)
-            await message.channel.send(file=discord.File(buf, filename))
+        await self._start_debounced_generation(message)
 
     @commands.command(name="h")
     async def help_command(self, ctx: commands.Context) -> None:
