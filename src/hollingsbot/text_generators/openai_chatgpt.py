@@ -21,7 +21,7 @@ class _Message(TypedDict):
 class OpenAIChatTextGenerator(TextGeneratorAPI):
     """Text-generation backend for OpenAI models.
 
-    - Defaults to "gpt-5" and uses the Responses API with low reasoning effort.
+    - Defaults to "gpt-5" and uses the Responses API.
     - Falls back to Chat Completions for non-gpt-5 models (e.g., gpt-4o).
 
     Requires OPENAI_API_KEY in the environment.
@@ -163,16 +163,14 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
 
         client = self._get_client()
 
-        # gpt-5 path: use Responses API with reasoning={effort: low}; preserve roles and images
+        # gpt-5 path: use Responses API; preserve roles and images
         if self._is_gpt5():
             instructions, input_messages = self._to_responses_easy_input(messages)
-            # Tune reasoning + cap output to improve latency.
-            effort = os.getenv("OPENAI_REASONING_EFFORT", "low").lower()
+            # Cap output to improve latency.
             max_tokens = int(os.getenv("TEXT_MAX_OUTPUT_TOKENS", "800"))
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "input": input_messages,
-                "reasoning": {"effort": effort},
                 "max_output_tokens": max_tokens,
             }
             if instructions:

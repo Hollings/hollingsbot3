@@ -15,7 +15,7 @@ import discord
 from discord.ext import commands
 
 from hollingsbot.tasks import generate_text
-from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT, get_default_system_prompt
+from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT
 from hollingsbot.prompt_db import get_model_pref, set_model_pref
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
@@ -166,10 +166,29 @@ class LLMAPIChat(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.history = collections.defaultdict(lambda: collections.deque(maxlen=HISTORY_LIMIT))
-        self.system_prompts = {}
+        self.system_prompt = DEFAULT_SYSTEM_PROMPT
+        self._prompt_changed_at = datetime.min.replace(tzinfo=timezone.utc)
         self._preload_once = False
         self._warming: set[int] = set()
         self._inflight_generations: Dict[int, _DebouncedGeneration] = {}
+
+    @staticmethod
+    def _prompt_file(prompt: str, filename: str = "system_prompt.txt") -> discord.File:
+        buf = io.BytesIO(prompt.encode("utf-8"))
+        buf.seek(0)
+        return discord.File(buf, filename)
+
+    async def _cancel_all_inflight(self) -> None:
+        if not self._inflight_generations:
+            return
+        handles = list(self._inflight_generations.values())
+        await asyncio.gather(*(handle.cancel() for handle in handles), return_exceptions=True)
+        self._inflight_generations.clear()
+
+    async def _on_system_prompt_changed(self) -> None:
+        self._prompt_changed_at = datetime.now(timezone.utc)
+        await self._cancel_all_inflight()
+        self.history.clear()
 
     async def _attachment_to_data_url(
         self,
@@ -398,6 +417,12 @@ class LLMAPIChat(commands.Cog):
         dq = collections.deque(maxlen=HISTORY_LIMIT)
         for m in msgs:
             try:
+                created_at = getattr(m, "created_at", None)
+                if created_at is not None:
+                    if created_at.tzinfo is None:
+                        created_at = created_at.replace(tzinfo=timezone.utc)
+                    if created_at < self._prompt_changed_at:
+                        continue
                 # Ignore commands and unrelated bots
                 if m.content.startswith(("!", "-")):
                     continue
@@ -521,21 +546,44 @@ class LLMAPIChat(commands.Cog):
     async def set_system_prompt(self, ctx: commands.Context, *, text: str = None) -> None:
         if ctx.channel.id not in WHITELIST:
             return
-        gid = ctx.guild.id if ctx.guild else 0
-        key = (gid, ctx.author.id)
-        current = self.system_prompts.get(key, get_default_system_prompt())
-        # No args shows current prompt and does not change it
-        if text is None or not text.strip():
-            await ctx.reply(f"Your current system prompt is:\n```\n{current}\n```")
+        current = self.system_prompt
+        trimmed = text.strip() if text is not None else ""
+
+        if not trimmed:
+            await ctx.reply(
+                "Current global system prompt is attached.",
+                file=self._prompt_file(current, "system_prompt.txt"),
+            )
             return
-        cmd = text.strip().lower()
-        if cmd in {"clear", "reset"}:
-            new_default = get_default_system_prompt()
-            self.system_prompts[key] = new_default
-            await ctx.reply(f"Your system prompt has been reset to the default:\n```\n{new_default}\n```")
+
+        if trimmed.lower() == "reset":
+            if current == DEFAULT_SYSTEM_PROMPT:
+                await ctx.reply(
+                    "System prompt is already the default; current prompt attached.",
+                    file=self._prompt_file(current, "system_prompt.txt"),
+                )
+                return
+            self.system_prompt = DEFAULT_SYSTEM_PROMPT
+            await self._on_system_prompt_changed()
+            await ctx.reply(
+                "System prompt reset to default for all channels; see attached prompt.",
+                file=self._prompt_file(DEFAULT_SYSTEM_PROMPT, "system_prompt.txt"),
+            )
             return
-        self.system_prompts[key] = text.strip()
-        await ctx.reply(f"System prompt set for you:\n```\n{text.strip()}\n```")
+
+        if trimmed == current:
+            await ctx.reply(
+                "System prompt unchanged; current prompt attached.",
+                file=self._prompt_file(current, "system_prompt.txt"),
+            )
+            return
+
+        self.system_prompt = trimmed
+        await self._on_system_prompt_changed()
+        await ctx.reply(
+            "System prompt updated globally; see attached prompt.",
+            file=self._prompt_file(trimmed, "system_prompt.txt"),
+        )
 
     async def _start_debounced_generation(self, message: discord.Message) -> None:
         channel_id = message.channel.id
@@ -571,8 +619,7 @@ class LLMAPIChat(commands.Cog):
 
         try:
             gid = message.guild.id if message.guild else 0
-            key = (gid, message.author.id)
-            sys_prompt = self.system_prompts.get(key, get_default_system_prompt())
+            sys_prompt = self.system_prompt
             pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
             provider, model = pref
 
@@ -773,9 +820,9 @@ class LLMAPIChat(commands.Cog):
             "`!model <name>` - Set your preferred model from the list.\n"
             "\n"
             "__System Prompt__\n"
-            "`!system` - Show your current system prompt.\n"
-            "`!system <text>` - Set a custom system prompt for your replies.\n"
-            "`!system clear` or `!system reset` - Reset your system prompt to the default.\n"
+            "`!system` - Show the current global system prompt (as a file).\n"
+            "`!system <text>` - Set a new global system prompt; clears chat history.\n"
+            "`!system reset` - Restore the default prompt; clears chat history.\n"
             "\n"
             "__Conversation Behavior__\n"
             "- The bot responds automatically to all non-command messages in allowed channels.\n"

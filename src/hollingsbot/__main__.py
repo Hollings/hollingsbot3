@@ -53,15 +53,21 @@ async def restart_task():
 
 async def main():
     async with bot:
-        await bot.load_extension("hollingsbot.cogs.general")
-        await bot.load_extension("hollingsbot.cogs.image_gen_cog")
-        await bot.load_extension("hollingsbot.cogs.gpt2_chat")
-        await bot.load_extension("hollingsbot.cogs.admin")
-        await bot.load_extension("hollingsbot.cogs.gif_chain")
+        async def _ensure_loaded(name: str) -> None:
+            # Avoid double-loading across crash/retry loops
+            if name in bot.extensions:
+                return
+            await bot.load_extension(name)
+
+        await _ensure_loaded("hollingsbot.cogs.general")
+        await _ensure_loaded("hollingsbot.cogs.image_gen_cog")
+        await _ensure_loaded("hollingsbot.cogs.gpt2_chat")
+        await _ensure_loaded("hollingsbot.cogs.admin")
+        await _ensure_loaded("hollingsbot.cogs.gif_chain")
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
-            await bot.load_extension("hollingsbot.cogs.starboard")
-        await bot.load_extension("hollingsbot.cogs.llm_chat")
+            await _ensure_loaded("hollingsbot.cogs.starboard")
+        await _ensure_loaded("hollingsbot.cogs.llm_chat")
         logger.info("starting bot")
         await bot.start(token)
 

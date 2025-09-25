@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 from PIL import Image
 import openai
+from hollingsbot.image_generators.upscalers import RealESRGANUpscaler
 
 
 class ImageEditCog(commands.Cog):
@@ -26,6 +27,14 @@ class ImageEditCog(commands.Cog):
         self.bot = bot
         openai.api_key = os.getenv("OPENAI_API_KEY")
         self.model = model
+        # Enable AI upscaling by default (if Replicate token is configured)
+        self._upscaler = RealESRGANUpscaler()
+
+    async def cog_unload(self) -> None:
+        try:
+            await self._upscaler.aclose()
+        except Exception:
+            pass
 
     # -------- helpers -------- #
 
@@ -72,9 +81,25 @@ class ImageEditCog(commands.Cog):
         if not img_attachments:
             return
 
-        # Fetch the image (first one only)
+        # Special case: 'upscale' command on a reply to an image
+        cmd = (message.content or "").strip().lower()
+        if cmd == "upscale":
+            try:
+                first_att = img_attachments[0]
+                raw = await first_att.read()
+                target_bytes = getattr(first_att, "size", None) or len(raw)
+                upscaled = await self._upscaler.upscale(raw, target_bytes=target_bytes)
+                buf = io.BytesIO(upscaled)
+                fname = f"upscaled_{first_att.filename.rsplit('.',1)[0]}.jpg"
+                await message.reply(file=discord.File(buf, filename=fname), mention_author=False)
+            except Exception as exc:
+                await message.reply(f"Upscale failed: {exc}", mention_author=False)
+            return
+
+        # Fetch the image (first one only) for general edit instructions
         try:
-            image = await self._download_image(img_attachments[0])
+            first_att = img_attachments[0]
+            image = await self._download_image(first_att)
         except Exception as exc:
             await message.reply(f"Failed to download image: {exc}")
             return
@@ -108,12 +133,12 @@ class ImageEditCog(commands.Cog):
             buf = io.BytesIO()
             edited.save(buf, format="PNG")
             buf.seek(0)
+            filename = f"edited_{first_att.filename.rsplit('.',1)[0]}.png"
         except Exception as exc:
             await message.reply(f"Image processing error: {exc}")
             return
 
         # Send the edited image as a reply
-        filename = f"edited_{img_attachments[0].filename.rsplit('.',1)[0]}.png"
         await message.reply(
             file=discord.File(buf, filename=filename),
             mention_author=False,

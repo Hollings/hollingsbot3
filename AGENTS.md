@@ -32,7 +32,7 @@
 - Commits: use clear, imperative subjects; Conventional Commits (`feat:`, `fix:`) preferred.
 - PRs: include summary, rationale, test instructions, and linked issues. Add screenshots for user-facing Discord commands when helpful.
 - Keep diffs focused; update README/`image_gen_config.json` if behavior or prefixes change.
-- Agents: ignore Git entirely unless explicitly asked. Do not run any `git` commands, do not create branches, do not commit, do not push, and do not open PRs. Maintainers handle all Git operations.
+
 
 ## Agent-Specific Instructions
 - Ignore all Git functions unless explicitly requested. Do not run `git` commands.

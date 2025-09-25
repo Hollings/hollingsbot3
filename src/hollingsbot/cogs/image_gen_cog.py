@@ -33,6 +33,21 @@ FAILURE = "\N{CROSS MARK}"
 _MAX_DISCORD_FILESIZE = 25 * 2**20  # 25 MiB (fallback)
 
 
+def _guess_ext(data: bytes) -> str:
+    try:
+        if data.startswith(b"\x89PNG"):
+            return "png"
+        if data.startswith(b"\xff\xd8"):
+            return "jpg"
+        if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
+            return "webp"
+        if data.startswith(b"BM"):
+            return "bmp"
+    except Exception:
+        pass
+    return "png"
+
+
 @dataclass(frozen=True, slots=True)
 class GeneratorSpec:
     api: str
@@ -267,17 +282,20 @@ class ImageGenCog(commands.Cog):
         else:
             prompts = [raw_prompt]
 
-        # Collect image attachments for possible editing path (from this message and, if replying, from the replied message)
-        images: list[bytes] = []
-        for att in message.attachments:
-            ct = (att.content_type or "").lower()
-            if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
-                try:
-                    images.append(await att.read())
-                except discord.HTTPException:
-                    _log.debug("Could not download attachment %s", att.id)
+        async def _gather_images(source_msg: discord.Message) -> list[bytes]:
+            collected: list[bytes] = []
+            for att in source_msg.attachments:
+                ct = (att.content_type or "").lower()
+                if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
+                    try:
+                        collected.append(await att.read())
+                    except discord.HTTPException:
+                        _log.debug("Could not download attachment %s", att.id)
+            return collected
 
-        # If the user is replying to a message with images, include those images as edit inputs too
+        # Collect image attachments for possible editing path (from this message and, if replying, from the replied message)
+        images = await _gather_images(message)
+
         reply_images: list[bytes] = []
         if message.reference is not None:
             replied_msg: discord.Message | None = None
@@ -292,19 +310,29 @@ class ImageGenCog(commands.Cog):
                     except Exception:
                         replied_msg = None
             if replied_msg is not None:
-                for att in replied_msg.attachments:
-                    ct = (att.content_type or "").lower()
-                    if ct.startswith("image/") or att.filename.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".bmp")):
-                        try:
-                            reply_images.append(await att.read())
-                        except discord.HTTPException:
-                            _log.debug("Could not download replied attachment %s", att.id)
-
-        all_edit_images = images + reply_images
+                reply_images = await _gather_images(replied_msg)
 
         # Editing is triggered if there are images from either source AND either model indicates nano-banana or mode=="edit"
         do_edit_mode = ("nano-banana" in spec.model) or (getattr(spec, "mode", "") == "edit")
+
+        # If the edit prompt lacks direct images, look back at recent history for a candidate
+        history_images: list[bytes] = []
+        history_source: discord.Message | None = None
+        if do_edit_mode and not images and not reply_images:
+            try:
+                async for prev_msg in message.channel.history(limit=10, before=message):
+                    history_images = await _gather_images(prev_msg)
+                    if history_images:
+                        history_source = prev_msg
+                        break
+            except Exception:
+                _log.debug("Failed to backfill images for edit command", exc_info=True)
+
+        all_edit_images = images + reply_images + history_images
+
         do_edit = bool(all_edit_images) and do_edit_mode
+
+        reply_target = history_source or message
 
         # If user explicitly asked for edit mode but we found no images anywhere, fail early with guidance
         if getattr(spec, "mode", "") == "edit" and not all_edit_images:
@@ -379,7 +407,7 @@ class ImageGenCog(commands.Cog):
                     if len(processed) > limit_bytes:
                         processed, new_ext = compress_image_to_fit(processed, limit_bytes)
                     else:
-                        new_ext = "png" if (not do_edit) else "png"
+                        new_ext = _guess_ext(processed)
 
                     # If still too large even after compression, try a harder squeeze once more
                     if len(processed) > limit_bytes:
@@ -404,7 +432,7 @@ class ImageGenCog(commands.Cog):
                     )
 
                 if do_edit:
-                    await message.reply(files=files, mention_author=False)
+                    await reply_target.reply(files=files, mention_author=False)
                 else:
                     await message.channel.send(files=files)
             except Exception as exc:
@@ -413,7 +441,7 @@ class ImageGenCog(commands.Cog):
                 text = f"Image post-processing failed for **{prompt_variant}**:\n> {exc}"
                 if do_edit:
                     try:
-                        await message.reply(text, mention_author=False)
+                        await reply_target.reply(text, mention_author=False)
                     except Exception:
                         await message.channel.send(text)
                 else:
