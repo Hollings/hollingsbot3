@@ -16,7 +16,7 @@ _CLIENT_CACHE: Dict[str, AsyncAnthropic] = {}
 
 class _Message(TypedDict):
     role: str
-    content: str
+    content: Union[str, List[Dict[str, Any]]]
 
 
 class AnthropicTextGenerator(TextGeneratorAPI):
@@ -55,9 +55,10 @@ class AnthropicTextGenerator(TextGeneratorAPI):
         self,
         prompt: Union[str, Sequence[_Message]],
     ) -> str:
-        """Return Claude’s reply for *prompt* as a plain string.
+        """Return Claude's reply for *prompt* as a plain string.
 
         Accepts either a single user string or a list of role/content messages.
+        Content can be either a string or a list of content blocks (for images).
         Any messages with role "system" are moved to the top‑level "system"
         parameter as required by the Anthropic Messages API.
         """
@@ -100,18 +101,20 @@ class AnthropicTextGenerator(TextGeneratorAPI):
             return str(content)
 
         system_parts: List[str] = []
-        cleaned: List[_Message] = []
+        cleaned: List[Dict[str, Any]] = []
         for m in messages:
             role = (m.get("role") or "").lower()
             if role == "system":
                 system_parts.append(_content_to_text(m.get("content")))
             else:
-                cleaned.append(m)
+                # Pass through content as-is for user/assistant messages
+                # (can be string or list of content blocks with images)
+                cleaned.append({"role": role, "content": m.get("content")})
         system_text = "\n\n".join(p for p in system_parts if p).strip() or None
 
         client = self._get_client()
 
-        async def _call_sdk(msgs: Sequence[_Message], system: str | None) -> str:
+        async def _call_sdk(msgs: Sequence[Dict[str, Any]], system: str | None) -> str:
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": 1024,

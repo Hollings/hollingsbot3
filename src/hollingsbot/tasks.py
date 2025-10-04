@@ -22,6 +22,7 @@ celery_app = Celery(
 celery_app.conf.task_routes = {
     "tasks.generate_text":  {"queue": "text"},
     "tasks.generate_image": {"queue": "image"},
+    "tasks.generate_llm_chat_response": {"queue": "text"},
 }
 
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
@@ -186,3 +187,172 @@ def generate_text(
         len(text),
     )
     return text
+
+
+def _image_placeholder(img: dict[str, object]) -> str:
+    """Return a short textual placeholder for an image attachment."""
+    name = str(img.get("name") or "image")
+    url = img.get("url")
+    if isinstance(url, str) and url:
+        return f"{name} <{url}>"
+    dims = []
+    width = img.get("width")
+    height = img.get("height")
+    if isinstance(width, int) and isinstance(height, int):
+        dims.append(f"{width}x{height}")
+    size = img.get("size")
+    if isinstance(size, int) and size > 0:
+        dims.append(f"{size} bytes")
+    if dims:
+        return f"{name} ({', '.join(dims)})"
+    return name
+
+
+def _with_image_placeholders(text: str, images: list[dict[str, object]]) -> str:
+    if not images:
+        return text
+    placeholders = ", ".join(_image_placeholder(img) for img in images)
+    text = text.strip()
+    if text:
+        return f"{text}\n[images: {placeholders}]"
+    return f"[images: {placeholders}]"
+
+
+def _build_messages_for_generator(
+    api: str,
+    conversation: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Convert a normalized conversation into provider-specific message payloads."""
+
+    api_normalized = api.lower().strip()
+    messages: list[dict[str, object]] = []
+
+    for entry in conversation:
+        role = str(entry.get("role") or "user")
+        text = str(entry.get("text") or "").strip()
+        images = entry.get("images") or []
+        if not isinstance(images, list):
+            images = []
+
+        if api_normalized in {"openai", "chatgpt"} and role == "user":
+            content_parts: list[dict[str, object]] = []
+            if text:
+                content_parts.append({"type": "input_text", "text": text})
+            for img in images:
+                data_url = img.get("data_url")
+                url = img.get("url")
+                image_payload: dict[str, object] | None = None
+                if isinstance(data_url, str) and data_url:
+                    image_payload = {"type": "input_image", "image_url": data_url, "detail": "auto"}
+                elif isinstance(url, str) and url:
+                    image_payload = {"type": "image_url", "image_url": {"url": url}}
+                if image_payload:
+                    content_parts.append(image_payload)
+            if not content_parts:
+                content: str | list[dict[str, object]] = text or "[user attachment without text]"
+            else:
+                content = content_parts
+        elif api_normalized == "anthropic" and role == "user" and images:
+            # Anthropic uses content blocks for images
+            content_parts: list[dict[str, object]] = []
+            if text:
+                content_parts.append({"type": "text", "text": text})
+            for img in images:
+                data_url = img.get("data_url")
+                if isinstance(data_url, str) and data_url and data_url.startswith("data:"):
+                    # Extract media type and base64 data
+                    try:
+                        header, b64_data = data_url.split(",", 1)
+                        media_type = header.split(";")[0].replace("data:", "")
+                        content_parts.append({
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": media_type,
+                                "data": b64_data,
+                            },
+                        })
+                    except Exception:
+                        logger.warning("Failed to parse data URL for image %s", img.get("name"))
+            if not content_parts:
+                content = text or "[user attachment without text]"
+            else:
+                content = content_parts
+        else:
+            # For non-OpenAI/Anthropic providers (and assistant/system turns),
+            # collapse images into lightweight textual markers to preserve context
+            content = _with_image_placeholders(text, images)
+
+        messages.append({"role": role, "content": content})
+
+    return messages
+
+
+def _conversation_to_text(conversation: list[dict[str, object]]) -> str:
+    """Fallback string prompt for providers without structured chat support."""
+
+    blocks: list[str] = []
+    for entry in conversation:
+        role = str(entry.get("role") or "user")
+        text = str(entry.get("text") or "")
+        images = entry.get("images") or []
+        if isinstance(images, list):
+            text = _with_image_placeholders(text, images)
+        blocks.append(f"[{role}] {text}".strip())
+    return "\n\n".join(block for block in blocks if block)
+
+
+@celery_app.task(name="tasks.generate_llm_chat_response", queue="text")
+def generate_llm_chat_response(
+    api: str,
+    model: str,
+    conversation: list[dict[str, object]],
+    *,
+    temperature: float = 1.0,
+) -> dict[str, object]:
+    """Generate an LLM chat response based on structured conversation history."""
+
+    start = time.monotonic()
+    logger.info(
+        "generate_llm_chat_response START | api=%s model=%s turns=%d",
+        api,
+        model,
+        len(conversation),
+    )
+
+    generator = get_text_generator(api, model)
+    gen_sig = signature(generator.generate)
+    kwargs: dict[str, object] = {}
+    if "temperature" in gen_sig.parameters:
+        kwargs["temperature"] = temperature
+
+    api_normalized = api.lower().strip()
+
+    try:
+        if api_normalized in {"openai", "chatgpt"}:
+            payload = _build_messages_for_generator(api_normalized, conversation)
+        elif api_normalized == "anthropic":
+            payload = _build_messages_for_generator(api_normalized, conversation)
+        else:
+            payload = _conversation_to_text(conversation)
+
+        text = asyncio.run(generator.generate(payload, **kwargs))
+    except TypeError:
+        # Some generators insist on plain text; fall back to flattened transcript.
+        text = asyncio.run(generator.generate(_conversation_to_text(conversation)))
+    except Exception as exc:  # noqa: BLE001
+        duration = time.monotonic() - start
+        logger.exception(
+            "generate_llm_chat_response FAILED after %.2fs | %s",
+            duration,
+            exc,
+        )
+        raise
+
+    duration = time.monotonic() - start
+    logger.info(
+        "generate_llm_chat_response FINISH in %.2fs | output_len=%d",
+        duration,
+        len(text),
+    )
+    return {"text": text}
