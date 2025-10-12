@@ -747,6 +747,10 @@ class LLMChatNewCog(commands.Cog):
         if not text.strip():
             await channel.send("Generation failed: empty response.")
             return
+        # Check for <no response> directive
+        if text.strip().lower() == "<no response>":
+            _LOG.info("LLM chose not to respond in channel %s", channel.id)
+            return
         assistant_turn = await self._deliver_response(channel, text)
         assistant_turn.role = "assistant"
         lock = self._lock_for_channel(channel.id)
