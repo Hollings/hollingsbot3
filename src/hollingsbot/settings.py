@@ -64,6 +64,14 @@ _SYSTEM_PROMPT_MTIME: Optional[float] = None
 _SYSTEM_PROMPT_PATH: Optional[Path] = None
 
 
+def clear_system_prompt_cache() -> None:
+    """Clear the cached system prompt to force a reload."""
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH  # noqa: PLW0603
+    _SYSTEM_PROMPT_CACHE = None
+    _SYSTEM_PROMPT_MTIME = None
+    _SYSTEM_PROMPT_PATH = None
+
+
 def _project_root() -> Path:
     """Return the repository root path if determinable from this file.
 

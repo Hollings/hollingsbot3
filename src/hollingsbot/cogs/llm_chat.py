@@ -27,7 +27,7 @@ except Exception:  # pragma: no cover - defensive fallback
 
 from celery.result import AsyncResult
 
-from hollingsbot.settings import get_default_system_prompt
+from hollingsbot.settings import clear_system_prompt_cache, get_default_system_prompt
 from hollingsbot.tasks import generate_llm_chat_response
 
 _LOG = logging.getLogger(__name__)
@@ -893,6 +893,7 @@ class LLMChatNewCog(commands.Cog):
             await self._send_system_prompt(ctx)
             return
         if argument.lower() == "reset":
+            clear_system_prompt_cache()
             default_prompt = get_default_system_prompt()
             if self.system_prompt == default_prompt:
                 await ctx.send("System prompt already matches the default.")
