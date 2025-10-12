@@ -145,6 +145,74 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
 
         return instructions, out
 
+    @staticmethod
+    def _to_chat_completions_messages(messages: Sequence[_Message]) -> List[Dict[str, Any]]:
+        """Convert internal message structures into Chat Completions payloads.
+
+        Ensures any Responses-specific content types downgrade to plain `text`/
+        `image_url` so the fallback call accepts them.
+        """
+
+        def _convert_content(content: Any) -> Any:
+            if isinstance(content, str):
+                return content
+            if not isinstance(content, list):
+                return str(content)
+            converted: List[Dict[str, Any]] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    converted.append({"type": "text", "text": str(item)})
+                    continue
+                t = item.get("type")
+                if t in {"input_text", "text", "output_text"}:
+                    converted.append({"type": "text", "text": item.get("text", "")})
+                elif t in {"input_image", "image_url"}:
+                    url = item.get("image_url")
+                    if isinstance(url, dict):
+                        url = url.get("url")
+                    if url:
+                        converted.append({"type": "image_url", "image_url": {"url": url}})
+                else:
+                    # Fallback: stringify unknown blocks.
+                    converted.append({"type": "text", "text": str(item)})
+            return converted or ""
+
+        out: List[Dict[str, Any]] = []
+        for entry in messages:
+            role = entry.get("role", "user")
+            content = entry.get("content")
+            out.append({"role": role, "content": _convert_content(content)})
+        return out
+
+    @staticmethod
+    def _chat_completion_choice_to_text(choice: Any) -> str:
+        """Extract plain text from a Chat Completions choice object."""
+
+        message = getattr(choice, "message", None)
+        if message is None:
+            return ""
+        content = getattr(message, "content", None)
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            parts: List[str] = []
+            for item in content:
+                if isinstance(item, dict):
+                    t = item.get("type")
+                    if t == "text":
+                        parts.append(item.get("text", ""))
+                    elif t == "tool_call":
+                        try:
+                            args = item.get("function", {}).get("arguments")
+                            if isinstance(args, str):
+                                parts.append(args)
+                        except Exception:  # noqa: BLE001
+                            continue
+                else:
+                    parts.append(str(item))
+            return "\n".join(p for p in parts if p)
+        return ""
+
     async def generate(
         self,
         prompt: Union[str, Sequence[_Message]],
@@ -212,6 +280,32 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                             if tt:
                                 parts.append(tt)
                 text = "\n".join(parts)
+            if not text:
+                try:
+                    _LOG.warning(
+                        "OpenAI Responses empty output (model=%s); raw payload: %s",
+                        self.model,
+                        resp.model_dump_json(),
+                    )
+                except Exception:
+                    _LOG.warning("OpenAI Responses empty output (model=%s)", self.model)
+                # Fallback: reissue the request via Chat Completions to coerce text output.
+                try:
+                    fallback_messages = self._to_chat_completions_messages(messages)
+                    resp_chat = await client.chat.completions.create(
+                        model=self.model,
+                        messages=fallback_messages,  # type: ignore[arg-type]
+                        temperature=temperature,
+                    )
+                    choice = resp_chat.choices[0]
+                    text = self._chat_completion_choice_to_text(choice)
+                except Exception as exc:  # noqa: BLE001
+                    _LOG.exception(
+                        "Chat Completions fallback failed (model=%s): %s",
+                        self.model,
+                        exc,
+                    )
+                    text = ""
             return (text or "").strip()
 
         # Fallback for non-gpt-5 models: Chat Completions with temperature

@@ -7,6 +7,7 @@ import logging
 import os
 import random
 import re
+from datetime import datetime, timedelta
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -17,7 +18,7 @@ from discord.ext import commands
 
 from hollingsbot.caption import add_caption
 from hollingsbot.utils.image_utils import compress_image_to_fit
-from hollingsbot.prompt_db import add_prompt, init_db
+from hollingsbot.prompt_db import RateLimitError, bulk_add_prompts, init_db
 from hollingsbot.tasks import generate_image  # celery task
 
 __all__ = ["ImageGenCog"]
@@ -55,6 +56,7 @@ class GeneratorSpec:
     # Optional: enable editing route by config
     # Example: {"nb:": {"api":"replicate","model":"google/nano-banana","mode":"edit"}}
     mode: str = "generate"
+    daily_limit: int | None = None
 
 
 class ImageGenCog(commands.Cog):
@@ -349,8 +351,58 @@ class ImageGenCog(commands.Cog):
                 )
             return
 
-        async def _launch_prompt(p: str) -> tuple[str, list[bytes]] | Exception:
-            prompt_id = add_prompt(p, str(message.author.id), spec.api, spec.model)
+        daily_limit = getattr(spec, "daily_limit", None)
+        day_start = None
+        if daily_limit is not None:
+            day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        try:
+            prompt_ids = bulk_add_prompts(
+                prompts,
+                str(message.author.id),
+                spec.api,
+                spec.model,
+                daily_limit=daily_limit,
+                window_start=day_start.isoformat() if day_start else None,
+            )
+        except RateLimitError as exc:
+            await self._react(message, THINKING, remove=True)
+            await self._react(message, FAILURE)
+
+            remaining = max(exc.limit - exc.used, 0)
+            extra_note = ""
+            if remaining > 0 and exc.requested > 1:
+                plural = "prompt" if remaining == 1 else "prompts"
+                extra_note = f" Try requesting {remaining} {plural} or fewer."
+            if day_start is None:
+                day_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+            next_reset = day_start + timedelta(days=1)
+            now = datetime.utcnow()
+            reset_delta = max((next_reset - now).total_seconds(), 0)
+            hours, remainder = divmod(int(reset_delta), 3600)
+            minutes, seconds = divmod(remainder, 60)
+            reset_str = f"{hours}h {minutes}m" if hours else f"{minutes}m {seconds}s"
+            model_label = spec.model
+            try:
+                await message.reply(
+                    (
+                        f"Daily limit reached for `{model_label}`. "
+                        f"Used {exc.used}/{exc.limit} today; {remaining} remaining. "
+                        f"Resets in {reset_str} (UTC midnight).{extra_note}"
+                    ),
+                    mention_author=False,
+                )
+            except Exception:
+                await message.channel.send(
+                    (
+                        f"Daily limit reached for `{model_label}`. "
+                        f"Used {exc.used}/{exc.limit} today; {remaining} remaining. "
+                        f"Resets in {reset_str} (UTC midnight).{extra_note}"
+                    )
+                )
+            return
+
+        async def _launch_prompt(prompt_id: int, p: str) -> tuple[str, list[bytes]] | Exception:
             try:
                 # Route through Celery, passing image_input when editing
                 result_paths_or_b64 = await self._run_task(
@@ -378,7 +430,10 @@ class ImageGenCog(commands.Cog):
             except Exception as exc:
                 return exc
 
-        results = await asyncio.gather(*(_launch_prompt(p) for p in prompts), return_exceptions=True)
+        results = await asyncio.gather(
+            *(_launch_prompt(pid, p) for pid, p in zip(prompt_ids, prompts)),
+            return_exceptions=True,
+        )
 
         overall_success = True
         for prompt_variant, result in zip(prompts, results):

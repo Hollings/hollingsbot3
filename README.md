@@ -113,7 +113,11 @@ kept.
 Set `ENABLE_STARBOARD=1` and `STARBOARD_CHANNEL_ID` to repost bot messages to
 another channel when they receive reactions. The optional
 `STARBOARD_IGNORE_CHANNELS` variable accepts a comma-separated list of channel
-IDs to exclude from reposting.
+IDs to exclude from reposting. To listen only on specific channels, set
+`STARBOARD_WHITELIST_CHANNEL_IDS` with a comma-separated list of source channel
+IDs; when unset, the starboard listens on every non-ignored channel in the
+guild. Every repost is archived in the SQLite `starboard_posts` table referenced
+by `PROMPT_DB_PATH` for auditing.
 
 ### Running tests
 

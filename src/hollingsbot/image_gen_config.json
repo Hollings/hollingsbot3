@@ -1,7 +1,32 @@
 {
-  "!":  { "api": "replicate", "model": "black-forest-labs/flux-schnell" },
-  "$":  { "api": "replicate", "model": "bytedance/seedream-4" },
-  "$$": { "api": "replicate", "model": "google/imagen-4" },
-  "^":  { "api": "svg",       "model": "gpt-5" },
-  "edit:":  { "api": "replicate",       "model": "google/nano-banana",  "mode": "edit" }
+  "!": {
+    "api": "replicate",
+    "model": "black-forest-labs/flux-schnell",
+    "daily_limit": 9999
+  },
+  "$": {
+    "api": "replicate",
+    "model": "google/imagen-4-fast",
+    "daily_limit": 200
+  },
+  "$$": {
+    "api": "replicate",
+    "model": "google/imagen-4",
+    "daily_limit": 30
+  },
+  "$$$": {
+    "api": "replicate",
+    "model": "google/imagen-4-ultra",
+    "daily_limit": 5
+  },
+    "^": {
+    "api": "svg",
+    "model": "gpt-5"
+  },
+  "edit:": {
+    "api": "replicate",
+    "model": "google/nano-banana",
+    "mode": "edit",
+    "daily_limit": 10
+  }
 }

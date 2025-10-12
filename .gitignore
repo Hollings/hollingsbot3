@@ -23,3 +23,6 @@ prompts.db
 venv/
 .venv/
 /output.txt
+
+# Documentation builds
+docs/
