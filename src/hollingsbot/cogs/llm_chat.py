@@ -1,848 +1,939 @@
 from __future__ import annotations
+
+import asyncio
+import base64
+import functools
+import io
+import json
+import logging
 import os
 import re
-import io
-import asyncio
-import collections
-import logging
-from typing import Iterable, List, Dict, Any, Optional
-import base64
-from PIL import Image
-import aiohttp
-from datetime import datetime, timezone
+import textwrap
+import time
+from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Deque, Iterable, Sequence
 
 import discord
 from discord.ext import commands
+from PIL import Image
 
-from hollingsbot.tasks import generate_text
-from hollingsbot.settings import DEFAULT_SYSTEM_PROMPT
-from hollingsbot.prompt_db import get_model_pref, set_model_pref
-from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
+try:  # Optional at runtime; fallback to raw SVG attachments if unavailable.
+    import cairosvg  # type: ignore
+except Exception:  # pragma: no cover - defensive fallback
+    cairosvg = None  # type: ignore
 
-# Env config
-WHITELIST = {int(x) for x in os.getenv("LLM_WHITELIST_CHANNELS", "").split(",") if x.strip().isdigit()}
-DEFAULT_PROVIDER = os.getenv("DEFAULT_LLM_PROVIDER", "openai").lower()
-# If provider is set to openai (default), prefer gpt-5; otherwise keep a sensible default per provider.
-DEFAULT_MODEL = os.getenv(
-    "DEFAULT_LLM_MODEL",
-    "gpt-5" if DEFAULT_PROVIDER == "openai" else "claude-4o",
-)
-TEXT_TIMEOUT = float(os.getenv("TEXT_TIMEOUT", "180"))
-HISTORY_LIMIT = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
-# Cap how many recent turns we actually send to the model (slice of history)
-SEND_TURNS_LIMIT = int(os.getenv("LLM_MAX_TURNS_SENT", "16"))
+from celery.result import AsyncResult
 
-AVAILABLE_MODELS = [m.strip() for m in os.getenv("AVAILABLE_MODELS", "").split(",") if m.strip()]
+from hollingsbot.settings import get_default_system_prompt
+from hollingsbot.tasks import generate_llm_chat_response
 
-_log = logging.getLogger(__name__)
+_LOG = logging.getLogger(__name__)
 
 
-def _chunks(s: str, limit: int = 1900) -> Iterable[str]:
-    for i in range(0, len(s), limit):
-        yield s[i: i + limit]
+_SVG_BLOCK_RE = re.compile(r"<svg\b[^>]*>.*?</svg>", re.IGNORECASE | re.DOTALL)
+_CODE_BLOCK_RE = re.compile(r"```(?P<lang>[A-Za-z0-9_+\-]*)\n(?P<body>.*?)(```)$", re.DOTALL | re.MULTILINE)
+_TEXT_ATTACHMENT_EXTENSIONS = {
+    ".txt",
+    ".md",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".ini",
+    ".cfg",
+    ".log",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".java",
+    ".go",
+    ".rb",
+    ".rs",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".php",
+    ".css",
+    ".html",
+    ".sql",
+    ".sh",
+    ".bat",
+    ".ps1",
+    ".xml",
+    ".csv",
+}
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+_CODE_EXTENSION_MAP = {
+    "": "txt",
+    "text": "txt",
+    "plaintext": "txt",
+    "py": "py",
+    "python": "py",
+    "ts": "ts",
+    "tsx": "tsx",
+    "js": "js",
+    "javascript": "js",
+    "json": "json",
+    "yaml": "yml",
+    "yml": "yml",
+    "bash": "sh",
+    "sh": "sh",
+    "shell": "sh",
+    "go": "go",
+    "rs": "rs",
+    "rust": "rs",
+    "java": "java",
+    "c": "c",
+    "cpp": "cpp",
+    "c++": "cpp",
+    "html": "html",
+    "css": "css",
+    "sql": "sql",
+    "xml": "xml",
+    "php": "php",
+    "rb": "rb",
+    "ruby": "rb",
+    "cs": "cs",
+}
+_MAX_TEXT_ATTACHMENT_BYTES = 120_000
+_IMAGE_MAX_EDGE = 2048
+_IMAGE_MAX_BYTES = 9_500_000
+_MESSAGE_CHUNK = 1900
 
 
-def _is_image_attachment(att: discord.Attachment) -> bool:
-    if att.content_type and att.content_type.startswith("image/"):
-        return True
-    return any(att.filename.lower().endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tiff"))
+@dataclass(slots=True)
+class ImageAttachment:
+    name: str
+    url: str | None
+    data_url: str | None
+    width: int | None = None
+    height: int | None = None
+    size: int | None = None
 
-
-def _is_text_attachment(att: discord.Attachment) -> bool:
-    """
-    Treat common text-like uploads as inlineable for a single turn.
-    These are read and sent to the model only for the current message.
-    They are not persisted in history. History stores a placeholder instead.
-    """
-    ct = (att.content_type or "").lower()
-    if ct.startswith("text/"):
-        return True
-    if ct in {"application/json", "application/xml", "application/javascript"}:
-        return True
-    name = att.filename.lower()
-    text_exts = (
-        ".txt", ".md", ".markdown", ".json", ".csv", ".tsv",
-        ".py", ".js", ".ts", ".html", ".css", ".xml",
-        ".yaml", ".yml", ".toml", ".ini", ".cfg", ".conf",
-        ".log", ".sql", ".sh", ".bat", ".ps1",
-        ".java", ".kt", ".rs", ".go", ".rb", ".php",
-        ".c", ".h", ".cpp", ".hpp", ".cs",
-    )
-    return any(name.endswith(ext) for ext in text_exts)
-
-
-def _build_internal_parts(user_text: str, images: List[discord.Attachment]) -> List[Dict[str, Any]]:
-    parts: List[Dict[str, Any]] = [{"kind": "text", "text": user_text}]
-    for att in images:
-        media_type = att.content_type if (att.content_type and att.content_type.startswith("image/")) else None
-        parts.append({
-            "kind": "image",
-            "url": att.url,
-            "media_type": media_type or "image/png",
-            "filename": att.filename,
-        })
-    return parts
-
-
-def _fmt_ts(dt: datetime) -> str:
-    try:
-        ts = dt.astimezone(timezone.utc)
-    except Exception:
-        ts = datetime.now(timezone.utc)
-    return ts.strftime("%Y-%m-%d %H:%M UTC")
-
-
-def _to_provider_content(parts_or_text: Any, provider: str) -> Any:
-    if isinstance(parts_or_text, str):
-        return parts_or_text
-    if not isinstance(parts_or_text, list):
-        return str(parts_or_text)
-    out: List[Dict[str, Any]] = []
-    for p in parts_or_text:
-        kind = p.get("kind")
-        if kind == "text":
-            out.append({"type": "text", "text": p.get("text", "")})
-        elif kind == "image":
-            url = p.get("url")
-            media_type = p.get("media_type") or "image/png"
-            if provider == "openai":
-                out.append({"type": "image_url", "image_url": {"url": url}})
-            else:
-                out.append({"type": "image", "source": {"type": "url", "url": url, "media_type": media_type}})
-    return out if out else ""
-
-
-class _DebouncedGeneration:
-    __slots__ = ("channel_id", "message_id", "task", "async_result", "cancel_requested")
-
-    def __init__(self, channel_id: int, message_id: int) -> None:
-        self.channel_id = channel_id
-        self.message_id = message_id
-        self.task: Optional[asyncio.Task] = None
-        self.async_result: Any | None = None
-        self.cancel_requested = False
-
-    async def cancel(self) -> None:
-        if self.cancel_requested:
-            return
-        self.cancel_requested = True
-
-        async_result = self.async_result
-        if async_result is not None:
-            try:
-                ready = getattr(async_result, "ready", None)
-                if callable(ready) and ready():
-                    self.async_result = None
-                    async_result = None
-            except Exception:
-                # If ready() itself fails, continue with revoke attempt.
-                pass
-
-        if async_result is not None:
-            try:
-                await asyncio.to_thread(async_result.revoke, terminate=True)
-            except Exception as exc:  # noqa: BLE001
-                _log.debug(
-                    "Failed to revoke pending LLM generation for channel %s: %s",
-                    self.channel_id,
-                    exc,
-                )
-
-        task = self.task
-        if task is not None and not task.done():
-            task.cancel()
-            try:
-                await task
-            except asyncio.CancelledError:
-                pass
-            except Exception:  # noqa: BLE001
-                _log.debug(
-                    "Debounced generation task for channel %s raised during cancel",
-                    self.channel_id,
-                    exc_info=True,
-                )
-
-class LLMAPIChat(commands.Cog):
-    def __init__(self, bot: commands.Bot):
-        self.bot = bot
-        self.history = collections.defaultdict(lambda: collections.deque(maxlen=HISTORY_LIMIT))
-        self.system_prompt = DEFAULT_SYSTEM_PROMPT
-        self._prompt_changed_at = datetime.min.replace(tzinfo=timezone.utc)
-        self._preload_once = False
-        self._warming: set[int] = set()
-        self._inflight_generations: Dict[int, _DebouncedGeneration] = {}
-
-    @staticmethod
-    def _prompt_file(prompt: str, filename: str = "system_prompt.txt") -> discord.File:
-        buf = io.BytesIO(prompt.encode("utf-8"))
-        buf.seek(0)
-        return discord.File(buf, filename)
-
-    async def _cancel_all_inflight(self) -> None:
-        if not self._inflight_generations:
-            return
-        handles = list(self._inflight_generations.values())
-        await asyncio.gather(*(handle.cancel() for handle in handles), return_exceptions=True)
-        self._inflight_generations.clear()
-
-    async def _on_system_prompt_changed(self) -> None:
-        self._prompt_changed_at = datetime.now(timezone.utc)
-        await self._cancel_all_inflight()
-        self.history.clear()
-
-    async def _attachment_to_data_url(
-        self,
-        att: discord.Attachment,
-        *,
-        max_side: int = 2048,
-        target_bytes: int = 9_500_000,
-    ) -> str:
-        """Download, downscale, and JPEG-compress an image attachment to a data URL.
-
-        - Scales the longest side to at most `max_side`.
-        - Tries multiple scale/quality combinations to fit under `target_bytes`.
-        - Converts to RGB and flattens transparency against white.
-        """
-        raw = await att.read()
-        img = Image.open(io.BytesIO(raw))
-        if img.mode in ("RGBA", "LA"):
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "LA":
-                rgb = img.convert("RGBA")
-                bg.paste(rgb, mask=rgb.split()[-1])
-            else:
-                bg.paste(img, mask=img.split()[-1])
-            base = bg
-        else:
-            base = img.convert("RGB")
-
-        # Initial constrain to max_side
-        w, h = base.size
-        scale0 = 1.0
-        if max(w, h) > max_side:
-            scale0 = max_side / float(max(w, h))
-        def _resized(im: Image.Image, s: float) -> Image.Image:
-            if s >= 0.999:
-                return im
-            nw, nh = max(1, int(im.width * s)), max(1, int(im.height * s))
-            return im.resize((nw, nh), Image.LANCZOS)
-
-        candidates_scale = [scale0, scale0 * 0.85, scale0 * 0.7, scale0 * 0.5]
-        qualities = [85, 75, 65, 50, 40, 30]
-
-        for s in candidates_scale:
-            im = _resized(base, s)
-            for q in qualities:
-                buf = io.BytesIO()
-                try:
-                    im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
-                except Exception:
-                    buf.seek(0); buf.truncate(0)
-                    im.save(buf, format="JPEG", quality=q)
-                data = buf.getvalue()
-                if len(data) <= target_bytes:
-                    b64 = base64.b64encode(data).decode("ascii")
-                    return f"data:image/jpeg;base64,{b64}"
-        # Fallback: return the smallest we tried anyway
-        b64 = base64.b64encode(data).decode("ascii")
-        return f"data:image/jpeg;base64,{b64}"
-
-    async def _build_provider_parts(
-        self,
-        provider: str,
-        user_text: str,
-        images: List[discord.Attachment],
-    ) -> List[Dict[str, Any]]:
-        parts: List[Dict[str, Any]] = [{"kind": "text", "text": user_text}]
-        for att in images:
-            media_type = att.content_type if (att.content_type and att.content_type.startswith("image/")) else None
-            url = att.url
-            # For OpenAI, always prefer a data URL to avoid provider-side fetch failures
-            if provider == "openai":
-                try:
-                    url = await self._attachment_to_data_url(att)
-                except Exception:
-                    # On failure, fall back to original URL
-                    url = att.url
-            parts.append({
-                "kind": "image",
-                "url": url,
-                "media_type": media_type or "image/png",
-                "filename": att.filename,
-            })
-        return parts
-
-    async def _bytes_to_jpeg_data_url(
-        self,
-        raw: bytes,
-        *,
-        max_side: int = 2048,
-        target_bytes: int = 9_500_000,
-    ) -> str:
-        img = Image.open(io.BytesIO(raw))
-        if img.mode in ("RGBA", "LA"):
-            bg = Image.new("RGB", img.size, (255, 255, 255))
-            if img.mode == "LA":
-                rgb = img.convert("RGBA")
-                bg.paste(rgb, mask=rgb.split()[-1])
-            else:
-                bg.paste(img, mask=img.split()[-1])
-            base = bg
-        else:
-            base = img.convert("RGB")
-
-        w, h = base.size
-        scale0 = 1.0
-        if max(w, h) > max_side:
-            scale0 = max_side / float(max(w, h))
-
-        def _resized(im: Image.Image, s: float) -> Image.Image:
-            if s >= 0.999:
-                return im
-            nw, nh = max(1, int(im.width * s)), max(1, int(im.height * s))
-            return im.resize((nw, nh), Image.LANCZOS)
-
-        candidates_scale = [scale0, scale0 * 0.85, scale0 * 0.7, scale0 * 0.5]
-        qualities = [85, 75, 65, 50, 40, 30]
-        last = raw
-        for s in candidates_scale:
-            im = _resized(base, s)
-            for q in qualities:
-                buf = io.BytesIO()
-                try:
-                    im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
-                except Exception:
-                    buf.seek(0); buf.truncate(0)
-                    im.save(buf, format="JPEG", quality=q)
-                data = buf.getvalue()
-                last = data
-                if len(data) <= target_bytes:
-                    b64 = base64.b64encode(data).decode("ascii")
-                    return f"data:image/jpeg;base64,{b64}"
-        b64 = base64.b64encode(last).decode("ascii")
-        return f"data:image/jpeg;base64,{b64}"
-
-    async def _url_to_data_url(
-        self,
-        url: str,
-        *,
-        max_side: int = 2048,
-        target_bytes: int = 9_500_000,
-        timeout: float = 20.0,
-    ) -> str:
-        try:
-            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
-                async with session.get(url) as resp:
-                    raw = await resp.read()
-        except Exception:
-            # If fetch fails, just return original URL; provider will decide
-            return url
-        return await self._bytes_to_jpeg_data_url(raw, max_side=max_side, target_bytes=target_bytes)
-
-    async def _prepare_provider_content(self, content_or_parts: Any, provider: str) -> Any:
-        """Like _to_provider_content, but compresses images for OpenAI across history.
-
-        - If provider != openai, falls back to _to_provider_content.
-        - For lists of parts, converts image URLs to compressed data URLs.
-        """
-        if provider != "openai":
-            return _to_provider_content(content_or_parts, provider)
-        if isinstance(content_or_parts, str):
-            return content_or_parts
-        if not isinstance(content_or_parts, list):
-            return _to_provider_content(content_or_parts, provider)
-        new_parts: List[Dict[str, Any]] = []
-        for p in content_or_parts:
-            try:
-                if p.get("kind") == "image":
-                    url = p.get("url")
-                    # Only allow http(s) or data URLs; drop anything else to avoid provider 400s
-                    if not isinstance(url, str) or not (url.startswith("http://") or url.startswith("https://") or url.startswith("data:")):
-                        continue
-                    if isinstance(url, str) and not url.startswith("data:"):
-                        try:
-                            url = await self._url_to_data_url(url)
-                        except Exception:
-                            # Failed to fetch/convert -> drop this image from the prompt
-                            continue
-                        # If conversion didn't result in a data URL, drop to avoid provider-side fetch
-                        if not isinstance(url, str) or not url.startswith("data:"):
-                            continue
-                    np = dict(p)
-                    np["url"] = url
-                    new_parts.append(np)
-                else:
-                    new_parts.append(p)
-            except Exception:
-                new_parts.append(p)
-        return _to_provider_content(new_parts, provider)
-
-    async def _resolve_referenced_message(self, msg: discord.Message) -> discord.Message | None:
-        ref = msg.reference
-        if not ref:
-            return None
-        resolved = getattr(ref, "resolved", None)
-        if isinstance(resolved, discord.Message):
-            return resolved
-        ref_id = getattr(ref, "message_id", None)
-        if ref_id:
-            try:
-                return await msg.channel.fetch_message(ref_id)
-            except Exception:
-                return None
-        return None
-
-    async def _preload_history_for_channel(self, channel_id: int) -> None:
-        # Skip if already has content
-        if self.history.get(channel_id):
-            return
-        channel = self.bot.get_channel(channel_id)
-        if channel is None:
-            try:
-                channel = await self.bot.fetch_channel(channel_id)
-            except Exception as exc:  # noqa: BLE001
-                _log.debug("LLM preload: cannot fetch channel %s: %s", channel_id, exc)
-                return
-        if not isinstance(channel, (discord.TextChannel, discord.Thread)):
-            return
-        # Collect most recent messages and build a lightweight history
-        try:
-            # Fetch newest-first limited slice, then reverse for chronological processing
-            msgs: List[discord.Message] = [m async for m in channel.history(limit=HISTORY_LIMIT, oldest_first=False)]
-            msgs.reverse()
-        except Exception as exc:  # noqa: BLE001
-            _log.debug("LLM preload: history fetch failed for %s: %s", channel_id, exc)
-            return
-
-        dq = collections.deque(maxlen=HISTORY_LIMIT)
-        for m in msgs:
-            try:
-                created_at = getattr(m, "created_at", None)
-                if created_at is not None:
-                    if created_at.tzinfo is None:
-                        created_at = created_at.replace(tzinfo=timezone.utc)
-                    if created_at < self._prompt_changed_at:
-                        continue
-                # Ignore commands and unrelated bots
-                if m.content.startswith(("!", "-")):
-                    continue
-                if m.author.bot and (self.bot.user is None or m.author.id != self.bot.user.id):
-                    continue
-
-                # Assistant messages: store as assistant text (no timestamp)
-                if self.bot.user and m.author.id == self.bot.user.id:
-                    assistant_text_raw = (m.content or "").strip()
-                    if assistant_text_raw:
-                        dq.append({"role": "assistant", "parts": [{"kind": "text", "text": assistant_text_raw}]})
-                    continue
-
-                # User message
-                images = [att for att in m.attachments if _is_image_attachment(att)]
-                text_files = [att for att in m.attachments if _is_text_attachment(att) and att not in images]
-
-                # Reply prefix + merge reply images (best-effort)
-                reply_prefix = ""
-                replied_msg = await self._resolve_referenced_message(m)
-                if replied_msg is not None:
-                    reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
-                    reply_text = (replied_msg.content or "").strip()
-                    reply_prefix = f"(Replying to <{reply_author}>: {reply_text})\n" if reply_text else f"(Replying to <{reply_author}>.)\n"
-                    reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
-                    if reply_images:
-                        seen = {att.url for att in images}
-                        for att in reply_images:
-                            if att.url not in seen:
-                                images.append(att)
-                                seen.add(att.url)
-
-                user_text_base = f"<{m.author.display_name}> {(m.content or '').strip()}".strip()
-                history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
-
-                # Placeholders for text files, not persisted
-                if text_files:
-                    for att in text_files:
-                        history_user_text += f"\n\n[uploaded file {att.filename} removed]"
-
-                user_parts_for_history = _build_internal_parts(history_user_text, images)
-                dq.append({"role": "user", "parts": user_parts_for_history})
-            except Exception as exc:  # noqa: BLE001
-                _log.debug("LLM preload: skipping message due to error: %s", exc)
-
-        if dq:
-            self.history[channel_id] = dq
-            _log.info("LLM preload: initialized history for channel %s with %d items", channel_id, len(dq))
-
-    async def _ensure_history_for_message_channel(self, message: discord.Message) -> None:
-        """On-demand warmup of history for a channel if empty (e.g., startup race)."""
-        cid = message.channel.id
-        if cid in self._warming:
-            return
-        if self.history.get(cid):
-            return
-        # Only warm whitelisted channels
-        if cid not in WHITELIST:
-            return
-        self._warming.add(cid)
-        try:
-            await self._preload_history_for_channel(cid)
-        finally:
-            self._warming.discard(cid)
-
-    @commands.Cog.listener()
-    async def on_ready(self) -> None:
-        # Only run once per process
-        if self._preload_once:
-            return
-        self._preload_once = True
-        # Preload for whitelisted channels only
-        tasks = [self._preload_history_for_channel(cid) for cid in WHITELIST]
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
-
-    @commands.command(name="models")
-    async def list_models(self, ctx: commands.Context) -> None:
-        if ctx.channel.id not in WHITELIST:
-            return
-        if not AVAILABLE_MODELS:
-            await ctx.reply("No models configured in AVAILABLE_MODELS.")
-            return
-        await ctx.reply("Available models:\n" + "\n".join(f"- `{m}`" for m in AVAILABLE_MODELS))
-
-    @commands.command(name="model")
-    async def set_or_list_model(self, ctx: commands.Context, *, spec: str = None) -> None:
-        if ctx.channel.id not in WHITELIST:
-            return
-        if not AVAILABLE_MODELS:
-            await ctx.reply("No models configured in AVAILABLE_MODELS.")
-            return
-        gid = ctx.guild.id if ctx.guild else 0
-        pref = get_model_pref(gid, ctx.author.id)
-        current_provider, current_model = pref if pref else (DEFAULT_PROVIDER, DEFAULT_MODEL)
-        current_human = "chatgpt" if current_provider == "openai" else current_provider
-        current_str = f"{current_human}/{current_model}"
-        if not spec:
-            msg_lines = []
-            for m in AVAILABLE_MODELS:
-                if m.lower() == current_str.lower():
-                    msg_lines.append(f"- **{m}** (current)")
-                else:
-                    msg_lines.append(f"- {m}")
-            await ctx.reply("Use `!model api/model-name` to select model.\nAvailable models:\n" + "\n".join(msg_lines))
-            return
-        match = None
-        for m in AVAILABLE_MODELS:
-            if m.lower() == spec.lower():
-                match = m
-                break
-        if not match:
-            await ctx.reply("Model not found. Use `!model` to see the list.")
-            return
-        provider_raw, model = match.split("/", 1)
-        provider = "openai" if provider_raw.lower() in ("chatgpt", "openai") else provider_raw.lower()
-        set_model_pref(gid, ctx.author.id, provider, model.strip())
-        await ctx.reply(f"Model set to **{match}** for you.")
-
-    @commands.command(name="system")
-    async def set_system_prompt(self, ctx: commands.Context, *, text: str = None) -> None:
-        if ctx.channel.id not in WHITELIST:
-            return
-        current = self.system_prompt
-        trimmed = text.strip() if text is not None else ""
-
-        if not trimmed:
-            await ctx.reply(
-                "Current global system prompt is attached.",
-                file=self._prompt_file(current, "system_prompt.txt"),
-            )
-            return
-
-        if trimmed.lower() == "reset":
-            if current == DEFAULT_SYSTEM_PROMPT:
-                await ctx.reply(
-                    "System prompt is already the default; current prompt attached.",
-                    file=self._prompt_file(current, "system_prompt.txt"),
-                )
-                return
-            self.system_prompt = DEFAULT_SYSTEM_PROMPT
-            await self._on_system_prompt_changed()
-            await ctx.reply(
-                "System prompt reset to default for all channels; see attached prompt.",
-                file=self._prompt_file(DEFAULT_SYSTEM_PROMPT, "system_prompt.txt"),
-            )
-            return
-
-        if trimmed == current:
-            await ctx.reply(
-                "System prompt unchanged; current prompt attached.",
-                file=self._prompt_file(current, "system_prompt.txt"),
-            )
-            return
-
-        self.system_prompt = trimmed
-        await self._on_system_prompt_changed()
-        await ctx.reply(
-            "System prompt updated globally; see attached prompt.",
-            file=self._prompt_file(trimmed, "system_prompt.txt"),
+    def clone(self) -> "ImageAttachment":
+        return ImageAttachment(
+            name=self.name,
+            url=self.url,
+            data_url=self.data_url,
+            width=self.width,
+            height=self.height,
+            size=self.size,
         )
 
-    async def _start_debounced_generation(self, message: discord.Message) -> None:
-        channel_id = message.channel.id
-        prev = self._inflight_generations.get(channel_id)
-        if prev is not None:
-            await prev.cancel()
+    def to_payload(self) -> dict[str, object]:
+        return {
+            "name": self.name,
+            "url": self.url,
+            "data_url": self.data_url,
+            "width": self.width,
+            "height": self.height,
+            "size": self.size,
+        }
 
-        handle = _DebouncedGeneration(channel_id, message.id)
-        task = asyncio.create_task(self._run_generation(message, handle))
-        handle.task = task
-        self._inflight_generations[channel_id] = handle
 
-        def _log_task_result(task_obj: asyncio.Task) -> None:
-            try:
-                task_obj.result()
-            except asyncio.CancelledError:
-                pass
-            except Exception:  # noqa: BLE001
-                _log.exception(
-                    "LLM chat task failed for channel %s during debounce handling",
-                    channel_id,
-                )
+@dataclass(slots=True)
+class ConversationTurn:
+    role: str
+    content: str
+    images: list[ImageAttachment] = field(default_factory=list)
+    message_id: int | None = None
+    author_id: int | None = None
+    author_name: str | None = None
 
-        task.add_done_callback(_log_task_result)
 
-    async def _run_generation(self, message: discord.Message, handle: _DebouncedGeneration) -> None:
-        channel_id = message.channel.id
-        appended_user_history = False
-        user_history_entry: Optional[Dict[str, Any]] = None
+@dataclass(slots=True)
+class ModelTurn:
+    role: str
+    text: str
+    images: list[ImageAttachment] = field(default_factory=list)
 
-        images: List[discord.Attachment] = []
-        text_files: List[discord.Attachment] = []
 
+@dataclass
+class GenerationJob:
+    task: asyncio.Task[None] | None = None
+    result: AsyncResult | None = None
+
+
+class LLMChatNewCog(commands.Cog):
+    """LLM-powered chat cog rebuilt per the LLM_CHAT_FEATURES design."""
+
+    def __init__(self, bot: commands.Bot) -> None:
+        self.bot = bot
+        self.whitelist_channels = self._parse_channel_ids(os.getenv("LLM_WHITELIST_CHANNELS", ""))
+        self.history_limit = max(1, int(os.getenv("LLM_HISTORY_LIMIT", "50")))
+        self.max_turns_sent = max(1, int(os.getenv("LLM_MAX_TURNS_SENT", "8")))
+        self.text_timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
+        self.default_provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai").strip().lower() or "openai"
+        self.default_model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4o").strip() or "gpt-4o"
+        self.available_models = self._load_available_models()
+        self._model_lookup = {
+            (provider.lower(), model): (provider, model)
+            for provider, model in self.available_models
+        }
+        if (self.default_provider, self.default_model) not in {
+            (p.lower(), m) for p, m in self.available_models
+        }:
+            self.available_models.append((self.default_provider, self.default_model))
+            self._model_lookup[(self.default_provider, self.default_model)] = (
+                self.default_provider,
+                self.default_model,
+            )
+
+        self.state_path = Path("generated") / "llm_chat_new_state.json"
+        self.state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._state = self._load_state()
+        stored_prompt = self._state.get("system_prompt") if isinstance(self._state, dict) else None
+        self.system_prompt = (
+            str(stored_prompt)
+            if stored_prompt
+            else get_default_system_prompt()
+        )
+        raw_prefs = self._state.get("model_preferences") if isinstance(self._state, dict) else {}
+        if isinstance(raw_prefs, dict):
+            self.model_preferences: dict[str, dict[str, dict[str, str]]] = raw_prefs
+        else:
+            self.model_preferences = {}
+
+        self.channel_histories: dict[int, Deque[ConversationTurn]] = {}
+        self._history_locks: dict[int, asyncio.Lock] = {}
+        self._warmed_channels: set[int] = set()
+        self._active_generations: dict[int, GenerationJob] = {}
+
+    # ------------------------------------------------------------------ utils
+    @staticmethod
+    def _parse_channel_ids(raw: str) -> set[int]:
+        values: set[int] = set()
+        for token in raw.split(","):
+            token = token.strip()
+            if token.isdigit():
+                values.add(int(token))
+        return values
+
+    def _load_state(self) -> dict[str, object]:
+        if not self.state_path.exists():
+            return {}
         try:
-            gid = message.guild.id if message.guild else 0
-            sys_prompt = self.system_prompt
-            pref = get_model_pref(gid, message.author.id) or (DEFAULT_PROVIDER, DEFAULT_MODEL)
-            provider, model = pref
+            text = self.state_path.read_text("utf-8")
+            data = json.loads(text)
+            if isinstance(data, dict):
+                return data
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Failed to load %s", self.state_path)
+        return {}
 
-            images = [att for att in message.attachments if _is_image_attachment(att)]
-            text_files = [att for att in message.attachments if _is_text_attachment(att) and att not in images]
+    def _save_state(self) -> None:
+        payload = {
+            "system_prompt": self.system_prompt,
+            "model_preferences": self.model_preferences,
+        }
+        tmp_path = self.state_path.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), "utf-8")
+        tmp_path.replace(self.state_path)
 
-            replied_msg: discord.Message | None = None
-            if message.reference is not None:
-                resolved = getattr(message.reference, "resolved", None)
-                if isinstance(resolved, discord.Message):
-                    replied_msg = resolved
-                else:
-                    ref_id = getattr(message.reference, "message_id", None)
-                    if ref_id:
-                        try:
-                            replied_msg = await message.channel.fetch_message(ref_id)
-                        except Exception:
-                            replied_msg = None
+    def _load_available_models(self) -> list[tuple[str, str]]:
+        raw = os.getenv("AVAILABLE_MODELS", "")
+        models: list[tuple[str, str]] = []
+        for token in raw.split(","):
+            token = token.strip()
+            if not token:
+                continue
+            if "/" in token:
+                provider, model = token.split("/", 1)
+            else:
+                provider, model = self.default_provider, token
+            provider = provider.strip().lower()
+            model = model.strip()
+            if provider and model:
+                models.append((provider, model))
+        if not models:
+            models.append((self.default_provider, self.default_model))
+        return models
 
-            reply_prefix = ""
-            if replied_msg is not None:
-                reply_author = replied_msg.author.display_name if replied_msg.author else "unknown"
-                reply_text = (replied_msg.content or "").strip()
-                reply_prefix = (
-                    f"(Replying to <{reply_author}>: {reply_text})\n"
-                    if reply_text
-                    else f"(Replying to <{reply_author}>.)\n"
-                )
-                reply_images = [att for att in replied_msg.attachments if _is_image_attachment(att)]
-                if reply_images:
-                    seen_urls = {att.url for att in images}
-                    for att in reply_images:
-                        if att.url not in seen_urls:
-                            images.append(att)
-                            seen_urls.add(att.url)
+    def _history_for_channel(self, channel_id: int) -> Deque[ConversationTurn]:
+        history = self.channel_histories.get(channel_id)
+        if history is None or history.maxlen != self.history_limit:
+            existing = list(history) if history else []
+            history = deque(existing, maxlen=self.history_limit)
+            self.channel_histories[channel_id] = history
+        return history
 
-            user_text_base = f"<{message.author.display_name}> {message.content}".strip()
-            provider_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
-            history_user_text = f"{reply_prefix}{user_text_base}" if reply_prefix else user_text_base
+    def _lock_for_channel(self, channel_id: int) -> asyncio.Lock:
+        lock = self._history_locks.get(channel_id)
+        if lock is None:
+            lock = asyncio.Lock()
+            self._history_locks[channel_id] = lock
+        return lock
 
-            if text_files:
-                for att in text_files:
-                    history_user_text += f"\n\n[uploaded file {att.filename} removed]"
+    # ----------------------------------------------------------------- helpers
+    def _channel_allowed(self, channel: discord.abc.MessageableChannel) -> bool:
+        channel_id = getattr(channel, "id", None)
+        if channel_id is None:
+            return False
+        if not self.whitelist_channels:
+            # Strict interpretation: empty whitelist disables the feature entirely.
+            return False
+        return channel_id in self.whitelist_channels
 
-            user_parts_for_history = _build_internal_parts(history_user_text, images)
-            user_history_entry = {"role": "user", "parts": user_parts_for_history}
+    @staticmethod
+    def _should_ignore_message(content: str | None) -> bool:
+        if not content:
+            return False
+        stripped = content.lstrip()
+        if not stripped:
+            return False
+        lowered = stripped.lower()
+        return stripped.startswith("!") or stripped.startswith("-") or lowered.startswith("edit:")
 
-            recent_turns = list(self.history[channel_id])[-max(SEND_TURNS_LIMIT, 0):]
+    def _is_text_attachment(self, attachment: discord.Attachment) -> bool:
+        if attachment.size == 0:
+            return False
+        if attachment.content_type:
+            ctype = attachment.content_type.lower()
+            if ctype.startswith("text/"):
+                return True
+            if ctype in {
+                "application/json",
+                "application/javascript",
+                "application/xml",
+                "application/x-yaml",
+            }:
+                return True
+        _, ext = os.path.splitext(attachment.filename)
+        return ext.lower() in _TEXT_ATTACHMENT_EXTENSIONS
 
-            convo = [{"role": "system", "content": sys_prompt}]
-            for m in recent_turns:
-                content_or_parts = m.get("parts") if "parts" in m else m.get("content")
-                if content_or_parts is None:
+    def _is_image_attachment(self, attachment: discord.Attachment) -> bool:
+        if attachment.content_type:
+            if attachment.content_type.lower().startswith("image/"):
+                return True
+        _, ext = os.path.splitext(attachment.filename)
+        return ext.lower() in _IMAGE_EXTENSIONS
+
+    async def _collect_text_attachments_full(
+        self, message: discord.Message
+    ) -> tuple[list[str], list[str]]:
+        full_blocks: list[str] = []
+        placeholders: list[str] = []
+        for attachment in message.attachments:
+            if not self._is_text_attachment(attachment):
+                continue
+            try:
+                data = await attachment.read()
+            except Exception:  # noqa: BLE001
+                _LOG.exception("Failed to read text attachment %s", attachment.filename)
+                continue
+            truncated = False
+            if len(data) > _MAX_TEXT_ATTACHMENT_BYTES:
+                data = data[:_MAX_TEXT_ATTACHMENT_BYTES]
+                truncated = True
+            text = data.decode("utf-8", errors="replace")
+            block = (
+                f"[begin uploaded file: {attachment.filename}]\n{text}\n[end uploaded file]"
+            )
+            if truncated:
+                block += "\n[truncated]"
+            full_blocks.append(block)
+            placeholder = f"[uploaded file {attachment.filename} removed]"
+            if truncated:
+                placeholder += " (truncated)"
+            placeholders.append(placeholder)
+        return full_blocks, placeholders
+
+    async def _collect_text_placeholders(self, message: discord.Message) -> list[str]:
+        placeholders: list[str] = []
+        for attachment in message.attachments:
+            if self._is_text_attachment(attachment):
+                placeholders.append(f"[uploaded file {attachment.filename} removed]")
+        return placeholders
+
+    async def _prepare_image_attachment(self, attachment: discord.Attachment) -> ImageAttachment | None:
+        try:
+            data = await attachment.read()
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Failed to download image attachment %s", attachment.filename)
+            return None
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                img = img.convert("RGB")
+                width, height = img.size
+                longest = max(width, height)
+                if longest > _IMAGE_MAX_EDGE:
+                    scale = _IMAGE_MAX_EDGE / float(longest)
+                    resized = (
+                        max(1, int(width * scale)),
+                        max(1, int(height * scale)),
+                    )
+                    img = img.resize(resized, Image.LANCZOS)
+                    width, height = img.size
+                jpeg_bytes = self._encode_jpeg(img)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Failed to process image attachment %s", attachment.filename)
+            return ImageAttachment(
+                name=attachment.filename,
+                url=attachment.url,
+                data_url=None,
+                width=None,
+                height=None,
+                size=attachment.size,
+            )
+        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode("ascii")
+        return ImageAttachment(
+            name=attachment.filename,
+            url=attachment.url,
+            data_url=data_url,
+            width=width,
+            height=height,
+            size=len(jpeg_bytes),
+        )
+
+    def _encode_jpeg(self, image: Image.Image) -> bytes:
+        for quality in (90, 85, 80, 75, 70, 60, 50):
+            out = io.BytesIO()
+            image.save(out, format="JPEG", optimize=True, quality=quality)
+            if out.tell() <= _IMAGE_MAX_BYTES:
+                return out.getvalue()
+        return out.getvalue()
+
+    def _image_from_bytes(self, name: str, data: bytes) -> ImageAttachment:
+        try:
+            with Image.open(io.BytesIO(data)) as img:
+                width, height = img.size
+        except Exception:  # noqa: BLE001
+            width = height = None
+        data_url = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
+        return ImageAttachment(name=name, url=None, data_url=data_url, width=width, height=height, size=len(data))
+
+    def _images_from_history(self, channel_id: int, message_id: int | None) -> list[ImageAttachment]:
+        if message_id is None:
+            return []
+        history = self.channel_histories.get(channel_id)
+        if not history:
+            return []
+        for turn in reversed(history):
+            if turn.message_id == message_id:
+                return [img.clone() for img in turn.images]
+        return []
+
+    async def _collect_image_attachments(self, message: discord.Message) -> list[ImageAttachment]:
+        images: list[ImageAttachment] = []
+        for attachment in message.attachments:
+            if not self._is_image_attachment(attachment):
+                continue
+            img = await self._prepare_image_attachment(attachment)
+            if img:
+                images.append(img)
+        return images
+
+    async def _build_reply_hint(
+        self, message: discord.Message
+    ) -> tuple[str | None, list[ImageAttachment]]:
+        ref = message.reference
+        if not ref or not ref.message_id:
+            return None, []
+        resolved = ref.resolved if isinstance(ref.resolved, discord.Message) else None
+        ref_message: discord.Message | None = resolved
+        if ref_message is None:
+            try:
+                ref_message = await message.channel.fetch_message(ref.message_id)
+            except Exception:  # noqa: BLE001
+                return None, []
+        display = ref_message.author.display_name if ref_message.author else "Unknown"
+        snippet = ref_message.clean_content.strip()
+        if snippet:
+            snippet = textwrap.shorten(snippet.replace("\n", " "), width=140, placeholder="…")
+            hint = f"(Replying to <{display}>: {snippet})"
+        else:
+            hint = f"(Replying to <{display}>.)"
+        images = self._images_from_history(message.channel.id, ref_message.id)
+        if not images:
+            images = await self._collect_image_attachments(ref_message)
+        return hint, [img.clone() for img in images]
+
+    async def _prepare_user_turn(
+        self, message: discord.Message
+    ) -> tuple[ModelTurn, ConversationTurn]:
+        display = message.author.display_name
+        hint, reply_images = await self._build_reply_hint(message)
+        base_text = message.clean_content.strip()
+        body_parts: list[str] = []
+        if hint:
+            body_parts.append(hint)
+        if base_text:
+            body_parts.append(base_text)
+        body = "\n".join(part for part in body_parts if part).strip()
+        if not body:
+            body = "[no content]"
+        prefixed = f"<{display}>: {body}"
+
+        text_blocks, placeholders = await self._collect_text_attachments_full(message)
+        full_text = prefixed
+        for block in text_blocks:
+            full_text += f"\n{block}"
+        history_text = prefixed
+        for placeholder in placeholders:
+            history_text += f"\n{placeholder}"
+
+        current_images = await self._collect_image_attachments(message)
+        merged_images = [img.clone() for img in reply_images + current_images]
+
+        model_turn = ModelTurn(role="user", text=full_text, images=[img.clone() for img in merged_images])
+        history_turn = ConversationTurn(
+            role="user",
+            content=history_text,
+            images=merged_images,
+            message_id=message.id,
+            author_id=message.author.id,
+            author_name=display,
+        )
+        return model_turn, history_turn
+
+    async def _build_history_user_turn(self, message: discord.Message) -> ConversationTurn | None:
+        if self._should_ignore_message(message.content):
+            return None
+        display = message.author.display_name
+        hint, reply_images = await self._build_reply_hint(message)
+        base_text = message.clean_content.strip()
+        parts: list[str] = []
+        if hint:
+            parts.append(hint)
+        if base_text:
+            parts.append(base_text)
+        body = "\n".join(parts).strip() or "[no content]"
+        text = f"<{display}>: {body}"
+        placeholders = await self._collect_text_placeholders(message)
+        for placeholder in placeholders:
+            text += f"\n{placeholder}"
+        images = reply_images + await self._collect_image_attachments(message)
+        return ConversationTurn(
+            role="user",
+            content=text,
+            images=images,
+            message_id=message.id,
+            author_id=message.author.id,
+            author_name=display,
+        )
+
+    async def _build_assistant_turn_from_message(self, message: discord.Message) -> ConversationTurn:
+        text = (message.content or "").strip() or "[no content]"
+        placeholders = await self._collect_text_placeholders(message)
+        for placeholder in placeholders:
+            text += f"\n{placeholder}"
+        images = await self._collect_image_attachments(message)
+        display = message.author.display_name if message.author else "Bot"
+        return ConversationTurn(
+            role="assistant",
+            content=text,
+            images=images,
+            message_id=message.id,
+            author_id=message.author.id if message.author else None,
+            author_name=display,
+        )
+
+    def _build_conversation_payload(
+        self,
+        history: Sequence[ConversationTurn],
+        current_turn: ModelTurn,
+    ) -> list[dict[str, object]]:
+        recent = list(history)[-self.max_turns_sent :]
+        conversation: list[dict[str, object]] = [
+            {
+                "role": "system",
+                "text": self.system_prompt,
+                "images": [],
+            }
+        ]
+        for turn in recent:
+            conversation.append(
+                {
+                    "role": turn.role,
+                    "text": turn.content,
+                    "images": [img.to_payload() for img in turn.images],
+                }
+            )
+        conversation.append(
+            {
+                "role": current_turn.role,
+                "text": current_turn.text,
+                "images": [img.to_payload() for img in current_turn.images],
+            }
+        )
+        return conversation
+
+    def _is_valid_model(self, provider: str, model: str) -> bool:
+        key = (provider.lower(), model)
+        return key in self._model_lookup
+
+    def _get_model_for_user(self, guild_id: int | None, user_id: int) -> tuple[str, str]:
+        gid = str(guild_id or 0)
+        uid = str(user_id)
+        entry = self.model_preferences.get(gid, {}).get(uid)
+        if isinstance(entry, dict):
+            provider = entry.get("provider")
+            model = entry.get("model")
+            if isinstance(provider, str) and isinstance(model, str) and self._is_valid_model(provider, model):
+                return provider.lower(), model
+        return self.default_provider, self.default_model
+
+    def _set_model_for_user(self, guild_id: int | None, user_id: int, provider: str, model: str) -> None:
+        gid = str(guild_id or 0)
+        uid = str(user_id)
+        guild_entry = self.model_preferences.setdefault(gid, {})
+        guild_entry[uid] = {"provider": provider.lower(), "model": model}
+        self._save_state()
+
+    async def _ensure_channel_warm(self, channel: discord.abc.MessageableChannel) -> None:
+        channel_id = getattr(channel, "id", None)
+        if channel_id is None or channel_id in self._warmed_channels:
+            return
+        history = self._history_for_channel(channel_id)
+        limit = max(self.history_limit, self.max_turns_sent) * 3
+        try:
+            messages: list[discord.Message] = []
+            async for item in channel.history(limit=limit, oldest_first=True):
+                messages.append(item)
+        except Exception:  # noqa: BLE001
+            _LOG.exception("Failed to preload history for channel %s", channel_id)
+            self._warmed_channels.add(channel_id)
+            return
+        for msg in messages:
+            if msg.author and msg.author.bot and msg.author != self.bot.user:
+                continue
+            if msg.author == self.bot.user:
+                turn = await self._build_assistant_turn_from_message(msg)
+            else:
+                turn = await self._build_history_user_turn(msg)
+                if turn is None:
                     continue
-                content_prepared = await self._prepare_provider_content(content_or_parts, provider)
-                convo.append({"role": m.get("role", "user"), "content": content_prepared})
+            history.append(turn)
+        self._warmed_channels.add(channel_id)
 
-            if text_files:
-                for att in text_files:
-                    try:
-                        raw = await att.read()
-                        decoded = raw.decode("utf-8", errors="replace")
-                    except Exception:
-                        decoded = "[error reading file]"
-                    provider_user_text += (
-                        f"\n\n[begin uploaded file: {att.filename}]\n{decoded}\n[end uploaded file]"
-                    )
+    def _code_extension(self, language: str) -> str:
+        return _CODE_EXTENSION_MAP.get(language.lower(), "txt")
 
-            user_parts_for_provider = await self._build_provider_parts(provider, provider_user_text, images)
-            convo.append({"role": "user", "content": _to_provider_content(user_parts_for_provider, provider)})
+    def _chunk_text(self, text: str) -> list[str]:
+        text = text.strip()
+        if len(text) <= _MESSAGE_CHUNK:
+            return [text] if text else []
+        chunks: list[str] = []
+        buffer = ""
+        for line in text.splitlines(keepends=True):
+            if len(buffer) + len(line) > _MESSAGE_CHUNK:
+                if buffer:
+                    chunks.append(buffer.rstrip())
+                    buffer = ""
+                while len(line) > _MESSAGE_CHUNK:
+                    chunks.append(line[:_MESSAGE_CHUNK])
+                    line = line[_MESSAGE_CHUNK :]
+            buffer += line
+        if buffer.strip():
+            chunks.append(buffer.rstrip())
+        return [chunk for chunk in chunks if chunk]
 
-            self.history[channel_id].append(user_history_entry)
-            appended_user_history = True
+    def _conversation_for_celery(
+        self,
+        conversation: list[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        # Normalize conversation entries into the compact structure expected by the Celery task.
+        normalized: list[dict[str, object]] = []
+        for entry in conversation:
+            normalized.append(
+                {
+                    "role": entry.get("role", "user"),
+                    "text": entry.get("text", ""),
+                    "images": entry.get("images", []),
+                }
+            )
+        return normalized
 
-            async with message.channel.typing():
-                async_result = await asyncio.to_thread(generate_text.delay, provider, model, convo)
-                handle.async_result = async_result
-                try:
-                    reply_text: str = await asyncio.to_thread(async_result.get, timeout=TEXT_TIMEOUT)
-                except Exception as exc:
-                    if handle.cancel_requested:
-                        raise asyncio.CancelledError
-                    await message.channel.send(f"Generation failed: {exc}")
-                    return
-                finally:
-                    handle.async_result = None
+    async def _cancel_generation(self, channel_id: int) -> None:
+        job = self._active_generations.pop(channel_id, None)
+        if not job or not job.task:
+            return
+        job.task.cancel()
+        with suppress(asyncio.CancelledError):
+            await job.task
 
-            if handle.cancel_requested:
-                raise asyncio.CancelledError
-
-            cleaned_text, svg_files = extract_render_and_strip_svgs(reply_text)
-
-            attachments = []
-            if len(cleaned_text) > 2000:
-                def repl(match: re.Match) -> str:
-                    lang = match.group(1) or "txt"
-                    code = match.group(2)
-                    filename = f"code.{lang.strip() if lang.strip() else 'txt'}"
-                    buf = io.BytesIO(code.encode("utf-8"))
-                    attachments.append((filename, buf))
-                    return f"[see file: {filename}]"
-
-                cleaned_text = re.sub(r"```([^\n]*)\n([\s\S]*?)```", repl, cleaned_text)
-
-            if handle.cancel_requested:
-                raise asyncio.CancelledError
-
-            self.history[channel_id].append({"role": "assistant", "parts": [{"kind": "text", "text": cleaned_text}]})
-
-            for chunk in _chunks(cleaned_text):
-                if handle.cancel_requested:
-                    raise asyncio.CancelledError
-                await message.channel.send(chunk)
-
-            for filename, buf in attachments:
-                if handle.cancel_requested:
-                    raise asyncio.CancelledError
-                buf.seek(0)
-                await message.channel.send(file=discord.File(buf, filename))
-
-            for filename, buf in svg_files:
-                if handle.cancel_requested:
-                    raise asyncio.CancelledError
-                buf.seek(0)
-                await message.channel.send(file=discord.File(buf, filename))
-
-        except asyncio.CancelledError:
-            if not appended_user_history and user_history_entry is not None:
-                self.history[channel_id].append(user_history_entry)
-                appended_user_history = True
-            elif not appended_user_history:
-                fallback_text = f"<{message.author.display_name}> {(message.content or '').strip()}".strip()
-                fallback_entry = {"role": "user", "parts": _build_internal_parts(fallback_text, images)}
-                self.history[channel_id].append(fallback_entry)
-                appended_user_history = True
-
-            async_result = handle.async_result
-            if async_result is not None:
-                try:
-                    ready = getattr(async_result, "ready", None)
-                    if not (callable(ready) and ready()):
-                        await asyncio.to_thread(async_result.revoke, terminate=True)
-                except Exception:
-                    _log.debug(
-                        "Failed to revoke cancelled LLM generation for channel %s",
-                        channel_id,
-                        exc_info=True,
-                    )
-            handle.async_result = None
-            raise
-
-        except Exception as exc:  # noqa: BLE001
-            if not appended_user_history and user_history_entry is not None:
-                self.history[channel_id].append(user_history_entry)
-                appended_user_history = True
-            elif not appended_user_history:
-                fallback_text = f"<{message.author.display_name}> {(message.content or '').strip()}".strip()
-                fallback_entry = {"role": "user", "parts": _build_internal_parts(fallback_text, images)}
-                self.history[channel_id].append(fallback_entry)
-                appended_user_history = True
-
-            if not handle.cancel_requested:
-                _log.exception("LLM generation failed for channel %s", channel_id)
-                try:
-                    await message.channel.send(f"Generation failed: {exc}")
-                except Exception:  # noqa: BLE001
-                    _log.debug("Unable to notify channel %s about failure", channel_id, exc_info=True)
-
-        finally:
-            handle.async_result = None
-            current = self._inflight_generations.get(channel_id)
-            if current is handle:
-                self._inflight_generations.pop(channel_id, None)
-
+    # ------------------------------------------------------------- core flow
     @commands.Cog.listener()
-    async def on_message(self, message: discord.Message):
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author == self.bot.user:
+            return
         if message.author.bot:
             return
-        if message.channel.id not in WHITELIST:
+        channel = message.channel
+        if not self._channel_allowed(channel):
             return
-        content_clean = (message.content or "").strip()
-        if content_clean.startswith(("!", "-")):
+        if self._should_ignore_message(message.content):
             return
-        if content_clean.lower().startswith("edit:"):
-            return
+        await self._ensure_channel_warm(channel)
+        provider, model = self._get_model_for_user(getattr(message.guild, "id", None), message.author.id)
+        channel_id = channel.id
+        lock = self._lock_for_channel(channel_id)
+        async with lock:
+            model_turn, history_turn = await self._prepare_user_turn(message)
+            history = self._history_for_channel(channel_id)
+            snapshot = list(history)
+            conversation = self._build_conversation_payload(snapshot, model_turn)
+            history.append(history_turn)
+        await self._cancel_generation(channel_id)
+        job = GenerationJob()
+        task = self.bot.loop.create_task(
+            self._generate_and_send_response(
+                message,
+                model_turn,
+                self._conversation_for_celery(conversation),
+                provider,
+                model,
+                job,
+            )
+        )
+        job.task = task
+        self._active_generations[channel_id] = job
 
-        await self._ensure_history_for_message_channel(message)
-        await self._start_debounced_generation(message)
+    async def _generate_and_send_response(
+        self,
+        message: discord.Message,
+        current_turn: ModelTurn,
+        conversation: list[dict[str, object]],
+        provider: str,
+        model: str,
+        job: GenerationJob,
+    ) -> None:
+        channel = message.channel
+        async_result: AsyncResult | None = None
+        try:
+            async with channel.typing():
+                async_result = generate_llm_chat_response.apply_async(
+                    (provider, model, conversation),
+                    kwargs={"temperature": 1.0},
+                )
+                job.result = async_result
+                start = time.monotonic()
+                while True:
+                    if async_result.ready():
+                        break
+                    if (time.monotonic() - start) > self.text_timeout:
+                        async_result.revoke(terminate=True)
+                        raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
+                    await asyncio.sleep(0.5)
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    functools.partial(async_result.get, timeout=0.1),
+                )
+            text = str(result.get("text", "")) if isinstance(result, dict) else str(result)
+        except asyncio.CancelledError:
+            if async_result and not async_result.ready():
+                async_result.revoke(terminate=True)
+            raise
+        except Exception as exc:  # noqa: BLE001
+            _LOG.exception(
+                "Generation failed for channel %s (provider=%s model=%s): %s",
+                channel.id,
+                provider,
+                model,
+                exc,
+            )
+            await channel.send(f"Generation failed: {exc}")
+            return
+        finally:
+            if self._active_generations.get(channel.id) is job:
+                self._active_generations.pop(channel.id, None)
+        if not text.strip():
+            await channel.send("Generation failed: empty response.")
+            return
+        assistant_turn = await self._deliver_response(channel, text)
+        assistant_turn.role = "assistant"
+        lock = self._lock_for_channel(channel.id)
+        async with lock:
+            history = self._history_for_channel(channel.id)
+            # Set a synthetic message id by referencing the most recent Discord message.
+            if channel.last_message_id:
+                assistant_turn.message_id = channel.last_message_id
+            history.append(assistant_turn)
+
+    async def _deliver_response(
+        self, channel: discord.abc.MessageableChannel, raw_text: str
+    ) -> ConversationTurn:
+        text = raw_text.strip()
+        svg_files: list[discord.File] = []
+        svg_images: list[ImageAttachment] = []
+
+        def _replace_svg(match: re.Match[str]) -> str:
+            svg = match.group(0)
+            idx = len(svg_files) + 1
+            timestamp = int(time.time())
+            png_name = f"svg_{timestamp}_{idx}.png"
+            if cairosvg:
+                try:
+                    png_bytes = cairosvg.svg2png(bytestring=svg.encode("utf-8"))  # type: ignore[arg-type]
+                    svg_files.append(discord.File(io.BytesIO(png_bytes), filename=png_name))
+                    svg_images.append(self._image_from_bytes(png_name, png_bytes))
+                    return f"[see file: {png_name}]"
+                except Exception:  # noqa: BLE001
+                    _LOG.exception("Failed to rasterise SVG; falling back to raw SVG file.")
+            svg_name = f"svg_{timestamp}_{idx}.svg"
+            svg_files.append(discord.File(io.BytesIO(svg.encode("utf-8")), filename=svg_name))
+            return f"[see file: {svg_name}]"
+
+        text = _SVG_BLOCK_RE.sub(_replace_svg, text)
+
+        code_files: list[discord.File] = []
+        if len(text) > 2000:
+            def _extract_code(match: re.Match[str]) -> str:
+                lang = (match.group("lang") or "").strip().lower()
+                body = match.group("body") or ""
+                filename = f"code_{len(code_files) + 1}.{self._code_extension(lang)}"
+                code_files.append(discord.File(io.BytesIO(body.encode("utf-8")), filename=filename))
+                return f"[see file: {filename}]"
+
+            text = _CODE_BLOCK_RE.sub(_extract_code, text)
+
+        chunks = self._chunk_text(text)
+        sent_messages: list[discord.Message] = []
+        if not chunks:
+            chunks = ["[no content]"]
+        for chunk in chunks:
+            sent = await channel.send(chunk)
+            sent_messages.append(sent)
+        all_files = svg_files + code_files
+        if all_files:
+            sent = await channel.send("Generated attachments:", files=all_files)
+            sent_messages.append(sent)
+        history_text = "\n".join(chunk for chunk in chunks if chunk).strip()
+        if not history_text:
+            history_text = "[no content]"
+        turn = ConversationTurn(role="assistant", content=history_text, images=svg_images)
+        if sent_messages:
+            turn.message_id = sent_messages[-1].id
+        return turn
+
+    # --------------------------------------------------------------- commands
+    def _format_model_listing(self, current: tuple[str, str] | None = None) -> str:
+        current_normalized = None
+        if current:
+            current_normalized = f"{current[0].lower()}/{current[1]}"
+        lines = ["Available models:"]
+        for provider, model in sorted(self.available_models):
+            token = f"{provider}/{model}"
+            if token.lower() == current_normalized:
+                lines.append(f"- **{token}** (current)")
+            else:
+                lines.append(f"- {token}")
+        return "\n".join(lines)
+
+    @commands.command(name="models")
+    async def models_command(self, ctx: commands.Context) -> None:
+        if not self._channel_allowed(ctx.channel):
+            return
+        await ctx.send(self._format_model_listing())
+
+    @commands.command(name="model")
+    async def model_command(self, ctx: commands.Context, *, selection: str | None = None) -> None:
+        if not self._channel_allowed(ctx.channel):
+            return
+        current = self._get_model_for_user(getattr(ctx.guild, "id", None), ctx.author.id)
+        if not selection:
+            await ctx.send(self._format_model_listing(current))
+            return
+        candidate = selection.strip()
+        if "/" not in candidate:
+            await ctx.send("Please provide a model in the format `provider/model`.\n" + self._format_model_listing(current))
+            return
+        provider, model = candidate.split("/", 1)
+        provider = provider.strip().lower()
+        model = model.strip()
+        if not self._is_valid_model(provider, model):
+            await ctx.send(
+                "Unknown model.\n" + self._format_model_listing(current)
+            )
+            return
+        self._set_model_for_user(getattr(ctx.guild, "id", None), ctx.author.id, provider, model)
+        await ctx.send(f"Model preference updated to {provider}/{model}.")
+
+    @commands.command(name="clear")
+    async def clear_command(self, ctx: commands.Context) -> None:
+        if not self._channel_allowed(ctx.channel):
+            return
+        channel_id = ctx.channel.id
+        await self._cancel_generation(channel_id)
+        lock = self._lock_for_channel(channel_id)
+        async with lock:
+            self.channel_histories[channel_id] = deque(maxlen=self.history_limit)
+        await ctx.send("Cleared saved conversation context for this channel.")
+
+    def _reset_histories(self) -> None:
+        self.channel_histories.clear()
+        self._warmed_channels.clear()
+
+    async def _cancel_all_generations(self) -> None:
+        pending = list(self._active_generations.items())
+        self._active_generations.clear()
+        for channel_id, job in pending:
+            if not job.task:
+                continue
+            job.task.cancel()
+        await asyncio.gather(*(job.task for _, job in pending if job.task), return_exceptions=True)
+
+    @commands.command(name="system")
+    async def system_command(self, ctx: commands.Context, *, text: str | None = None) -> None:
+        if not self._channel_allowed(ctx.channel):
+            return
+        argument = (text or "").strip()
+        if not argument:
+            await self._send_system_prompt(ctx)
+            return
+        if argument.lower() == "reset":
+            default_prompt = get_default_system_prompt()
+            if self.system_prompt == default_prompt:
+                await ctx.send("System prompt already matches the default.")
+                await self._send_system_prompt(ctx)
+                return
+            self.system_prompt = default_prompt
+        else:
+            if argument == self.system_prompt:
+                await ctx.send("System prompt unchanged (new text matches existing value).")
+                await self._send_system_prompt(ctx)
+                return
+            self.system_prompt = argument
+        self._save_state()
+        await self._cancel_all_generations()
+        self._reset_histories()
+        await ctx.send("System prompt updated and chat history cleared.")
+        await self._send_system_prompt(ctx)
+
+    async def _send_system_prompt(self, ctx: commands.Context) -> None:
+        data = io.StringIO(self.system_prompt)
+        file = discord.File(data, filename="system_prompt.txt")
+        await ctx.send("Current global system prompt is attached.", file=file)
 
     @commands.command(name="h")
     async def help_command(self, ctx: commands.Context) -> None:
-        if ctx.channel.id not in WHITELIST:
+        if not self._channel_allowed(ctx.channel):
             return
-        help_text = (
-            "**LLM Bot Commands & Features**\n\n"
-            "__Model Selection__\n"
-            "`!model` - List available models and show your current one.\n"
-            "`!model <name>` - Set your preferred model from the list.\n"
-            "\n"
-            "__System Prompt__\n"
-            "`!system` - Show the current global system prompt (as a file).\n"
-            "`!system <text>` - Set a new global system prompt; clears chat history.\n"
-            "`!system reset` - Restore the default prompt; clears chat history.\n"
-            "\n"
-            "__Conversation Behavior__\n"
-            "- The bot responds automatically to all non-command messages in allowed channels.\n"
-            "- It remembers the last N messages in the channel for conversation context.\n"
-            "- Messages starting with `!` or `-` are ignored and not added to history.\n"
-            "- Images are supported. Attach images to your message and they are preserved in chat history and sent to the model when supported by the selected provider.\n"
-            "- Replies: when you reply to a message, the bot includes that message's text and any of its image attachments as context for your turn.\n"
-            "- Text file uploads are supported for a single turn. The model reads the file contents for that message only, and chat history records a note like `[uploaded file filename.txt removed]` instead of the full contents.\n"
-            "- SVG blocks in model replies are rendered to PNG if possible and attached. Otherwise the original `.svg` is attached. The SVG code block is replaced in the text with a note.\n"
-            "\n"
-            "__Code Blocks__\n"
-            "- If a response is over 2000 characters, code blocks are removed from the text and uploaded as files.\n"
-            "- Otherwise, code blocks stay inline.\n"
-            "- When extracted, the text will contain `[see file: filename]` where the code block was.\n"
-            "\n"
-            "__Model Info__\n"
-            "`!models` - List all models from the configured environment variable if that separate command is kept.\n"
-        )
-        await ctx.reply(help_text)
+        lines = [
+            "LLM chat quick help:",
+            "- Conversation is available only in whitelisted channels.",
+            "- Speak normally; avoid leading `!`, `-`, or `edit:` unless you intend a command.",
+            "- `!system`, `!system <text>`, and `!system reset` manage the shared system prompt.",
+            "- `!clear` wipes the current channel's saved chat context if you need a fresh start.",
+            "- `!models` lists options; `!model provider/model` sets your per-guild default.",
+            "- Text file attachments are inlined with markers; history keeps lightweight placeholders.",
+            "- Images are resized for OpenAI and stay attached to the conversation history.",
+            "- Responses show typing, split long messages, convert SVGs to PNG, and attach code blocks when needed.",
+            "- `Generation failed: ...` indicates provider or timeout issues; resend your message to retry.",
+        ]
+        await ctx.send("\n".join(lines))
+
+    # -------------------------------------------------------------- lifecycle
+    async def cog_unload(self) -> None:
+        await self._cancel_all_generations()
 
 
-async def setup(bot: commands.Bot):
-    await bot.add_cog(LLMAPIChat(bot))
+async def setup(bot: commands.Bot) -> None:
+    await bot.add_cog(LLMChatNewCog(bot))
