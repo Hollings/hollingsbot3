@@ -27,6 +27,6 @@
     "api": "replicate",
     "model": "google/nano-banana",
     "mode": "edit",
-    "daily_limit": 10
+    "daily_limit": 20
   }
 }
