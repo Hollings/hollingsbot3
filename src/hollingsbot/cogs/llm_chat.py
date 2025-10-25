@@ -29,6 +29,7 @@ from celery.result import AsyncResult
 
 from hollingsbot.settings import clear_system_prompt_cache, get_default_system_prompt
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.url_metadata import extract_url_metadata, format_metadata_for_llm
 
 _LOG = logging.getLogger(__name__)
 
@@ -474,9 +475,24 @@ class LLMChatNewCog(commands.Cog):
         full_text = prefixed
         for block in text_blocks:
             full_text += f"\n{block}"
+
         history_text = prefixed
         for placeholder in placeholders:
             history_text += f"\n{placeholder}"
+
+        # Extract and append URL metadata for links in the message
+        if base_text:
+            url_metadata_list = await extract_url_metadata(base_text)
+            if url_metadata_list:
+                # For current turn to LLM: include images
+                full_metadata_parts = [format_metadata_for_llm(m, include_images=True) for m in url_metadata_list]
+                full_metadata_text = "\n\n".join(full_metadata_parts)
+                full_text += f"\n\n{full_metadata_text}"
+
+                # For history: exclude images
+                history_metadata_parts = [format_metadata_for_llm(m, include_images=False) for m in url_metadata_list]
+                history_metadata_text = "\n\n".join(history_metadata_parts)
+                history_text += f"\n\n{history_metadata_text}"
 
         current_images = await self._collect_image_attachments(message)
         merged_images = [img.clone() for img in reply_images + current_images]
@@ -594,12 +610,14 @@ class LLMChatNewCog(commands.Cog):
         limit = max(self.history_limit, self.max_turns_sent) * 3
         try:
             messages: list[discord.Message] = []
-            async for item in channel.history(limit=limit, oldest_first=True):
+            async for item in channel.history(limit=limit, oldest_first=False):
                 messages.append(item)
         except Exception:  # noqa: BLE001
             _LOG.exception("Failed to preload history for channel %s", channel_id)
             self._warmed_channels.add(channel_id)
             return
+        # Reverse to get chronological order (oldest to newest)
+        messages.reverse()
         for msg in messages:
             if msg.author and msg.author.bot and msg.author != self.bot.user:
                 continue
@@ -787,31 +805,30 @@ class LLMChatNewCog(commands.Cog):
 
         text = _SVG_BLOCK_RE.sub(_replace_svg, text)
 
-        code_files: list[discord.File] = []
-        if len(text) > 2000:
-            def _extract_code(match: re.Match[str]) -> str:
-                lang = (match.group("lang") or "").strip().lower()
-                body = match.group("body") or ""
-                filename = f"code_{len(code_files) + 1}.{self._code_extension(lang)}"
-                code_files.append(discord.File(io.BytesIO(body.encode("utf-8")), filename=filename))
-                return f"[see file: {filename}]"
-
-            text = _CODE_BLOCK_RE.sub(_extract_code, text)
-
-        chunks = self._chunk_text(text)
         sent_messages: list[discord.Message] = []
-        if not chunks:
-            chunks = ["[no content]"]
-        for chunk in chunks:
-            sent = await channel.send(chunk)
+
+        # If response is longer than Discord's limit, upload as text file
+        if len(text) > 2000:
+            timestamp = int(time.time())
+            text_file = discord.File(
+                io.BytesIO(text.encode("utf-8")),
+                filename=f"response_{timestamp}.txt"
+            )
+            all_files = svg_files + [text_file]
+            sent = await channel.send("Response (see attached file):", files=all_files)
             sent_messages.append(sent)
-        all_files = svg_files + code_files
-        if all_files:
-            sent = await channel.send("Generated attachments:", files=all_files)
+            history_text = text
+        else:
+            # Response fits in a single message, send it directly
+            if not text:
+                text = "[no content]"
+            sent = await channel.send(text)
             sent_messages.append(sent)
-        history_text = "\n".join(chunk for chunk in chunks if chunk).strip()
-        if not history_text:
-            history_text = "[no content]"
+            if svg_files:
+                sent = await channel.send("Generated attachments:", files=svg_files)
+                sent_messages.append(sent)
+            history_text = text
+
         turn = ConversationTurn(role="assistant", content=history_text, images=svg_images)
         if sent_messages:
             turn.message_id = sent_messages[-1].id

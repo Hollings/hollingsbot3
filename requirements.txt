@@ -14,3 +14,4 @@ watchfiles
 anthropic
 openai
 cairosvg
+beautifulsoup4
