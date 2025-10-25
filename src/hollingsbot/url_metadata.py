@@ -95,7 +95,18 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
 
                 html = await response.text()
 
-        return _parse_metadata(url, html)
+        metadata = _parse_metadata(url, html)
+
+        # Log extracted metadata for debugging
+        if metadata.image_urls:
+            _LOG.info(
+                "Extracted %d image(s) from %s: %s",
+                len(metadata.image_urls),
+                url,
+                ", ".join(metadata.image_urls)
+            )
+
+        return metadata
 
     except asyncio.TimeoutError:
         _LOG.warning("Timeout fetching URL: %s", url)
