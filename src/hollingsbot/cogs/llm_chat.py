@@ -29,7 +29,11 @@ from celery.result import AsyncResult
 
 from hollingsbot.settings import clear_system_prompt_cache, get_default_system_prompt
 from hollingsbot.tasks import generate_llm_chat_response
-from hollingsbot.url_metadata import extract_url_metadata, format_metadata_for_llm
+from hollingsbot.url_metadata import (
+    download_images_from_metadata,
+    extract_url_metadata,
+    format_metadata_for_llm,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -481,6 +485,7 @@ class LLMChatNewCog(commands.Cog):
             history_text += f"\n{placeholder}"
 
         # Extract and append URL metadata for links in the message
+        url_images: list[ImageAttachment] = []
         if base_text:
             url_metadata_list = await extract_url_metadata(base_text)
             if url_metadata_list:
@@ -494,8 +499,22 @@ class LLMChatNewCog(commands.Cog):
                 history_metadata_text = "\n\n".join(history_metadata_parts)
                 history_text += f"\n\n{history_metadata_text}"
 
+                # Download and process images from URL metadata
+                for metadata in url_metadata_list:
+                    downloaded_images = await download_images_from_metadata(metadata)
+                    # Convert url_metadata.ImageAttachment to llm_chat.ImageAttachment
+                    for url_img in downloaded_images:
+                        url_images.append(ImageAttachment(
+                            name=url_img.name,
+                            url=url_img.url,
+                            data_url=url_img.data_url,
+                            width=url_img.width,
+                            height=url_img.height,
+                            size=url_img.size,
+                        ))
+
         current_images = await self._collect_image_attachments(message)
-        merged_images = [img.clone() for img in reply_images + current_images]
+        merged_images = [img.clone() for img in reply_images + current_images + url_images]
 
         model_turn = ModelTurn(role="user", text=full_text, images=[img.clone() for img in merged_images])
         history_turn = ConversationTurn(

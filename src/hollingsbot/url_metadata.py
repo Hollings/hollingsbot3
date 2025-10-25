@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import logging
 import re
 from dataclasses import dataclass
@@ -10,6 +12,7 @@ from typing import Any
 
 import aiohttp
 from bs4 import BeautifulSoup
+from PIL import Image
 
 _LOG = logging.getLogger(__name__)
 
@@ -22,6 +25,19 @@ _URL_PATTERN = re.compile(
 
 _MAX_CONTENT_LENGTH = 5_000_000  # 5MB limit for fetched HTML
 _REQUEST_TIMEOUT = 10  # seconds
+_IMAGE_MAX_EDGE = 2048  # Max dimension for images sent to LLM
+_IMAGE_MAX_BYTES = 9_500_000  # Max size for processed images
+
+
+@dataclass
+class ImageAttachment:
+    """Image attachment for LLM conversation."""
+    name: str
+    url: str | None
+    data_url: str | None
+    width: int | None = None
+    height: int | None = None
+    size: int | None = None
 
 
 @dataclass
@@ -58,8 +74,121 @@ async def extract_urls(text: str) -> list[str]:
     return normalized_urls
 
 
+def _extract_tweet_id(url: str) -> str | None:
+    """Extract tweet ID from a Twitter/X URL.
+
+    Args:
+        url: The Twitter/X URL
+
+    Returns:
+        Tweet ID if found, None otherwise
+    """
+    # Match patterns like:
+    # https://twitter.com/user/status/1234567890
+    # https://x.com/user/status/1234567890
+    match = re.search(r"/status/(\d+)", url)
+    return match.group(1) if match else None
+
+
+def _generate_syndication_token(tweet_id: str) -> str:
+    """Generate token for Twitter syndication API.
+
+    Args:
+        tweet_id: The numeric tweet ID
+
+    Returns:
+        Generated token string
+    """
+    import math
+    tweet_id_num = int(tweet_id)
+    value = (tweet_id_num / 1e15) * math.pi
+    token = ""
+    # Convert to base 36
+    base36_str = ""
+    int_part = int(value)
+    while int_part > 0:
+        digit = int_part % 36
+        if digit < 10:
+            base36_str = str(digit) + base36_str
+        else:
+            base36_str = chr(ord('a') + digit - 10) + base36_str
+        int_part //= 36
+
+    # Remove leading zeros and dots
+    token = re.sub(r'(0+|\.)', '', base36_str)
+    return token if token else "0"
+
+
+async def fetch_twitter_syndication_data(url: str) -> URLMetadata | None:
+    """Fetch tweet data from Twitter's syndication endpoint.
+
+    This endpoint provides full tweet data including all images,
+    unlike Open Graph metadata which only includes the first image.
+
+    Args:
+        url: The Twitter/X URL
+
+    Returns:
+        URLMetadata object if successful, None otherwise
+    """
+    tweet_id = _extract_tweet_id(url)
+    if not tweet_id:
+        _LOG.debug("Could not extract tweet ID from URL: %s", url)
+        return None
+
+    token = _generate_syndication_token(tweet_id)
+    syndication_url = f"https://cdn.syndication.twimg.com/tweet-result?id={tweet_id}&token={token}"
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(syndication_url) as response:
+                if response.status != 200:
+                    _LOG.warning("Syndication API returned HTTP %d for tweet %s", response.status, tweet_id)
+                    return None
+
+                data = await response.json()
+
+        # Extract data from syndication response
+        metadata = URLMetadata(url=url)
+
+        # Get text
+        metadata.title = data.get("user", {}).get("name", "") + " on X"
+        metadata.description = data.get("text", "")
+        metadata.site_name = "X (formerly Twitter)"
+
+        # Extract all image URLs from photos
+        photos = data.get("photos", [])
+        for photo in photos:
+            img_url = photo.get("url")
+            if img_url and img_url not in metadata.image_urls:
+                metadata.image_urls.append(img_url)
+
+        # Also check for video thumbnail
+        video = data.get("video")
+        if video:
+            thumb_url = video.get("poster")
+            if thumb_url and thumb_url not in metadata.image_urls:
+                metadata.image_urls.append(thumb_url)
+
+        _LOG.info(
+            "Syndication API: Extracted %d image(s) from tweet %s",
+            len(metadata.image_urls),
+            tweet_id
+        )
+
+        return metadata
+
+    except Exception as exc:  # noqa: BLE001
+        _LOG.warning("Failed to fetch Twitter syndication data for %s: %s", url, exc)
+        return None
+
+
 async def fetch_url_metadata(url: str) -> URLMetadata | None:
     """Fetch Open Graph/Twitter Card metadata from a URL.
+
+    For Twitter/X URLs, uses the syndication endpoint to get all images.
+    For other URLs, falls back to Open Graph/Twitter Card metadata.
 
     Args:
         url: The URL to fetch metadata from
@@ -67,6 +196,14 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
     Returns:
         URLMetadata object if successful, None otherwise
     """
+    # Try Twitter syndication endpoint first for Twitter/X URLs
+    if "twitter.com" in url.lower() or "x.com" in url.lower():
+        twitter_metadata = await fetch_twitter_syndication_data(url)
+        if twitter_metadata:
+            return twitter_metadata
+        _LOG.debug("Twitter syndication failed, falling back to Open Graph for %s", url)
+
+    # Fall back to Open Graph metadata for non-Twitter URLs or if syndication fails
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
         # Increase header size limits for sites like X/Twitter that send large cookies
@@ -219,6 +356,108 @@ def format_metadata_for_llm(metadata: URLMetadata, include_images: bool = True) 
                 parts.append(f"  {i}. {img_url}")
 
     return "\n".join(parts)
+
+
+def _encode_jpeg(image: Image.Image) -> bytes:
+    """Encode an image as JPEG with compression to meet size limits."""
+    for quality in (90, 85, 80, 75, 70, 60, 50):
+        out = io.BytesIO()
+        image.save(out, format="JPEG", optimize=True, quality=quality)
+        if out.tell() <= _IMAGE_MAX_BYTES:
+            return out.getvalue()
+    return out.getvalue()
+
+
+async def download_and_process_image(image_url: str, index: int = 1) -> ImageAttachment | None:
+    """Download and process an image URL for LLM consumption.
+
+    Args:
+        image_url: The URL of the image to download
+        index: Index number for naming (default: 1)
+
+    Returns:
+        ImageAttachment object with processed image data, or None if failed
+    """
+    try:
+        timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            headers = {
+                "User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"
+            }
+            async with session.get(image_url, headers=headers) as response:
+                if response.status != 200:
+                    _LOG.warning("Failed to download image from %s: HTTP %d", image_url, response.status)
+                    return None
+
+                image_data = await response.read()
+
+        # Process the image
+        with Image.open(io.BytesIO(image_data)) as img:
+            img = img.convert("RGB")
+            width, height = img.size
+            longest = max(width, height)
+
+            # Resize if needed
+            if longest > _IMAGE_MAX_EDGE:
+                scale = _IMAGE_MAX_EDGE / float(longest)
+                resized = (
+                    max(1, int(width * scale)),
+                    max(1, int(height * scale)),
+                )
+                img = img.resize(resized, Image.LANCZOS)
+                width, height = img.size
+
+            jpeg_bytes = _encode_jpeg(img)
+
+        # Create data URL
+        data_url = "data:image/jpeg;base64," + base64.b64encode(jpeg_bytes).decode("ascii")
+
+        return ImageAttachment(
+            name=f"url_image_{index}.jpg",
+            url=image_url,
+            data_url=data_url,
+            width=width,
+            height=height,
+            size=len(jpeg_bytes),
+        )
+
+    except Exception as exc:  # noqa: BLE001
+        _LOG.exception("Failed to download/process image from %s: %s", image_url, exc)
+        return None
+
+
+async def download_images_from_metadata(metadata: URLMetadata, max_images: int = 4) -> list[ImageAttachment]:
+    """Download and process images from URL metadata.
+
+    Args:
+        metadata: URLMetadata object containing image URLs
+        max_images: Maximum number of images to download (default: 4)
+
+    Returns:
+        List of ImageAttachment objects with processed image data
+    """
+    if not metadata.image_urls:
+        return []
+
+    # Limit number of images to avoid using too many tokens
+    image_urls = metadata.image_urls[:max_images]
+
+    # Download images in parallel
+    tasks = [
+        download_and_process_image(img_url, index=i+1)
+        for i, img_url in enumerate(image_urls)
+    ]
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Filter out failures and exceptions
+    images = []
+    for result in results:
+        if isinstance(result, ImageAttachment):
+            images.append(result)
+        elif isinstance(result, Exception):
+            _LOG.warning("Image download failed with exception: %s", result)
+
+    return images
 
 
 async def extract_url_metadata(text: str, max_urls: int = 3) -> list[URLMetadata]:
