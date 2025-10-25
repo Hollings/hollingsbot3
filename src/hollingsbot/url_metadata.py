@@ -30,8 +30,12 @@ class URLMetadata:
     url: str
     title: str | None = None
     description: str | None = None
-    image_url: str | None = None
+    image_urls: list[str] = None  # type: ignore[assignment]
     site_name: str | None = None
+
+    def __post_init__(self):
+        if self.image_urls is None:
+            self.image_urls = []
 
 
 async def extract_urls(text: str) -> list[str]:
@@ -126,9 +130,12 @@ def _parse_metadata(url: str, html: str) -> URLMetadata:
     if og_description:
         metadata.description = og_description.get("content")
 
-    og_image = soup.find("meta", property="og:image")
-    if og_image:
-        metadata.image_url = og_image.get("content")
+    # Extract ALL og:image tags (Twitter/X posts often have multiple images)
+    og_images = soup.find_all("meta", property="og:image")
+    for og_image in og_images:
+        img_url = og_image.get("content")
+        if img_url and img_url not in metadata.image_urls:
+            metadata.image_urls.append(img_url)
 
     og_site_name = soup.find("meta", property="og:site_name")
     if og_site_name:
@@ -145,10 +152,13 @@ def _parse_metadata(url: str, html: str) -> URLMetadata:
         if twitter_description:
             metadata.description = twitter_description.get("content")
 
-    if not metadata.image_url:
-        twitter_image = soup.find("meta", attrs={"name": "twitter:image"})
-        if twitter_image:
-            metadata.image_url = twitter_image.get("content")
+    # Also extract Twitter Card images (in addition to OG images)
+    if not metadata.image_urls:
+        twitter_images = soup.find_all("meta", attrs={"name": "twitter:image"})
+        for twitter_image in twitter_images:
+            img_url = twitter_image.get("content")
+            if img_url and img_url not in metadata.image_urls:
+                metadata.image_urls.append(img_url)
 
     # Fall back to standard HTML tags if still missing
     if not metadata.title:
@@ -189,8 +199,13 @@ def format_metadata_for_llm(metadata: URLMetadata, include_images: bool = True) 
             desc = desc[:297] + "..."
         parts.append(f"Description: {desc}")
 
-    if include_images and metadata.image_url:
-        parts.append(f"Image: {metadata.image_url}")
+    if include_images and metadata.image_urls:
+        if len(metadata.image_urls) == 1:
+            parts.append(f"Image: {metadata.image_urls[0]}")
+        else:
+            parts.append(f"Images ({len(metadata.image_urls)}):")
+            for i, img_url in enumerate(metadata.image_urls, 1):
+                parts.append(f"  {i}. {img_url}")
 
     return "\n".join(parts)
 

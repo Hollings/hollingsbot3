@@ -74,7 +74,7 @@ def test_parse_metadata_open_graph():
     assert metadata.url == "https://example.com"
     assert metadata.title == "Test Title"
     assert metadata.description == "Test Description"
-    assert metadata.image_url == "https://example.com/image.jpg"
+    assert metadata.image_urls == ["https://example.com/image.jpg"]
     assert metadata.site_name == "Example Site"
 
 
@@ -93,7 +93,7 @@ def test_parse_metadata_twitter_cards():
     metadata = _parse_metadata("https://example.com", html)
     assert metadata.title == "Twitter Title"
     assert metadata.description == "Twitter Description"
-    assert metadata.image_url == "https://example.com/twitter.jpg"
+    assert metadata.image_urls == ["https://example.com/twitter.jpg"]
 
 
 def test_parse_metadata_fallback_to_html():
@@ -118,7 +118,7 @@ def test_format_metadata_for_llm():
         url="https://example.com",
         title="Example Title",
         description="Example Description",
-        image_url="https://example.com/image.jpg",
+        image_urls=["https://example.com/image.jpg"],
         site_name="Example Site",
     )
     formatted = format_metadata_for_llm(metadata)
@@ -151,3 +151,58 @@ def test_format_metadata_minimal():
     formatted = format_metadata_for_llm(metadata)
     assert "https://example.com" in formatted
     assert "Just a Title" in formatted
+
+
+def test_parse_metadata_multiple_images():
+    """Test parsing multiple Open Graph images (e.g., from Twitter/X)."""
+    html = """
+    <html>
+    <head>
+        <meta property="og:title" content="Multi-Image Post">
+        <meta property="og:image" content="https://example.com/image1.jpg">
+        <meta property="og:image" content="https://example.com/image2.jpg">
+        <meta property="og:image" content="https://example.com/image3.jpg">
+    </head>
+    <body></body>
+    </html>
+    """
+    metadata = _parse_metadata("https://example.com", html)
+    assert metadata.title == "Multi-Image Post"
+    assert len(metadata.image_urls) == 3
+    assert "https://example.com/image1.jpg" in metadata.image_urls
+    assert "https://example.com/image2.jpg" in metadata.image_urls
+    assert "https://example.com/image3.jpg" in metadata.image_urls
+
+
+def test_format_metadata_multiple_images():
+    """Test formatting metadata with multiple images."""
+    metadata = URLMetadata(
+        url="https://example.com",
+        title="Multi-Image Post",
+        description="A post with multiple images",
+        image_urls=[
+            "https://example.com/image1.jpg",
+            "https://example.com/image2.jpg",
+            "https://example.com/image3.jpg",
+        ],
+    )
+    formatted = format_metadata_for_llm(metadata)
+    assert "Multi-Image Post" in formatted
+    assert "Images (3):" in formatted
+    assert "1. https://example.com/image1.jpg" in formatted
+    assert "2. https://example.com/image2.jpg" in formatted
+    assert "3. https://example.com/image3.jpg" in formatted
+
+
+def test_format_metadata_exclude_images():
+    """Test that include_images=False excludes image URLs."""
+    metadata = URLMetadata(
+        url="https://example.com",
+        title="Test Title",
+        description="Test Description",
+        image_urls=["https://example.com/image.jpg"],
+    )
+    formatted = format_metadata_for_llm(metadata, include_images=False)
+    assert "Test Title" in formatted
+    assert "Test Description" in formatted
+    assert "https://example.com/image.jpg" not in formatted
