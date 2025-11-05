@@ -7,6 +7,7 @@ are handled by a separate Celery worker communicating through Redis.
 ## Requirements
 - Docker
 - Docker Compose
+- NVIDIA GPU with NVIDIA Container Toolkit (for image generation worker)
 
 ## Setup
 1. Create a `.env` file (already provided) and fill in the required tokens and IDs.
