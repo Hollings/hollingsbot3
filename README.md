@@ -10,7 +10,7 @@ are handled by a separate Celery worker communicating through Redis.
 - NVIDIA GPU with NVIDIA Container Toolkit (for image generation worker)
 
 ## Setup
-1. Create a `.env` file (already provided) and fill in the required tokens and IDs.
+1. Create a `.env` file and fill in the required tokens and IDs.
    The `GITHUB_TOKEN` must include the `repo` scope so the bot can merge pull requests.
 2. Build and start the bot and worker:
    ```bash
