@@ -1,6 +1,6 @@
 # hollingsbot3
 
-This is a minimal Discord bot project using [discord.py](https://discordpy.readthedocs.io/).
+A Discord bot project using [discord.py](https://discordpy.readthedocs.io/) with advanced LLM chat, image generation, and modular cog architecture.
 It is set up to run inside Docker using docker-compose. Image generation tasks
 are handled by a separate Celery worker communicating through Redis.
 
