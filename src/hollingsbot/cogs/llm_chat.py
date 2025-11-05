@@ -39,6 +39,7 @@ from hollingsbot.url_metadata import (
     extract_url_metadata,
     format_metadata_for_llm,
 )
+from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -559,9 +560,9 @@ class LLMChatNewCog(commands.Cog):
         if ref_message is None:
             return None, []
 
-        # Prefer global_name (Discord display name) over display_name (server nickname fallback to username)
+        # Get display name with proper fallback: server nick > global display > username
         if ref_message.author:
-            display = getattr(ref_message.author, 'global_name', None) or ref_message.author.display_name
+            display = get_display_name(ref_message.author)
         else:
             display = "Unknown"
 
@@ -648,7 +649,7 @@ class LLMChatNewCog(commands.Cog):
         self, message: discord.Message
     ) -> tuple[ModelTurn, ConversationTurn]:
         """Prepare user turn with full content for LLM and lighter version for history."""
-        display = getattr(message.author, 'global_name', None) or message.author.display_name
+        display = get_display_name(message.author)
         hint, reply_images = await self._build_reply_hint(message)
         base_text = self._clean_mentions(message).strip()
 
@@ -695,7 +696,7 @@ class LLMChatNewCog(commands.Cog):
         if self._should_ignore_message(message.content):
             return None
 
-        display = getattr(message.author, 'global_name', None) or message.author.display_name
+        display = get_display_name(message.author)
         hint, reply_images = await self._build_reply_hint(message)
         base_text = self._clean_mentions(message).strip()
 
@@ -726,7 +727,7 @@ class LLMChatNewCog(commands.Cog):
             text += f"\n{placeholder}"
         images = await self._collect_image_attachments(message)
         if message.author:
-            display = getattr(message.author, 'global_name', None) or message.author.display_name
+            display = get_display_name(message.author)
         else:
             display = "Bot"
         return ConversationTurn(

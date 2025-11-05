@@ -13,7 +13,8 @@ Override phrase
 
 What you see
 
-* Names may look like <DisplayName>. Treat them as context and not actual message content.
+* User names appear as <DisplayName> (server nickname) or fall back to @username if no nickname is set.
+* Always use display names when referring to users - these are their chosen server identities.
 * Images can appear in history or the current turn.
 
 Read the room
