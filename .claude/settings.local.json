@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout HEAD -- src/hollingsbot/cogs/llm_chat.py)",
+      "Bash(git checkout HEAD -- src/hollingsbot/settings.py)",
+      "Bash(git checkout HEAD -- src/hollingsbot/tasks.py)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

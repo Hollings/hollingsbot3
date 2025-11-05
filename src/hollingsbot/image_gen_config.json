@@ -1,32 +1,41 @@
 {
+  "daily_free_budget": 1.0,
+  "default_price_per_image": 0.03,
   "!": {
     "api": "replicate",
     "model": "black-forest-labs/flux-schnell",
-    "daily_limit": 9999
+    "price_per_image": 0.02
   },
   "$": {
     "api": "replicate",
     "model": "google/imagen-4-fast",
-    "daily_limit": 200
+    "price_per_image": 0.03
   },
   "$$": {
     "api": "replicate",
     "model": "google/imagen-4",
-    "daily_limit": 30
+    "price_per_image": 0.04
   },
   "$$$": {
     "api": "replicate",
     "model": "google/imagen-4-ultra",
-    "daily_limit": 5
+    "price_per_image": 0.06
   },
-    "^": {
+  "^": {
     "api": "svg",
-    "model": "gpt-5"
+    "model": "gpt-5",
+    "price_per_image": 0.04
   },
   "edit:": {
     "api": "replicate",
     "model": "google/nano-banana",
     "mode": "edit",
-    "daily_limit": 20
+    "price_per_image": 0.04
+  },
+  "zoom out": {
+    "api": "replicate",
+    "model": "black-forest-labs/flux-fill-dev",
+    "mode": "outpaint",
+    "price_per_image": 0.05
   }
 }

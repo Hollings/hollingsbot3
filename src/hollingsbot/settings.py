@@ -139,6 +139,20 @@ def get_default_system_prompt() -> str:
 DEFAULT_SYSTEM_PROMPT: str = get_default_system_prompt()
 
 
+# --------------------- Admin user IDs ---------------------
+
+def get_admin_user_ids() -> set[int]:
+    """Get the set of admin user IDs from environment variable.
+
+    Returns:
+        Set of Discord user IDs that have admin privileges
+    """
+    env_ids = os.getenv("ADMIN_USER_IDS", "")
+    return {int(uid.strip()) for uid in env_ids.split(",") if uid.strip().isdigit()}
+
+
+# --------------------- Prompts ---------------------
+
 # Prompt used by the EnhanceCog to expand and improve quoted text before
 # generating an accompanying image.
 ENHANCE_PROMPT: str = (

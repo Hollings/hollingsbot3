@@ -44,25 +44,27 @@ def generate_image(  # noqa: C901
     prompt: str,
     seed: int | None = None,
     *,
-    # New optional kwargs for editing
+    # New optional kwargs for editing and outpainting
     image_input: list[bytes] | None = None,
+    mask: str | None = None,
     output_format: str | None = None,
     # Existing kwarg
     timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
 ) -> str | list[str]:
     """
     Generate an image, write it to disk, and return the file path.
-    Supports editing when image_input is provided.
+    Supports editing when image_input is provided, and outpainting when mask is also provided.
     """
     start = time.monotonic()
     logger.info(
-        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s images=%s fmt=%s",
+        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s images=%s mask=%s fmt=%s",
         prompt_id,
         api,
         model,
         seed,
         prompt,
         (len(image_input) if image_input else 0),
+        ("provided" if mask else "none"),
         output_format,
     )
     update_status(prompt_id, "started")
@@ -78,6 +80,8 @@ def generate_image(  # noqa: C901
             kwargs["seed"] = seed
         if image_input and "image_input" in gen_sig.parameters:
             kwargs["image_input"] = image_input
+        if mask and "mask" in gen_sig.parameters:
+            kwargs["mask"] = mask
         if output_format and "output_format" in gen_sig.parameters:
             kwargs["output_format"] = output_format
         return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
@@ -89,6 +93,8 @@ def generate_image(  # noqa: C901
             kwargs["seed"] = seed
         if image_input and "image_input" in gen_many_sig.parameters:
             kwargs["image_input"] = image_input
+        if mask and "mask" in gen_many_sig.parameters:
+            kwargs["mask"] = mask
         if output_format and "output_format" in gen_many_sig.parameters:
             kwargs["output_format"] = output_format
         return await asyncio.wait_for(gen_many(prompt, **kwargs), timeout)  # type: ignore[misc]

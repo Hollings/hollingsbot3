@@ -1,21 +1,70 @@
+"""General utility commands for the Discord bot.
+
+This cog provides basic commands like ping and help that are available across
+all channels and provide core bot functionality.
+"""
+
+from __future__ import annotations
+
+import logging
+
 from discord.ext import commands
 
-MAX_HELP_LEN = 1900  # keep a little margin below Discord 2000 limit
+__all__ = ["General"]
+
+_log = logging.getLogger(__name__)
+
+# Discord's message limit is 2000 characters; we keep a safety margin
+MAX_HELP_MESSAGE_LENGTH = 1900
 
 
 class General(commands.Cog):
-    def __init__(self, bot: commands.Bot):
+    """Basic commands available to all users.
+
+    Provides fundamental bot interactions including connection testing (ping)
+    and comprehensive help documentation.
+    """
+
+    def __init__(self, bot: commands.Bot) -> None:
+        """Initialize the General cog.
+
+        Args:
+            bot: The Discord bot instance.
+        """
         self.bot = bot
+        _log.info("General cog initialized")
 
     @commands.command()
-    async def ping(self, ctx: commands.Context):
-        """Responds with Pong!"""
+    async def ping(self, ctx: commands.Context) -> None:
+        """Test bot responsiveness.
+
+        Responds with 'Pong!' to verify the bot is online and responsive.
+        """
+        _log.debug("Ping command invoked by %s", ctx.author)
         await ctx.send("Pong!")
 
     @commands.command(name="help")
-    async def help_cmd(self, ctx: commands.Context):
-        """Show available features and commands (<=2000 chars)."""
-        text = (
+    async def help_cmd(self, ctx: commands.Context) -> None:
+        """Display comprehensive bot help documentation.
+
+        Shows available features, commands, and usage examples across all cogs.
+        The message is automatically truncated if it exceeds Discord's length limit.
+        """
+        _log.debug("Help command invoked by %s in channel %s", ctx.author, ctx.channel)
+        help_text = self._build_help_text()
+        truncated_text = self._truncate_for_discord(help_text)
+        await ctx.send(truncated_text)
+
+    def _build_help_text(self) -> str:
+        """Build the complete help message text.
+
+        Constructs a comprehensive help message documenting all bot features,
+        organized by category (image generation, LLM chat, admin, etc.).
+
+        Returns:
+            The complete help message as a formatted string.
+        """
+        return (
             "**Hollingsbot Help**\n"
             "Mention the bot to run commands anywhere (e.g., `@Bot help`).\n\n"
             "Image generation\n"
@@ -41,8 +90,31 @@ class General(commands.Cog):
             "- `ping` returns `Pong!`.\n"
             "- If a starboard is enabled, reacting to a bot message can repost it there.\n"
         )
-        await ctx.send(text[:MAX_HELP_LEN])
+
+    def _truncate_for_discord(self, text: str) -> str:
+        """Truncate text to fit within Discord's message length limit.
+
+        Args:
+            text: The text to truncate.
+
+        Returns:
+            The text truncated to MAX_HELP_MESSAGE_LENGTH if necessary.
+        """
+        if len(text) <= MAX_HELP_MESSAGE_LENGTH:
+            return text
+
+        _log.warning(
+            "Help text (%d chars) exceeds limit (%d chars), truncating",
+            len(text),
+            MAX_HELP_MESSAGE_LENGTH,
+        )
+        return text[:MAX_HELP_MESSAGE_LENGTH]
 
 
-async def setup(bot: commands.Bot):
+async def setup(bot: commands.Bot) -> None:
+    """Load the General cog into the bot.
+
+    Args:
+        bot: The Discord bot instance to add the cog to.
+    """
     await bot.add_cog(General(bot))

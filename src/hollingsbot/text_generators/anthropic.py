@@ -1,7 +1,8 @@
-"""Text-generation backend that calls Anthropic’s Claude models."""
+"""Text-generation backend that calls Anthropic's Claude models."""
 from __future__ import annotations
 
 import asyncio
+import os
 from typing import Dict, Sequence, Union, TypedDict, Any, List
 
 from anthropic import AsyncAnthropic
@@ -35,7 +36,8 @@ class AnthropicTextGenerator(TextGeneratorAPI):
       ``content`` keys).
 
     The response text is returned directly, truncated by Anthropic to the
-    specified ``max_tokens`` server-side (1 024 here).
+    specified ``max_tokens`` server-side (16384 by default for Claude 4+,
+    configurable via ANTHROPIC_MAX_TOKENS environment variable).
     """
 
     def __init__(self, model: str = "claude-4o") -> None:
@@ -115,9 +117,10 @@ class AnthropicTextGenerator(TextGeneratorAPI):
         client = self._get_client()
 
         async def _call_sdk(msgs: Sequence[Dict[str, Any]], system: str | None) -> str:
+            max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16384"))
             kwargs: Dict[str, Any] = {
                 "model": self.model,
-                "max_tokens": 1024,
+                "max_tokens": max_tokens,
                 "messages": msgs,
             }
             if system:

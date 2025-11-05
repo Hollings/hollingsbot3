@@ -62,11 +62,13 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         *,
         seed: int | None = None,
         image_input: Sequence[Any] | None = None,
+        mask: str | None = None,
         output_format: str | None = None,
     ) -> bytes:
         """
-        Generate or edit an image. When image_input is provided, pass files/URLs
-        to models that expect an `image_input` array (e.g., google/nano-banana).
+        Generate, edit, or outpaint an image.
+        - When image_input is provided, pass files/URLs to models that expect an `image_input` array (e.g., google/nano-banana).
+        - When both image_input and mask are provided, use for outpainting with flux-fill-dev model.
         """
         try:
             inputs: dict[str, Any] = {"prompt": prompt}
@@ -78,7 +80,20 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             if image_input:
                 prepared, cleanup = self._prepare_image_inputs(image_input)
                 try:
-                    inputs["image_input"] = prepared
+                    # For flux-fill-dev (outpainting), use 'image' and 'mask' parameters
+                    if mask and "flux-fill" in self.model.lower():
+                        # flux-fill-dev expects 'image' (not 'image_input') and 'mask'
+                        inputs["image"] = prepared[0] if prepared else None
+                        # Prepare mask as single input
+                        mask_prepared, mask_cleanup = self._prepare_image_inputs([mask])
+                        try:
+                            inputs["mask"] = mask_prepared[0] if mask_prepared else None
+                        finally:
+                            self._cleanup_files(mask_cleanup)
+                    else:
+                        # Standard edit mode with image_input array
+                        inputs["image_input"] = prepared
+
                     if output_format:
                         inputs["output_format"] = output_format
                     # For Seedream, cap max_images so (input + generated) <= 15, default target = 4
@@ -197,6 +212,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         *,
         seed: int | None = None,
         image_input: Sequence[Any] | None = None,
+        mask: str | None = None,
         output_format: str | None = None,
     ) -> list[bytes]:
         """Generate one or more images and return all results as a list of bytes.
@@ -204,6 +220,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         - For multi-image-capable models like Seedream-4 (with
           sequential_image_generation='auto'), this returns all images.
         - For single-image models, the list has a single element.
+        - When both image_input and mask are provided, use for outpainting with flux-fill-dev model.
         """
         inputs: dict[str, Any] = {"prompt": prompt}
         if self._is_seedream():
@@ -214,7 +231,20 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         if image_input:
             prepared, cleanup = self._prepare_image_inputs(image_input)
             try:
-                inputs["image_input"] = prepared
+                # For flux-fill-dev (outpainting), use 'image' and 'mask' parameters
+                if mask and "flux-fill" in self.model.lower():
+                    # flux-fill-dev expects 'image' (not 'image_input') and 'mask'
+                    inputs["image"] = prepared[0] if prepared else None
+                    # Prepare mask as single input
+                    mask_prepared, mask_cleanup = self._prepare_image_inputs([mask])
+                    try:
+                        inputs["mask"] = mask_prepared[0] if mask_prepared else None
+                    finally:
+                        self._cleanup_files(mask_cleanup)
+                else:
+                    # Standard edit mode with image_input array
+                    inputs["image_input"] = prepared
+
                 if output_format:
                     inputs["output_format"] = output_format
                 if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":

@@ -25,15 +25,10 @@ _IMG_CHANNEL_IDS = _ids_from_env("STABLE_DIFFUSION_CHANNEL_IDS")
 def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
     """
     Allow mention prefix everywhere.
-    Allow "!" only outside image-gen channels and outside DMs.
-    This prevents the command layer from consuming bang-prefixed image prompts
-    where the image cog should handle them.
+    Allow "!" prefix everywhere now that the image cog properly filters out
+    known bot commands. This lets users use !usage, !balance, etc. in image channels.
     """
-    extras = []
-    if message.guild is not None:
-        if getattr(message.channel, "id", None) not in _IMG_CHANNEL_IDS:
-            extras.append("!")
-    return commands.when_mentioned_or(*extras)(bot, message)
+    return commands.when_mentioned_or("!")(bot, message)
 
 bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True, help_command=None)
 
@@ -63,6 +58,7 @@ async def main():
         await _ensure_loaded("hollingsbot.cogs.image_gen_cog")
         await _ensure_loaded("hollingsbot.cogs.gpt2_chat")
         await _ensure_loaded("hollingsbot.cogs.admin")
+        await _ensure_loaded("hollingsbot.cogs.credits_cog")
         await _ensure_loaded("hollingsbot.cogs.gif_chain")
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
