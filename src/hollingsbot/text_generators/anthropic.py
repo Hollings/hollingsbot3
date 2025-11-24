@@ -56,6 +56,7 @@ class AnthropicTextGenerator(TextGeneratorAPI):
     async def generate(
         self,
         prompt: Union[str, Sequence[_Message]],
+        temperature: float = 1.0,
     ) -> str:
         """Return Claude's reply for *prompt* as a plain string.
 
@@ -116,15 +117,23 @@ class AnthropicTextGenerator(TextGeneratorAPI):
 
         client = self._get_client()
 
-        async def _call_sdk(msgs: Sequence[Dict[str, Any]], system: str | None) -> str:
+        async def _call_sdk(msgs: Sequence[Dict[str, Any]], system: str | None, temp: float) -> str:
             max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16384"))
             kwargs: Dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_tokens,
                 "messages": msgs,
+                "temperature": temp,
             }
             if system:
-                kwargs["system"] = system
+                # Use prompt caching for system prompt (90% cheaper on cache hits)
+                kwargs["system"] = [
+                    {
+                        "type": "text",
+                        "text": system,
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ]
             response = await client.messages.create(**kwargs)
             # SDK returns a list of content blocks; aggregate text blocks.
             parts: List[str] = []
@@ -134,4 +143,4 @@ class AnthropicTextGenerator(TextGeneratorAPI):
                     parts.append(text)
             return "".join(parts).strip()
 
-        return await _call_sdk(cleaned, system_text)
+        return await _call_sdk(cleaned, system_text, temperature)

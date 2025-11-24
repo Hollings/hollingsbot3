@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from .notebook import save_memory
+from .search_history import search_messages
 
 __all__ = ["Tool", "AVAILABLE_TOOLS", "get_tool_definitions_text"]
 
@@ -31,6 +32,16 @@ AVAILABLE_TOOLS: dict[str, Tool] = {
         },
         function=save_memory,
         channel_message="*the bot will remember that*",
+    ),
+    "search_messages": Tool(
+        name="search_messages",
+        description="Search through the message history of the current channel. Returns the 5 most recent matching messages with their content, author, timestamp, and attachments. Use this to recall past conversations, find specific information discussed previously, or check what was said by particular users.",
+        parameters={
+            "query": "Text to search for in message content (optional, leave empty to get recent messages)",
+            "author_id": "Discord user ID to filter by specific author (optional)"
+        },
+        function=search_messages,
+        channel_message=None,
     ),
 }
 

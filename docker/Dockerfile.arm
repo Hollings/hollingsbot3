@@ -1,0 +1,32 @@
+# ARM-compatible, CPU-only version
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Make src importable everywhere (bot, celery)
+ENV PYTHONPATH=/app/src:/app
+
+# System deps for CairoSVG rendering + basic fonts
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcairo2 libpangocairo-1.0-0 fonts-dejavu-core \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Docker CLI and Compose plugin so the bot can control Docker when the socket is mounted
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(. /etc/os-release && echo "$VERSION_CODENAME") stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
+    && rm -rf /var/lib/apt/lists/*
+
+# Python deps
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Bring the whole repo in (src/, config/, etc.)
+COPY . .
+
+# Default for `docker run` (compose can override)
+CMD ["python", "-m", "hollingsbot"]

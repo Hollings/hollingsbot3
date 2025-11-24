@@ -44,8 +44,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
 
     def _supports_seed(self) -> bool:
         m = self.model.lower()
-        # Restrict seed to models known to accept it (e.g., FLUX variants).
-        return ("black-forest-labs/" in m) or ("flux" in m)
+        # Restrict seed to models known to accept it (e.g., FLUX variants, prunaai).
+        return ("black-forest-labs/" in m) or ("flux" in m) or ("prunaai/" in m)
 
     def _supports_disable_safety(self) -> bool:
         m = self.model.lower()

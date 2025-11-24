@@ -1,0 +1,54 @@
+version: '3.9'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+    command: watchfiles --filter python "python -m hollingsbot" /app
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
+      - prompt_db_data:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - redis
+
+  celery_text:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=1 -Q text
+    env_file: .env
+    volumes:
+      - ./:/app
+      - prompt_db_data:/data
+    depends_on:
+      - redis
+
+  celery_image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+    command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=2 -Q image
+    env_file: .env
+    restart: unless-stopped
+    volumes:
+      - ./:/app
+      - ./generated:/app/generated
+      - prompt_db_data:/data
+    depends_on:
+      - redis
+    # No GPU config - using cloud APIs (Replicate, etc.)
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    volumes:
+      - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
+    command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+
+volumes:
+  prompt_db_data:

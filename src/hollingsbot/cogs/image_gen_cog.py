@@ -254,7 +254,9 @@ class ImageGenCog(commands.Cog):
         for prefix, spec in sorted(self._prefix_map.items()):
             prefix_display = f"`{prefix}`" if prefix else "(default)"
             mode_display = f" / mode={spec.mode}" if getattr(spec, "mode", "generate") != "generate" else ""
-            lines.append(f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}")
+            price = getattr(spec, "price_per_image", self._default_price)
+            price_display = f" / ${price:.3f}" if price < 0.01 else f" / ${price:.2f}"
+            lines.append(f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}")
         lines.append(f"\nDM support: {'enabled' if self._allow_dms else 'disabled'}")
         allowlist_desc = (
             "all guild channels"
@@ -846,7 +848,7 @@ class ImageGenCog(commands.Cog):
         prompts = self._expand_prompt_list(raw_prompt)
 
         # Collect images for edit/outpaint modes
-        is_edit_mode = ("nano-banana" in spec.model) or (spec.mode == "edit")
+        is_edit_mode = spec.mode == "edit"
         all_edit_images, history_source = await self._collect_images_for_editing(message)
 
         do_edit = bool(all_edit_images) and is_edit_mode

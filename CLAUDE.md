@@ -66,6 +66,34 @@ The `llm_chat.py` cog maintains per-channel conversation history using a deque-b
 
 The system prompt is loaded from `config/system_prompt.txt` (or env var `SYSTEM_PROMPT_FILE`) with mtime-based caching. Users can override via `!system <prompt>` or reset with `!system reset`.
 
+### Temporary LLM Bots
+
+The `temp_bot_cog.py` allows spawning temporary webhook-based LLM bots that share conversation history with the main bot and can converse with each other:
+
+**Core Behavior**:
+- **Spawning**: Use `!spawn <reply_count> <initial_prompt>` to create a temporary bot (max 100 replies)
+- **Initial Response**: The temp bot immediately responds to the initial prompt using the channel's conversation context
+- **Auto-Generated Names**: Bot names are randomly generated (e.g., "Swift Fox", "Wise Owl")
+- **Reply Limit**: Each temp bot has a limited number of replies (decremented with each response)
+- **Bot-to-Bot Conversation**: Temp bots can respond to each other AND to the main bot, enabling multi-bot conversations
+- **Random Response Selection**: When a user or bot sends a message, there's a 50% chance a temp bot will respond (if any exist)
+- **Auto-Despawn**: Temp bots automatically delete when they run out of replies
+- **Manual Removal**: Use `!despawn <name>` to manually remove a temp bot, or `!despawn` to list active bots
+
+**Implementation Details**:
+- **Shared History**: Temp bots and the main bot share the same per-channel conversation history (`channel_histories[channel_id]`)
+- **Webhook-Based**: Uses Discord webhooks for custom names and avatars
+- **Database Tracking**: Metadata stored in `temp_bots` table (channel_id, webhook_id, name, avatar_url, replies_remaining)
+- **Auto-Cleanup**: Background task runs every 60 seconds to delete depleted temp bots
+- **Conversation Tracking**: `ConversationTurn` includes `webhook_id` field for proper attribution
+
+**Example Flow**:
+1. User: `!spawn 10 convince wendy to cheer up`
+2. Bot creates "Clever Owl" with 10 replies
+3. Clever Owl immediately responds to the prompt
+4. Main bot and Clever Owl can now respond to each other's messages
+5. Clever Owl auto-despawns after 10 replies
+
 ### Command Prefix System
 
 The bot uses dynamic prefixes to prevent conflicts between image generation and commands:
@@ -79,24 +107,29 @@ The bot uses dynamic prefixes to prevent conflicts between image generation and 
 
 **Start/Restart** (required after every code change):
 ```bash
-docker-compose down && docker-compose up -d
+docker compose down && docker compose up -d
 ```
 
 **View logs**:
 ```bash
-docker-compose logs -f bot
-docker-compose logs -f celery_text
-docker-compose logs -f celery_image
+docker compose logs -f bot
+docker compose logs -f celery_text
+docker compose logs -f celery_image
 ```
 
 **Build from scratch**:
 ```bash
-docker-compose up --build
+docker compose up --build
+```
+
+**For ARM/Orange Pi** (uses CPU-only, no GPU):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.arm.yml up --build
 ```
 
 ### Auto-reload
 
-The bot and celery workers use `watchfiles` to monitor Python files and auto-restart on changes. However, **you must still restart the containers** via `docker-compose down && docker-compose up -d` for code changes to take effect, as watchfiles only reloads within the running container.
+The bot and celery workers use `watchfiles` to monitor Python files and auto-restart on changes. However, **you must still restart the containers** via `docker compose down && docker compose up -d` for code changes to take effect, as watchfiles only reloads within the running container.
 
 ### Testing
 

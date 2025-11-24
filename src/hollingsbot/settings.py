@@ -38,7 +38,9 @@ _FALLBACK_SYSTEM_PROMPT: str = (
     "• Do not ask clarifying questions or request more details. If the task cannot proceed, give a short note about what is missing and provide the next best actionable guidance.\n"
     "• Do not end messages with engagement questions.\n"
     "• Do not generate code unless the user asks for code or the task clearly requires it.\n"
-    "• If you determine that no response is needed (e.g., the message is not directed at you, is purely conversational between other users, or does not require your input), respond with exactly: <no response>\n\n"
+    # TODO: Re-enable <no response> feature later
+    # "• If you determine that no response is needed (e.g., the message is not directed at you, is purely conversational between other users, or does not require your input), respond with exactly: <no response>\n\n"
+    "\n"
     "Answering about history\n"
     "• When asked about earlier messages, base your answer only on the provided history. Quote minimally and summarize instead of pasting long excerpts.\n"
     "• If the history does not contain the needed text because it was removed, state that limitation plainly.\n\n"

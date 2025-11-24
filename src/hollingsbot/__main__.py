@@ -63,7 +63,10 @@ async def main():
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
             await _ensure_loaded("hollingsbot.cogs.starboard")
-        await _ensure_loaded("hollingsbot.cogs.llm_chat")
+        await _ensure_loaded("hollingsbot.cogs.chat_coordinator")
+        await _ensure_loaded("hollingsbot.cogs.temp_bot_commands")
+        await _ensure_loaded("hollingsbot.cogs.debug_commands")
+        await _ensure_loaded("hollingsbot.cogs.feature_requests")
         logger.info("starting bot")
         await bot.start(token)
 

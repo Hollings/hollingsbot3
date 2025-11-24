@@ -9,7 +9,7 @@ from celery.utils.log import get_task_logger
 
 from hollingsbot.image_generators import get_image_generator
 from hollingsbot.text_generators import get_text_generator
-from hollingsbot.prompt_db import update_status
+from hollingsbot.prompt_db import update_status, log_llm_api_call
 
 logger = get_task_logger(__name__)
 
@@ -334,6 +334,15 @@ def generate_llm_chat_response(
 
     api_normalized = api.lower().strip()
 
+    # Serialize conversation for logging
+    import json
+    import traceback
+    conversation_json = json.dumps(conversation, indent=2)
+    response_text = ""
+    status = "error"
+    error_message = None
+    error_traceback = None
+
     try:
         if api_normalized in {"openai", "chatgpt"}:
             payload = _build_messages_for_generator(api_normalized, conversation)
@@ -343,17 +352,42 @@ def generate_llm_chat_response(
             payload = _conversation_to_text(conversation)
 
         text = asyncio.run(generator.generate(payload, **kwargs))
+        response_text = text
+        status = "success"
     except TypeError:
         # Some generators insist on plain text; fall back to flattened transcript.
         text = asyncio.run(generator.generate(_conversation_to_text(conversation)))
+        response_text = text
+        status = "success"
     except Exception as exc:  # noqa: BLE001
         duration = time.monotonic() - start
+        error_message = str(exc)
+        error_traceback = traceback.format_exc()
         logger.exception(
             "generate_llm_chat_response FAILED after %.2fs | %s",
             duration,
             exc,
         )
+        # Log failed API call
+        log_llm_api_call(
+            provider=api,
+            model=model,
+            conversation_json=conversation_json,
+            response_text="",
+            status="error",
+            error_message=error_message,
+        )
         raise
+    finally:
+        # Log successful API call
+        if status == "success":
+            log_llm_api_call(
+                provider=api,
+                model=model,
+                conversation_json=conversation_json,
+                response_text=response_text,
+                status="success",
+            )
 
     duration = time.monotonic() - start
     logger.info(
@@ -361,4 +395,25 @@ def generate_llm_chat_response(
         duration,
         len(text),
     )
-    return {"text": text}
+
+    # Build debug info for return
+    debug_info = {
+        "provider": api,
+        "model": model,
+        "status": status,
+        "duration": duration,
+        "error_message": error_message,
+        "error_traceback": error_traceback,
+        "temperature": temperature,
+    }
+
+    # Try to get token usage from generator if available
+    token_usage = getattr(generator, 'last_token_usage', None)
+    if token_usage:
+        debug_info["token_usage"] = token_usage
+
+    return {
+        "text": text,
+        "debug": debug_info,
+        "conversation": conversation,
+    }

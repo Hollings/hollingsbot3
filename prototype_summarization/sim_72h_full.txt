@@ -1,0 +1,2075 @@
+================================================================================
+  SIMULATION: 72 Hours of Discord Chat
+================================================================================
+
+Config: 1800s chunks (30.0min), 144 chunks total
+Time range: 12:00 - Day4 12:00
+
+================================================================================
+  PHASE 1: Generating Messages
+================================================================================
+
+[12:00-12:29] Chunk 1/144:
+  12:00 [Alice] That's unexpected!
+  12:03 [Eve] Does anyone know how to center a div?
+  12:27 [Frank] Hey everyone! the game
+
+[12:30-12:59] Chunk 2/144:
+  12:50 [Diana] That's concerning!
+  12:54 [Frank] Anyone want to grab lunch?
+  12:42 [Diana] Does anyone know when the meeting is?
+  12:53 [Henry] the weather is really quiet today
+  12:43 [Grace] Thanks for the advice!
+
+[13:00-13:29] Chunk 3/144:
+  13:07 [Grace] I just hit level 50
+  13:20 [Eve] Thanks for your time!
+  13:14 [Frank] I just learned Rust
+  13:26 [Diana] I just hit level 50
+  13:29 [Grace] Just finished the refactor, feeling great
+
+[13:30-13:59] Chunk 4/144:
+  13:48 [Alice] Does anyone know where the docs are?
+  13:50 [Frank] Can someone help me with my code?
+  13:32 [Henry] Can someone help me with Git conflicts?
+  13:57 [Grace] I'm working on the backend API
+
+[14:00-14:29] Chunk 5/144:
+  14:11 [Bob] Anyone want to grab lunch?
+  14:15 [Grace] Can someone help me with Git conflicts?
+  14:02 [Eve] I just fixed the bug
+  14:07 [Alice] Hey everyone! today's news
+  14:17 [Alice] Anyone want to play games?
+  14:21 [Eve] Anyone want to start a project?
+  14:15 [Frank] the weather is really fun today
+  14:02 [Eve] Does anyone know where the docs are?
+
+[14:30-14:59] Chunk 6/144:
+  14:33 [Eve] I just hit level 50
+  14:47 [Henry] Thanks for the advice!
+  14:48 [Charlie] I'm working on the UI redesign
+  14:44 [Grace] I just learned Rust
+  14:51 [Bob] I just finished my essay
+  14:43 [Frank] Hey everyone! the new update
+  14:39 [Eve] Anyone want to chat about AI?
+  14:31 [Eve] Anyone want to watch a movie?
+
+[15:00-15:29] Chunk 7/144:
+  15:24 [Bob] I'm working on a web scraper
+  15:24 [Grace] That's concerning!
+  15:23 [Frank] I just learned Rust
+
+[15:30-15:59] Chunk 8/144:
+  15:45 [Diana] Thanks for your time!
+  15:52 [Diana] That's awesome!
+  15:54 [Henry] I'm working on a web scraper
+  15:31 [Henry] Can someone help me with Docker setup?
+  15:50 [Henry] Can someone help me with this error?
+  15:51 [Charlie] Does anyone know if we have tests today?
+
+[16:00-16:29] Chunk 9/144:
+  16:13 [Grace] I just fixed the bug
+  16:13 [Diana] Just finished code review, feeling great
+  16:16 [Alice] Does anyone know how to center a div?
+  16:13 [Diana] Just finished debugging, feeling great
+
+[16:30-16:59] Chunk 10/144:
+  16:41 [Bob] the new update is really hectic today
+  16:56 [Diana] Hey everyone! the weather
+  16:45 [Grace] That's wild!
+  16:43 [Grace] Does anyone know how to center a div?
+  16:52 [Charlie] the weather is really hectic today
+  16:44 [Bob] I just ran 5k
+
+[17:00-17:29] Chunk 11/144:
+  17:15 [Frank] Does anyone know where the docs are?
+  17:27 [Grace] That's amazing!
+  17:16 [Frank] Can someone help me with Git conflicts?
+  17:16 [Bob] Can someone help me with understanding async?
+  17:24 [Eve] Does anyone know when the meeting is?
+
+[17:30-17:59] Chunk 12/144:
+  17:58 [Alice] Does anyone know when the meeting is?
+  17:48 [Alice] That's amazing!
+  17:38 [Eve] Thanks for sharing that link!
+
+[18:00-18:29] Chunk 13/144:
+  18:08 [Eve] Anyone want to watch a movie?
+  18:19 [Bob] Just finished the refactor, feeling great
+  18:05 [Diana] Hey everyone! the new update
+
+[18:30-18:59] Chunk 14/144:
+  18:56 [Eve] Just finished my homework, feeling great
+  18:50 [Henry] Just finished code review, feeling great
+  18:32 [Eve] Just finished my homework, feeling great
+  18:49 [Frank] Hey everyone! the game
+  18:43 [Henry] this project is really productive today
+
+[19:00-19:29] Chunk 15/144:
+  19:10 [Frank] That's unexpected!
+  19:21 [Diana] Thanks for explaining that!
+  19:24 [Eve] I just hit level 50
+
+[19:30-19:59] Chunk 16/144:
+  19:54 [Charlie] That's concerning!
+  19:59 [Charlie] Anyone want to watch a movie?
+  19:45 [Grace] Can someone help me with Docker setup?
+  19:31 [Bob] the new update is really interesting today
+  19:59 [Eve] Thanks for sharing that link!
+  19:41 [Diana] Just finished code review, feeling great
+  19:51 [Alice] That's unexpected!
+
+[20:00-20:29] Chunk 17/144:
+  20:11 [Charlie] Hey everyone! this project
+  20:02 [Alice] Just finished debugging, feeling great
+  20:27 [Eve] Thanks for the advice!
+
+[20:30-20:59] Chunk 18/144:
+  20:43 [Alice] Thanks for the help!
+  20:50 [Bob] Thanks for your time!
+  20:51 [Diana] Hey everyone! this project
+  20:34 [Bob] Can someone help me with understanding async?
+
+[21:00-21:29] Chunk 19/144:
+  21:25 [Eve] Does anyone know how to center a div?
+  21:19 [Bob] I'm working on the UI redesign
+  21:21 [Charlie] Thanks for explaining that!
+  21:13 [Eve] Thanks for explaining that!
+
+[21:30-21:59] Chunk 20/144:
+  21:53 [Eve] the game is really interesting today
+  21:36 [Diana] Anyone want to play games?
+  21:50 [Alice] Does anyone know how to center a div?
+
+[22:00-22:29] Chunk 21/144:
+  22:00 [Bob] the game is really quiet today
+  22:16 [Henry] Thanks for your time!
+  22:21 [Charlie] Hey everyone! the weather
+  22:02 [Grace] I just ran 5k
+
+[22:30-22:59] Chunk 22/144:
+  22:57 [Bob] Anyone want to grab lunch?
+  22:40 [Bob] I'm working on a web scraper
+  22:55 [Eve] the game is really interesting today
+
+[23:00-23:29] Chunk 23/144:
+  23:10 [Frank] the weather is really productive today
+  23:03 [Eve] That's amazing!
+  23:11 [Grace] the weather is really busy today
+  23:15 [Alice] the game is really fun today
+  23:23 [Frank] Anyone want to watch a movie?
+  23:14 [Eve] Anyone want to start a project?
+  23:07 [Diana] I just learned Rust
+
+[23:30-23:59] Chunk 24/144:
+  23:49 [Grace] the weather is really hectic today
+  23:54 [Bob] I'm working on the UI redesign
+  23:38 [Bob] I'm working on my portfolio
+  23:48 [Charlie] Can someone help me with this error?
+  23:55 [Bob] Anyone want to watch a movie?
+  23:46 [Alice] Thanks for the advice!
+  23:42 [Diana] That's concerning!
+
+[00:00-00:29] Chunk 25/144:
+  00:20 [Henry] Thanks for your time!
+  00:14 [Frank] Can someone help me with understanding async?
+  00:02 [Charlie] the weather is really productive today
+  00:11 [Grace] That's hilarious!
+  00:17 [Bob] the weather is really quiet today
+
+[00:30-00:59] Chunk 26/144:
+  00:58 [Charlie] Anyone want to start a project?
+  00:36 [Henry] Just finished the documentation, feeling great
+  00:37 [Grace] Can someone help me with Git conflicts?
+  00:47 [Bob] Can someone help me with Docker setup?
+  00:39 [Alice] Anyone want to chat about AI?
+
+[01:00-01:29] Chunk 27/144:
+  01:17 [Alice] the game is really interesting today
+  01:09 [Grace] Thanks for sharing that link!
+  01:03 [Henry] That's wild!
+  01:20 [Diana] Can someone help me with my code?
+  01:19 [Grace] I'm working on the UI redesign
+  01:29 [Bob] Thanks for the help!
+
+[01:30-01:59] Chunk 28/144:
+  01:55 [Henry] the game is really busy today
+  01:31 [Alice] That's hilarious!
+  01:55 [Grace] Does anyone know if we have tests today?
+  01:41 [Charlie] I just learned Rust
+  01:48 [Henry] That's unexpected!
+  01:41 [Charlie] Thanks for the help!
+  01:31 [Charlie] I just hit level 50
+
+[02:00-02:29] Chunk 29/144:
+  02:15 [Bob] this project is really quiet today
+  02:00 [Henry] I just fixed the bug
+  02:06 [Eve] Anyone want to play games?
+  02:10 [Frank] I just ran 5k
+  02:15 [Bob] Can someone help me with Git conflicts?
+  02:04 [Alice] the weather is really fun today
+  02:28 [Bob] Anyone want to grab lunch?
+  02:08 [Charlie] Does anyone know if we have tests today?
+
+[02:30-02:59] Chunk 30/144:
+  02:52 [Grace] Just finished the refactor, feeling great
+  02:51 [Alice] Hey everyone! the new update
+  02:35 [Grace] Thanks for the advice!
+  02:34 [Bob] today's news is really hectic today
+
+[03:00-03:29] Chunk 31/144:
+  03:09 [Henry] I'm working on my portfolio
+  03:17 [Alice] That's amazing!
+  03:09 [Alice] Thanks for the advice!
+
+[03:30-03:59] Chunk 32/144:
+  03:31 [Bob] Just finished the documentation, feeling great
+  03:34 [Alice] Anyone want to chat about AI?
+  03:31 [Charlie] I just ran 5k
+  03:43 [Bob] Just finished the documentation, feeling great
+  03:44 [Henry] Just finished my homework, feeling great
+  03:35 [Grace] Can someone help me with my code?
+
+[04:00-04:29] Chunk 33/144:
+  04:14 [Frank] Does anyone know where the docs are?
+  04:22 [Henry] Thanks for your time!
+  04:06 [Eve] Does anyone know when the meeting is?
+  04:09 [Henry] Anyone want to start a project?
+
+[04:30-04:59] Chunk 34/144:
+  04:38 [Diana] Thanks for sharing that link!
+  04:38 [Charlie] Hey everyone! today's news
+  04:43 [Alice] Thanks for the help!
+  04:35 [Bob] I'm working on my portfolio
+  04:41 [Charlie] That's wild!
+  04:54 [Grace] Thanks for sharing that link!
+  04:47 [Diana] the weather is really hectic today
+  04:45 [Eve] That's hilarious!
+
+[05:00-05:29] Chunk 35/144:
+  05:13 [Frank] Can someone help me with Git conflicts?
+  05:14 [Frank] Can someone help me with Git conflicts?
+  05:02 [Bob] Just finished code review, feeling great
+  05:23 [Alice] Does anyone know where the docs are?
+
+[05:30-05:59] Chunk 36/144:
+  05:45 [Bob] That's unexpected!
+  05:48 [Grace] Hey everyone! the weather
+  05:42 [Alice] Anyone want to grab lunch?
+  05:55 [Eve] Hey everyone! this project
+  05:36 [Alice] Anyone want to watch a movie?
+  05:38 [Frank] Hey everyone! the new update
+  05:38 [Grace] That's hilarious!
+
+[06:00-06:29] Chunk 37/144:
+  06:16 [Henry] Hey everyone! this project
+  06:08 [Diana] Does anyone know how to center a div?
+  06:08 [Alice] Does anyone know if we have tests today?
+  06:29 [Diana] Anyone want to start a project?
+  06:25 [Frank] Anyone want to grab lunch?
+  06:10 [Grace] That's awesome!
+  06:01 [Frank] Just finished the refactor, feeling great
+
+[06:30-06:59] Chunk 38/144:
+  06:42 [Charlie] Just finished the documentation, feeling great
+  06:54 [Diana] Can someone help me with my code?
+  06:32 [Alice] I just ran 5k
+  06:48 [Bob] Can someone help me with Git conflicts?
+
+[07:00-07:29] Chunk 39/144:
+  07:05 [Diana] Does anyone know if we have tests today?
+  07:23 [Alice] Does anyone know how to center a div?
+  07:23 [Henry] I just fixed the bug
+  07:09 [Grace] Hey everyone! the weather
+  07:02 [Frank] That's unexpected!
+  07:01 [Eve] Anyone want to grab lunch?
+  07:26 [Diana] Thanks for explaining that!
+
+[07:30-07:59] Chunk 40/144:
+  07:32 [Eve] Anyone want to grab lunch?
+  07:45 [Bob] this project is really hectic today
+  07:30 [Diana] Anyone want to start a project?
+  07:49 [Grace] Can someone help me with this error?
+  07:39 [Bob] I'm working on the backend API
+  07:34 [Frank] That's hilarious!
+  07:50 [Eve] Does anyone know where the docs are?
+  07:57 [Diana] I'm working on a Discord bot
+
+[08:00-08:29] Chunk 41/144:
+  08:27 [Grace] That's unexpected!
+  08:02 [Bob] Thanks for your time!
+  08:03 [Bob] Does anyone know how to center a div?
+  08:08 [Frank] Does anyone know when the meeting is?
+  08:00 [Diana] Thanks for the advice!
+  08:17 [Bob] Thanks for the advice!
+
+[08:30-08:59] Chunk 42/144:
+  08:58 [Grace] the weather is really busy today
+  08:51 [Alice] I just fixed the bug
+  08:54 [Eve] Does anyone know how to center a div?
+
+[09:00-09:29] Chunk 43/144:
+  09:29 [Henry] Thanks for the help!
+  09:21 [Charlie] I just ran 5k
+  09:12 [Charlie] I just fixed the bug
+  09:18 [Charlie] I just finished my essay
+  09:06 [Alice] I'm working on the backend API
+  09:27 [Bob] Does anyone know when the meeting is?
+  09:19 [Diana] Anyone want to start a project?
+  09:10 [Grace] Hey everyone! the new update
+
+[09:30-09:59] Chunk 44/144:
+  09:51 [Eve] I just hit level 50
+  09:39 [Frank] Just finished the refactor, feeling great
+  09:58 [Eve] Does anyone know if we have tests today?
+  09:53 [Diana] the new update is really interesting today
+
+[10:00-10:29] Chunk 45/144:
+  10:28 [Frank] Does anyone know if we have tests today?
+  10:23 [Charlie] Hey everyone! the weather
+  10:22 [Eve] That's hilarious!
+  10:24 [Henry] Does anyone know how to center a div?
+  10:00 [Frank] Hey everyone! this project
+  10:12 [Frank] That's awesome!
+
+[10:30-10:59] Chunk 46/144:
+  10:37 [Grace] I just fixed the bug
+  10:40 [Eve] I just hit level 50
+  10:37 [Diana] Can someone help me with Git conflicts?
+  10:47 [Charlie] Just finished the documentation, feeling great
+  10:56 [Eve] Thanks for the help!
+  10:51 [Eve] Can someone help me with this error?
+  10:32 [Diana] Can someone help me with Git conflicts?
+  10:32 [Alice] I'm working on a Discord bot
+
+[11:00-11:29] Chunk 47/144:
+  11:16 [Grace] today's news is really busy today
+  11:09 [Charlie] Can someone help me with my code?
+  11:12 [Alice] I just ran 5k
+  11:16 [Frank] the new update is really productive today
+
+[11:30-11:59] Chunk 48/144:
+  11:58 [Henry] Anyone want to chat about AI?
+  11:59 [Diana] That's awesome!
+  11:45 [Alice] today's news is really interesting today
+  11:41 [Eve] Hey everyone! the new update
+  11:33 [Grace] Hey everyone! the game
+
+[Day2 12:00-Day2 12:29] Chunk 49/144:
+  Day2 12:20 [Eve] Just finished the documentation, feeling great
+  Day2 12:07 [Bob] Anyone want to grab lunch?
+  Day2 12:18 [Diana] the game is really interesting today
+
+[Day2 12:30-Day2 12:59] Chunk 50/144:
+  Day2 12:35 [Henry] Anyone want to chat about AI?
+  Day2 12:48 [Grace] Can someone help me with this error?
+  Day2 12:42 [Frank] Anyone want to start a project?
+  Day2 12:34 [Frank] Hey everyone! the new update
+  Day2 12:37 [Grace] I just fixed the bug
+
+[Day2 13:00-Day2 13:29] Chunk 51/144:
+  Day2 13:16 [Frank] Hey everyone! the weather
+  Day2 13:16 [Alice] Can someone help me with understanding async?
+  Day2 13:27 [Alice] That's amazing!
+  Day2 13:26 [Frank] Does anyone know when the meeting is?
+  Day2 13:19 [Diana] Just finished my homework, feeling great
+  Day2 13:20 [Frank] Does anyone know how to center a div?
+  Day2 13:02 [Frank] Hey everyone! the game
+
+[Day2 13:30-Day2 13:59] Chunk 52/144:
+  Day2 13:41 [Charlie] I just fixed the bug
+  Day2 13:42 [Frank] That's unexpected!
+  Day2 13:57 [Bob] Just finished the documentation, feeling great
+  Day2 13:58 [Alice] the new update is really productive today
+  Day2 13:31 [Henry] I'm working on my portfolio
+
+[Day2 14:00-Day2 14:29] Chunk 53/144:
+  Day2 14:22 [Charlie] Does anyone know how to center a div?
+  Day2 14:12 [Grace] I just hit level 50
+  Day2 14:05 [Diana] Hey everyone! the weather
+  Day2 14:03 [Henry] Hey everyone! the new update
+  Day2 14:06 [Eve] Anyone want to grab lunch?
+  Day2 14:03 [Eve] Can someone help me with understanding async?
+  Day2 14:07 [Alice] That's awesome!
+
+[Day2 14:30-Day2 14:59] Chunk 54/144:
+  Day2 14:57 [Charlie] Can someone help me with my code?
+  Day2 14:34 [Charlie] Thanks for the help!
+  Day2 14:58 [Henry] Just finished the documentation, feeling great
+  Day2 14:59 [Bob] Hey everyone! today's news
+  Day2 14:33 [Alice] Just finished code review, feeling great
+  Day2 14:35 [Eve] That's awesome!
+
+[Day2 15:00-Day2 15:29] Chunk 55/144:
+  Day2 15:00 [Henry] this project is really productive today
+  Day2 15:26 [Frank] this project is really hectic today
+  Day2 15:28 [Charlie] Hey everyone! today's news
+  Day2 15:06 [Grace] Does anyone know where the docs are?
+  Day2 15:21 [Frank] Anyone want to grab lunch?
+
+[Day2 15:30-Day2 15:59] Chunk 56/144:
+  Day2 15:58 [Diana] That's awesome!
+  Day2 15:39 [Eve] I'm working on a Discord bot
+  Day2 15:54 [Bob] That's hilarious!
+  Day2 15:30 [Frank] Can someone help me with my code?
+
+[Day2 16:00-Day2 16:29] Chunk 57/144:
+  Day2 16:08 [Henry] That's awesome!
+  Day2 16:10 [Henry] That's amazing!
+  Day2 16:22 [Charlie] today's news is really interesting today
+  Day2 16:23 [Eve] the weather is really quiet today
+  Day2 16:15 [Grace] Anyone want to play games?
+
+[Day2 16:30-Day2 16:59] Chunk 58/144:
+  Day2 16:59 [Frank] I just learned Rust
+  Day2 16:51 [Bob] I just hit level 50
+  Day2 16:34 [Frank] Just finished the refactor, feeling great
+
+[Day2 17:00-Day2 17:29] Chunk 59/144:
+  Day2 17:10 [Eve] Can someone help me with this error?
+  Day2 17:05 [Charlie] Anyone want to chat about AI?
+  Day2 17:11 [Charlie] Thanks for sharing that link!
+
+[Day2 17:30-Day2 17:59] Chunk 60/144:
+  Day2 17:42 [Henry] Hey everyone! the new update
+  Day2 17:42 [Eve] Anyone want to chat about AI?
+  Day2 17:51 [Eve] Just finished code review, feeling great
+
+[Day2 18:00-Day2 18:29] Chunk 61/144:
+  Day2 18:06 [Alice] the new update is really hectic today
+  Day2 18:22 [Eve] Anyone want to start a project?
+  Day2 18:09 [Alice] Thanks for explaining that!
+  Day2 18:00 [Grace] I just learned Rust
+  Day2 18:13 [Grace] Thanks for sharing that link!
+  Day2 18:20 [Grace] Thanks for sharing that link!
+  Day2 18:15 [Frank] Hey everyone! the weather
+
+[Day2 18:30-Day2 18:59] Chunk 62/144:
+  Day2 18:47 [Alice] Just finished code review, feeling great
+  Day2 18:51 [Diana] I just fixed the bug
+  Day2 18:48 [Bob] I'm working on the backend API
+  Day2 18:46 [Eve] Hey everyone! the weather
+  Day2 18:47 [Henry] Can someone help me with Docker setup?
+  Day2 18:54 [Bob] the new update is really quiet today
+  Day2 18:31 [Henry] I just fixed the bug
+
+[Day2 19:00-Day2 19:29] Chunk 63/144:
+  Day2 19:24 [Alice] the weather is really hectic today
+  Day2 19:18 [Frank] I'm working on a Discord bot
+  Day2 19:17 [Eve] I'm working on my portfolio
+  Day2 19:28 [Frank] Can someone help me with this error?
+
+[Day2 19:30-Day2 19:59] Chunk 64/144:
+  Day2 19:33 [Bob] today's news is really productive today
+  Day2 19:30 [Eve] I'm working on my portfolio
+  Day2 19:36 [Eve] Can someone help me with Docker setup?
+  Day2 19:53 [Henry] Hey everyone! the new update
+  Day2 19:58 [Charlie] Does anyone know when the meeting is?
+  Day2 19:55 [Eve] Can someone help me with this error?
+  Day2 19:30 [Frank] the new update is really fun today
+  Day2 19:32 [Frank] today's news is really busy today
+
+[Day2 20:00-Day2 20:29] Chunk 65/144:
+  Day2 20:07 [Frank] this project is really fun today
+  Day2 20:15 [Eve] Does anyone know how to center a div?
+  Day2 20:00 [Bob] Can someone help me with understanding async?
+  Day2 20:05 [Grace] Can someone help me with my code?
+
+[Day2 20:30-Day2 20:59] Chunk 66/144:
+  Day2 20:57 [Bob] Anyone want to play games?
+  Day2 20:49 [Bob] Does anyone know where the docs are?
+  Day2 20:48 [Eve] Hey everyone! today's news
+  Day2 20:50 [Grace] Anyone want to watch a movie?
+  Day2 20:57 [Grace] Can someone help me with my code?
+  Day2 20:48 [Eve] Can someone help me with this error?
+  Day2 20:36 [Diana] Anyone want to start a project?
+  Day2 20:54 [Diana] Just finished code review, feeling great
+
+[Day2 21:00-Day2 21:29] Chunk 67/144:
+  Day2 21:16 [Frank] Thanks for the advice!
+  Day2 21:08 [Eve] Does anyone know when the meeting is?
+  Day2 21:16 [Bob] Can someone help me with understanding async?
+  Day2 21:00 [Henry] Can someone help me with understanding async?
+  Day2 21:22 [Alice] I just finished my essay
+
+[Day2 21:30-Day2 21:59] Chunk 68/144:
+  Day2 21:38 [Frank] Just finished debugging, feeling great
+  Day2 21:31 [Henry] Does anyone know if we have tests today?
+  Day2 21:45 [Grace] Hey everyone! the weather
+  Day2 21:42 [Henry] Just finished debugging, feeling great
+  Day2 21:50 [Charlie] Hey everyone! today's news
+  Day2 21:42 [Charlie] Just finished the refactor, feeling great
+  Day2 21:52 [Charlie] I'm working on a Discord bot
+  Day2 21:31 [Henry] I just ran 5k
+
+[Day2 22:00-Day2 22:29] Chunk 69/144:
+  Day2 22:05 [Henry] Does anyone know when the meeting is?
+  Day2 22:20 [Grace] Just finished code review, feeling great
+  Day2 22:28 [Henry] I just finished my essay
+  Day2 22:22 [Henry] I just hit level 50
+  Day2 22:26 [Grace] I'm working on my portfolio
+  Day2 22:08 [Bob] Does anyone know how to center a div?
+
+[Day2 22:30-Day2 22:59] Chunk 70/144:
+  Day2 22:44 [Henry] Just finished the refactor, feeling great
+  Day2 22:36 [Diana] today's news is really fun today
+  Day2 22:45 [Alice] I just ran 5k
+  Day2 22:57 [Alice] Anyone want to watch a movie?
+
+[Day2 23:00-Day2 23:29] Chunk 71/144:
+  Day2 23:13 [Eve] I'm working on the backend API
+  Day2 23:06 [Charlie] Hey everyone! today's news
+  Day2 23:02 [Eve] That's amazing!
+  Day2 23:24 [Eve] Can someone help me with Git conflicts?
+  Day2 23:05 [Eve] I'm working on my portfolio
+  Day2 23:23 [Eve] Thanks for your time!
+  Day2 23:02 [Bob] I'm working on the UI redesign
+  Day2 23:13 [Diana] the weather is really quiet today
+
+[Day2 23:30-Day2 23:59] Chunk 72/144:
+  Day2 23:55 [Bob] Does anyone know when the meeting is?
+  Day2 23:34 [Eve] Anyone want to start a project?
+  Day2 23:46 [Alice] I just fixed the bug
+  Day2 23:47 [Diana] the new update is really fun today
+  Day2 23:42 [Frank] Just finished debugging, feeling great
+  Day2 23:42 [Charlie] I just finished my essay
+
+[Day2 00:00-Day2 00:29] Chunk 73/144:
+  Day2 00:23 [Grace] Does anyone know where the docs are?
+  Day2 00:17 [Charlie] I just learned Rust
+  Day2 00:02 [Eve] Does anyone know where the docs are?
+  Day2 00:11 [Henry] Hey everyone! the new update
+  Day2 00:26 [Grace] Thanks for sharing that link!
+  Day2 00:28 [Henry] Anyone want to grab lunch?
+  Day2 00:26 [Bob] today's news is really busy today
+
+[Day2 00:30-Day2 00:59] Chunk 74/144:
+  Day2 00:35 [Eve] I'm working on a web scraper
+  Day2 00:51 [Charlie] I just learned Rust
+  Day2 00:30 [Henry] Hey everyone! this project
+  Day2 00:51 [Frank] Just finished debugging, feeling great
+
+[Day2 01:00-Day2 01:29] Chunk 75/144:
+  Day2 01:08 [Henry] I just hit level 50
+  Day2 01:10 [Grace] Hey everyone! the new update
+  Day2 01:08 [Eve] I just finished my essay
+  Day2 01:14 [Henry] Does anyone know if we have tests today?
+  Day2 01:06 [Alice] the weather is really interesting today
+  Day2 01:07 [Alice] Anyone want to play games?
+
+[Day2 01:30-Day2 01:59] Chunk 76/144:
+  Day2 01:32 [Alice] I just fixed the bug
+  Day2 01:34 [Eve] Does anyone know how to center a div?
+  Day2 01:41 [Diana] I just ran 5k
+  Day2 01:33 [Alice] Does anyone know when the meeting is?
+  Day2 01:49 [Alice] Thanks for the help!
+
+[Day2 02:00-Day2 02:29] Chunk 77/144:
+  Day2 02:12 [Grace] I just finished my essay
+  Day2 02:12 [Frank] I just fixed the bug
+  Day2 02:11 [Frank] Thanks for explaining that!
+
+[Day2 02:30-Day2 02:59] Chunk 78/144:
+  Day2 02:30 [Henry] Can someone help me with Docker setup?
+  Day2 02:56 [Bob] Can someone help me with my code?
+  Day2 02:31 [Henry] I just finished my essay
+  Day2 02:47 [Bob] Just finished debugging, feeling great
+  Day2 02:45 [Bob] Hey everyone! this project
+  Day2 02:58 [Diana] That's awesome!
+
+[Day2 03:00-Day2 03:29] Chunk 79/144:
+  Day2 03:21 [Charlie] I just fixed the bug
+  Day2 03:18 [Grace] I'm working on the UI redesign
+  Day2 03:28 [Grace] today's news is really fun today
+  Day2 03:00 [Eve] Hey everyone! this project
+  Day2 03:18 [Frank] Can someone help me with this error?
+  Day2 03:19 [Henry] Does anyone know how to center a div?
+  Day2 03:05 [Frank] Thanks for explaining that!
+
+[Day2 03:30-Day2 03:59] Chunk 80/144:
+  Day2 03:57 [Frank] I'm working on the backend API
+  Day2 03:48 [Bob] Just finished code review, feeling great
+  Day2 03:37 [Eve] I'm working on the backend API
+  Day2 03:32 [Diana] I'm working on a Discord bot
+  Day2 03:38 [Frank] Anyone want to watch a movie?
+
+[Day2 04:00-Day2 04:29] Chunk 81/144:
+  Day2 04:20 [Frank] Hey everyone! this project
+  Day2 04:05 [Alice] Anyone want to play games?
+  Day2 04:11 [Alice] Does anyone know if we have tests today?
+  Day2 04:08 [Frank] I just finished my essay
+  Day2 04:29 [Bob] Anyone want to chat about AI?
+
+[Day2 04:30-Day2 04:59] Chunk 82/144:
+  Day2 04:36 [Charlie] Can someone help me with Git conflicts?
+  Day2 04:30 [Eve] this project is really quiet today
+  Day2 04:37 [Charlie] I just finished my essay
+  Day2 04:44 [Charlie] That's wild!
+
+[Day2 05:00-Day2 05:29] Chunk 83/144:
+  Day2 05:23 [Charlie] Can someone help me with my code?
+  Day2 05:24 [Charlie] Hey everyone! this project
+  Day2 05:00 [Henry] Just finished my homework, feeling great
+  Day2 05:04 [Alice] Can someone help me with this error?
+  Day2 05:13 [Frank] Hey everyone! this project
+
+[Day2 05:30-Day2 05:59] Chunk 84/144:
+  Day2 05:38 [Alice] I'm working on the backend API
+  Day2 05:47 [Alice] Anyone want to watch a movie?
+  Day2 05:36 [Charlie] That's concerning!
+  Day2 05:45 [Henry] Thanks for sharing that link!
+  Day2 05:30 [Henry] I just finished my essay
+  Day2 05:51 [Charlie] the weather is really fun today
+
+[Day2 06:00-Day2 06:29] Chunk 85/144:
+  Day2 06:29 [Charlie] I just fixed the bug
+  Day2 06:06 [Diana] Hey everyone! today's news
+  Day2 06:20 [Diana] Thanks for sharing that link!
+  Day2 06:01 [Bob] I just learned Rust
+
+[Day2 06:30-Day2 06:59] Chunk 86/144:
+  Day2 06:33 [Eve] I'm working on the UI redesign
+  Day2 06:41 [Grace] the new update is really hectic today
+  Day2 06:47 [Eve] Does anyone know how to center a div?
+
+[Day2 07:00-Day2 07:29] Chunk 87/144:
+  Day2 07:20 [Charlie] this project is really fun today
+  Day2 07:20 [Alice] Does anyone know how to center a div?
+  Day2 07:11 [Frank] today's news is really quiet today
+  Day2 07:26 [Frank] Hey everyone! the weather
+  Day2 07:22 [Grace] Thanks for your time!
+  Day2 07:25 [Frank] Hey everyone! today's news
+
+[Day2 07:30-Day2 07:59] Chunk 88/144:
+  Day2 07:35 [Eve] That's amazing!
+  Day2 07:54 [Eve] the weather is really busy today
+  Day2 07:35 [Frank] Anyone want to play games?
+
+[Day2 08:00-Day2 08:29] Chunk 89/144:
+  Day2 08:25 [Bob] Can someone help me with my code?
+  Day2 08:00 [Eve] That's concerning!
+  Day2 08:21 [Charlie] Does anyone know if we have tests today?
+  Day2 08:09 [Eve] Anyone want to start a project?
+  Day2 08:19 [Alice] Does anyone know if we have tests today?
+  Day2 08:03 [Eve] I'm working on the UI redesign
+
+[Day2 08:30-Day2 08:59] Chunk 90/144:
+  Day2 08:57 [Henry] Does anyone know when the meeting is?
+  Day2 08:46 [Alice] Does anyone know if we have tests today?
+  Day2 08:32 [Bob] Thanks for your time!
+  Day2 08:43 [Diana] Anyone want to start a project?
+  Day2 08:48 [Frank] I just hit level 50
+
+[Day2 09:00-Day2 09:29] Chunk 91/144:
+  Day2 09:23 [Henry] Does anyone know where the docs are?
+  Day2 09:06 [Diana] That's unexpected!
+  Day2 09:27 [Diana] I just finished my essay
+  Day2 09:07 [Grace] this project is really quiet today
+  Day2 09:28 [Alice] I just learned Rust
+  Day2 09:08 [Charlie] I'm working on the backend API
+  Day2 09:06 [Alice] Can someone help me with my code?
+
+[Day2 09:30-Day2 09:59] Chunk 92/144:
+  Day2 09:54 [Henry] Thanks for your time!
+  Day2 09:47 [Diana] I'm working on the backend API
+  Day2 09:54 [Henry] Can someone help me with understanding async?
+  Day2 09:53 [Bob] Anyone want to start a project?
+
+[Day2 10:00-Day2 10:29] Chunk 93/144:
+  Day2 10:21 [Henry] Can someone help me with Git conflicts?
+  Day2 10:19 [Henry] the new update is really interesting today
+  Day2 10:19 [Eve] I just learned Rust
+  Day2 10:08 [Charlie] I just learned Rust
+  Day2 10:22 [Charlie] Thanks for the help!
+  Day2 10:20 [Eve] I just fixed the bug
+  Day2 10:25 [Grace] Anyone want to grab lunch?
+  Day2 10:16 [Frank] That's hilarious!
+
+[Day2 10:30-Day2 10:59] Chunk 94/144:
+  Day2 10:50 [Diana] That's hilarious!
+  Day2 10:47 [Bob] the game is really interesting today
+  Day2 10:53 [Diana] Thanks for your time!
+  Day2 10:50 [Eve] Anyone want to play games?
+  Day2 10:45 [Frank] Anyone want to chat about AI?
+  Day2 10:32 [Charlie] That's concerning!
+
+[Day2 11:00-Day2 11:29] Chunk 95/144:
+  Day2 11:26 [Eve] I'm working on a web scraper
+  Day2 11:26 [Grace] Thanks for the advice!
+  Day2 11:19 [Henry] Hey everyone! today's news
+  Day2 11:04 [Henry] Just finished the documentation, feeling great
+  Day2 11:25 [Frank] That's concerning!
+  Day2 11:16 [Eve] Anyone want to grab lunch?
+  Day2 11:17 [Henry] Can someone help me with my code?
+
+[Day2 11:30-Day2 11:59] Chunk 96/144:
+  Day2 11:59 [Alice] Can someone help me with my code?
+  Day2 11:38 [Bob] I just hit level 50
+  Day2 11:33 [Charlie] Thanks for explaining that!
+  Day2 11:40 [Frank] Does anyone know if we have tests today?
+  Day2 11:48 [Henry] I just ran 5k
+  Day2 11:32 [Eve] Hey everyone! the weather
+  Day2 11:47 [Grace] Thanks for your time!
+  Day2 11:30 [Diana] Can someone help me with this error?
+
+[Day3 12:00-Day3 12:29] Chunk 97/144:
+  Day3 12:01 [Grace] Does anyone know where the docs are?
+  Day3 12:08 [Bob] today's news is really interesting today
+  Day3 12:02 [Bob] Does anyone know if we have tests today?
+  Day3 12:08 [Henry] I'm working on the backend API
+  Day3 12:06 [Alice] I'm working on my portfolio
+
+[Day3 12:30-Day3 12:59] Chunk 98/144:
+  Day3 12:34 [Charlie] Anyone want to watch a movie?
+  Day3 12:49 [Grace] Can someone help me with understanding async?
+  Day3 12:55 [Henry] Does anyone know when the meeting is?
+  Day3 12:55 [Alice] Can someone help me with Git conflicts?
+  Day3 12:53 [Henry] I'm working on a web scraper
+
+[Day3 13:00-Day3 13:29] Chunk 99/144:
+  Day3 13:25 [Bob] Just finished my homework, feeling great
+  Day3 13:13 [Bob] today's news is really productive today
+  Day3 13:21 [Frank] the weather is really hectic today
+  Day3 13:05 [Diana] Can someone help me with Git conflicts?
+  Day3 13:25 [Bob] Does anyone know where the docs are?
+  Day3 13:16 [Grace] Can someone help me with Git conflicts?
+  Day3 13:06 [Alice] That's awesome!
+
+[Day3 13:30-Day3 13:59] Chunk 100/144:
+  Day3 13:44 [Diana] Can someone help me with this error?
+  Day3 13:58 [Henry] Can someone help me with Docker setup?
+  Day3 13:45 [Frank] That's hilarious!
+  Day3 13:39 [Frank] Thanks for sharing that link!
+  Day3 13:49 [Henry] I just learned Rust
+
+[Day3 14:00-Day3 14:29] Chunk 101/144:
+  Day3 14:05 [Frank] Can someone help me with this error?
+  Day3 14:22 [Alice] That's amazing!
+  Day3 14:04 [Diana] Can someone help me with my code?
+  Day3 14:19 [Henry] Can someone help me with Docker setup?
+  Day3 14:10 [Eve] Just finished the documentation, feeling great
+  Day3 14:11 [Grace] this project is really productive today
+  Day3 14:24 [Grace] I'm working on my portfolio
+
+[Day3 14:30-Day3 14:59] Chunk 102/144:
+  Day3 14:30 [Henry] I'm working on a Discord bot
+  Day3 14:31 [Henry] That's wild!
+  Day3 14:34 [Frank] That's awesome!
+
+[Day3 15:00-Day3 15:29] Chunk 103/144:
+  Day3 15:16 [Alice] Just finished the refactor, feeling great
+  Day3 15:04 [Eve] the new update is really quiet today
+  Day3 15:18 [Frank] Anyone want to grab lunch?
+  Day3 15:03 [Charlie] Can someone help me with Git conflicts?
+  Day3 15:03 [Henry] Does anyone know when the meeting is?
+  Day3 15:02 [Frank] Anyone want to play games?
+  Day3 15:05 [Bob] That's unexpected!
+
+[Day3 15:30-Day3 15:59] Chunk 104/144:
+  Day3 15:53 [Henry] Anyone want to play games?
+  Day3 15:34 [Frank] That's awesome!
+  Day3 15:30 [Bob] Anyone want to chat about AI?
+  Day3 15:33 [Henry] Just finished the refactor, feeling great
+  Day3 15:42 [Bob] Just finished the refactor, feeling great
+  Day3 15:55 [Henry] the weather is really quiet today
+
+[Day3 16:00-Day3 16:29] Chunk 105/144:
+  Day3 16:13 [Bob] That's wild!
+  Day3 16:28 [Charlie] Thanks for explaining that!
+  Day3 16:13 [Diana] I'm working on my portfolio
+
+[Day3 16:30-Day3 16:59] Chunk 106/144:
+  Day3 16:54 [Eve] Thanks for explaining that!
+  Day3 16:35 [Bob] Thanks for the help!
+  Day3 16:47 [Henry] Hey everyone! the game
+  Day3 16:57 [Alice] Thanks for the advice!
+  Day3 16:44 [Eve] Anyone want to watch a movie?
+  Day3 16:54 [Henry] I just finished my essay
+
+[Day3 17:00-Day3 17:29] Chunk 107/144:
+  Day3 17:19 [Alice] I just fixed the bug
+  Day3 17:00 [Frank] Just finished my homework, feeling great
+  Day3 17:12 [Eve] I'm working on my portfolio
+  Day3 17:03 [Alice] the game is really hectic today
+  Day3 17:23 [Diana] Thanks for your time!
+  Day3 17:11 [Eve] Thanks for explaining that!
+
+[Day3 17:30-Day3 17:59] Chunk 108/144:
+  Day3 17:31 [Henry] That's unexpected!
+  Day3 17:44 [Eve] Does anyone know if we have tests today?
+  Day3 17:51 [Henry] Can someone help me with Docker setup?
+  Day3 17:39 [Eve] Can someone help me with this error?
+  Day3 17:58 [Grace] I'm working on my portfolio
+
+[Day3 18:00-Day3 18:29] Chunk 109/144:
+  Day3 18:03 [Charlie] I just finished my essay
+  Day3 18:09 [Eve] I just learned Rust
+  Day3 18:29 [Bob] Anyone want to chat about AI?
+  Day3 18:17 [Grace] Just finished code review, feeling great
+
+[Day3 18:30-Day3 18:59] Chunk 110/144:
+  Day3 18:55 [Alice] Does anyone know how to center a div?
+  Day3 18:46 [Frank] Can someone help me with this error?
+  Day3 18:58 [Frank] That's unexpected!
+  Day3 18:57 [Diana] Anyone want to grab lunch?
+  Day3 18:59 [Grace] I just fixed the bug
+  Day3 18:59 [Alice] Anyone want to chat about AI?
+  Day3 18:56 [Charlie] Hey everyone! the game
+  Day3 18:38 [Frank] Can someone help me with this error?
+
+[Day3 19:00-Day3 19:29] Chunk 111/144:
+  Day3 19:06 [Diana] Anyone want to chat about AI?
+  Day3 19:03 [Frank] Thanks for your time!
+  Day3 19:05 [Eve] Just finished the refactor, feeling great
+  Day3 19:09 [Charlie] Thanks for sharing that link!
+  Day3 19:00 [Charlie] That's wild!
+
+[Day3 19:30-Day3 19:59] Chunk 112/144:
+  Day3 19:53 [Diana] I'm working on the UI redesign
+  Day3 19:46 [Frank] today's news is really fun today
+  Day3 19:34 [Frank] Can someone help me with Git conflicts?
+  Day3 19:54 [Grace] Can someone help me with understanding async?
+  Day3 19:39 [Henry] That's concerning!
+
+[Day3 20:00-Day3 20:29] Chunk 113/144:
+  Day3 20:06 [Henry] I just finished my essay
+  Day3 20:01 [Eve] Thanks for the help!
+  Day3 20:06 [Bob] I just ran 5k
+
+[Day3 20:30-Day3 20:59] Chunk 114/144:
+  Day3 20:56 [Bob] Thanks for explaining that!
+  Day3 20:58 [Alice] the game is really productive today
+  Day3 20:41 [Grace] Hey everyone! today's news
+  Day3 20:33 [Charlie] I'm working on a Discord bot
+
+[Day3 21:00-Day3 21:29] Chunk 115/144:
+  Day3 21:10 [Henry] Thanks for the advice!
+  Day3 21:13 [Grace] Thanks for your time!
+  Day3 21:03 [Eve] Hey everyone! today's news
+
+[Day3 21:30-Day3 21:59] Chunk 116/144:
+  Day3 21:44 [Alice] Anyone want to chat about AI?
+  Day3 21:48 [Bob] Anyone want to start a project?
+  Day3 21:56 [Henry] Can someone help me with Git conflicts?
+  Day3 21:55 [Alice] Thanks for your time!
+  Day3 21:30 [Frank] I'm working on the backend API
+  Day3 21:53 [Henry] I'm working on a web scraper
+
+[Day3 22:00-Day3 22:29] Chunk 117/144:
+  Day3 22:04 [Charlie] Does anyone know how to center a div?
+  Day3 22:05 [Frank] Thanks for the advice!
+  Day3 22:00 [Henry] Anyone want to watch a movie?
+  Day3 22:07 [Frank] Hey everyone! today's news
+  Day3 22:15 [Frank] I'm working on the backend API
+  Day3 22:20 [Eve] Thanks for explaining that!
+  Day3 22:23 [Diana] Anyone want to grab lunch?
+  Day3 22:07 [Bob] Can someone help me with Docker setup?
+
+[Day3 22:30-Day3 22:59] Chunk 118/144:
+  Day3 22:44 [Charlie] Anyone want to grab lunch?
+  Day3 22:59 [Alice] Can someone help me with Docker setup?
+  Day3 22:47 [Bob] Anyone want to play games?
+  Day3 22:35 [Charlie] this project is really hectic today
+  Day3 22:32 [Grace] That's wild!
+
+[Day3 23:00-Day3 23:29] Chunk 119/144:
+  Day3 23:29 [Grace] Can someone help me with my code?
+  Day3 23:26 [Eve] I just fixed the bug
+  Day3 23:14 [Diana] I'm working on the UI redesign
+  Day3 23:18 [Charlie] Just finished the documentation, feeling great
+  Day3 23:17 [Eve] Can someone help me with my code?
+  Day3 23:08 [Bob] That's hilarious!
+
+[Day3 23:30-Day3 23:59] Chunk 120/144:
+  Day3 23:40 [Eve] Just finished the refactor, feeling great
+  Day3 23:39 [Bob] Just finished the documentation, feeling great
+  Day3 23:35 [Grace] I'm working on the backend API
+  Day3 23:50 [Charlie] Can someone help me with Git conflicts?
+  Day3 23:46 [Frank] Thanks for explaining that!
+  Day3 23:34 [Eve] Just finished my homework, feeling great
+
+[Day3 00:00-Day3 00:29] Chunk 121/144:
+  Day3 00:10 [Henry] That's amazing!
+  Day3 00:00 [Frank] Anyone want to chat about AI?
+  Day3 00:26 [Frank] I'm working on the backend API
+  Day3 00:03 [Bob] Just finished the documentation, feeling great
+  Day3 00:29 [Alice] I just learned Rust
+
+[Day3 00:30-Day3 00:59] Chunk 122/144:
+  Day3 00:47 [Henry] Does anyone know how to center a div?
+  Day3 00:32 [Frank] Can someone help me with this error?
+  Day3 00:43 [Grace] That's hilarious!
+  Day3 00:53 [Charlie] I just learned Rust
+  Day3 00:44 [Grace] this project is really busy today
+  Day3 00:33 [Bob] That's awesome!
+  Day3 00:38 [Charlie] Can someone help me with this error?
+
+[Day3 01:00-Day3 01:29] Chunk 123/144:
+  Day3 01:18 [Henry] I'm working on my portfolio
+  Day3 01:09 [Bob] Just finished code review, feeling great
+  Day3 01:10 [Eve] Anyone want to play games?
+  Day3 01:25 [Alice] Thanks for the advice!
+
+[Day3 01:30-Day3 01:59] Chunk 124/144:
+  Day3 01:46 [Henry] Hey everyone! the weather
+  Day3 01:52 [Diana] Anyone want to watch a movie?
+  Day3 01:45 [Frank] Hey everyone! the game
+  Day3 01:31 [Henry] That's wild!
+  Day3 01:35 [Diana] Can someone help me with this error?
+  Day3 01:47 [Frank] That's unexpected!
+  Day3 01:44 [Grace] I'm working on the UI redesign
+
+[Day3 02:00-Day3 02:29] Chunk 125/144:
+  Day3 02:15 [Diana] the weather is really fun today
+  Day3 02:06 [Eve] I just hit level 50
+  Day3 02:08 [Bob] Anyone want to grab lunch?
+  Day3 02:21 [Henry] Thanks for the help!
+  Day3 02:01 [Bob] That's unexpected!
+  Day3 02:21 [Frank] I'm working on the backend API
+  Day3 02:22 [Diana] Hey everyone! the new update
+
+[Day3 02:30-Day3 02:59] Chunk 126/144:
+  Day3 02:34 [Alice] Can someone help me with this error?
+  Day3 02:32 [Frank] I just fixed the bug
+  Day3 02:39 [Diana] the weather is really busy today
+  Day3 02:36 [Frank] Does anyone know where the docs are?
+  Day3 02:51 [Diana] That's concerning!
+  Day3 02:45 [Alice] Just finished my homework, feeling great
+  Day3 02:32 [Alice] the weather is really hectic today
+
+[Day3 03:00-Day3 03:29] Chunk 127/144:
+  Day3 03:06 [Eve] That's hilarious!
+  Day3 03:03 [Charlie] Hey everyone! the game
+  Day3 03:17 [Grace] Just finished the documentation, feeling great
+  Day3 03:21 [Eve] Does anyone know when the meeting is?
+
+[Day3 03:30-Day3 03:59] Chunk 128/144:
+  Day3 03:59 [Frank] Can someone help me with this error?
+  Day3 03:47 [Grace] Can someone help me with Git conflicts?
+  Day3 03:51 [Grace] Just finished debugging, feeling great
+  Day3 03:49 [Alice] I just ran 5k
+
+[Day3 04:00-Day3 04:29] Chunk 129/144:
+  Day3 04:17 [Alice] Just finished the documentation, feeling great
+  Day3 04:06 [Eve] Thanks for your time!
+  Day3 04:07 [Eve] Anyone want to play games?
+  Day3 04:06 [Alice] Just finished code review, feeling great
+  Day3 04:16 [Henry] Can someone help me with this error?
+  Day3 04:24 [Alice] Thanks for sharing that link!
+
+[Day3 04:30-Day3 04:59] Chunk 130/144:
+  Day3 04:34 [Grace] Just finished debugging, feeling great
+  Day3 04:56 [Grace] Can someone help me with understanding async?
+  Day3 04:43 [Eve] Does anyone know where the docs are?
+  Day3 04:33 [Grace] I just finished my essay
+  Day3 04:39 [Grace] Does anyone know how to center a div?
+
+[Day3 05:00-Day3 05:29] Chunk 131/144:
+  Day3 05:05 [Grace] Anyone want to start a project?
+  Day3 05:27 [Charlie] Thanks for explaining that!
+  Day3 05:15 [Bob] Anyone want to start a project?
+  Day3 05:09 [Charlie] Thanks for your time!
+  Day3 05:23 [Henry] Just finished the refactor, feeling great
+  Day3 05:14 [Alice] Can someone help me with this error?
+
+[Day3 05:30-Day3 05:59] Chunk 132/144:
+  Day3 05:30 [Charlie] Anyone want to watch a movie?
+  Day3 05:41 [Eve] Thanks for explaining that!
+  Day3 05:58 [Alice] I just ran 5k
+  Day3 05:53 [Alice] That's wild!
+  Day3 05:58 [Diana] Can someone help me with Git conflicts?
+  Day3 05:42 [Bob] Does anyone know where the docs are?
+
+[Day3 06:00-Day3 06:29] Chunk 133/144:
+  Day3 06:05 [Grace] I just ran 5k
+  Day3 06:14 [Diana] Anyone want to grab lunch?
+  Day3 06:15 [Bob] Does anyone know if we have tests today?
+  Day3 06:24 [Frank] Can someone help me with understanding async?
+  Day3 06:29 [Alice] Thanks for your time!
+  Day3 06:21 [Diana] Anyone want to grab lunch?
+  Day3 06:05 [Grace] I'm working on a Discord bot
+  Day3 06:22 [Grace] That's wild!
+
+[Day3 06:30-Day3 06:59] Chunk 134/144:
+  Day3 06:40 [Charlie] I just hit level 50
+  Day3 06:50 [Grace] Can someone help me with this error?
+  Day3 06:36 [Grace] Just finished the documentation, feeling great
+  Day3 06:35 [Eve] Thanks for explaining that!
+  Day3 06:50 [Henry] Can someone help me with understanding async?
+  Day3 06:32 [Grace] the game is really interesting today
+  Day3 06:43 [Grace] the new update is really interesting today
+
+[Day3 07:00-Day3 07:29] Chunk 135/144:
+  Day3 07:26 [Frank] today's news is really hectic today
+  Day3 07:21 [Charlie] Hey everyone! the game
+  Day3 07:00 [Eve] Anyone want to watch a movie?
+  Day3 07:17 [Diana] Can someone help me with understanding async?
+  Day3 07:25 [Eve] I'm working on a web scraper
+
+[Day3 07:30-Day3 07:59] Chunk 136/144:
+  Day3 07:44 [Diana] I just finished my essay
+  Day3 07:36 [Bob] Does anyone know if we have tests today?
+  Day3 07:42 [Eve] Anyone want to play games?
+  Day3 07:55 [Henry] Hey everyone! today's news
+  Day3 07:46 [Alice] today's news is really quiet today
+  Day3 07:42 [Diana] the weather is really busy today
+  Day3 07:42 [Alice] Thanks for the advice!
+  Day3 07:57 [Henry] the new update is really productive today
+
+[Day3 08:00-Day3 08:29] Chunk 137/144:
+  Day3 08:29 [Henry] Anyone want to chat about AI?
+  Day3 08:27 [Charlie] Anyone want to start a project?
+  Day3 08:25 [Bob] Anyone want to watch a movie?
+  Day3 08:22 [Grace] I just hit level 50
+  Day3 08:22 [Diana] Can someone help me with my code?
+  Day3 08:25 [Diana] Anyone want to chat about AI?
+  Day3 08:28 [Alice] I'm working on the UI redesign
+  Day3 08:18 [Alice] Thanks for sharing that link!
+
+[Day3 08:30-Day3 08:59] Chunk 138/144:
+  Day3 08:40 [Frank] That's unexpected!
+  Day3 08:35 [Frank] Does anyone know where the docs are?
+  Day3 08:44 [Bob] Thanks for the advice!
+  Day3 08:34 [Charlie] today's news is really busy today
+  Day3 08:37 [Frank] Does anyone know how to center a div?
+  Day3 08:46 [Diana] I just ran 5k
+  Day3 08:43 [Henry] Thanks for explaining that!
+
+[Day3 09:00-Day3 09:29] Chunk 139/144:
+  Day3 09:00 [Henry] Anyone want to play games?
+  Day3 09:09 [Frank] Anyone want to grab lunch?
+  Day3 09:02 [Bob] Can someone help me with my code?
+  Day3 09:25 [Diana] Does anyone know when the meeting is?
+  Day3 09:22 [Grace] I just learned Rust
+
+[Day3 09:30-Day3 09:59] Chunk 140/144:
+  Day3 09:30 [Frank] Does anyone know if we have tests today?
+  Day3 09:47 [Eve] today's news is really interesting today
+  Day3 09:59 [Eve] Does anyone know when the meeting is?
+  Day3 09:38 [Eve] I'm working on the backend API
+  Day3 09:51 [Diana] Does anyone know when the meeting is?
+  Day3 09:32 [Diana] That's awesome!
+  Day3 09:39 [Henry] Hey everyone! the weather
+  Day3 09:33 [Frank] Can someone help me with understanding async?
+
+[Day3 10:00-Day3 10:29] Chunk 141/144:
+  Day3 10:23 [Charlie] Can someone help me with Docker setup?
+  Day3 10:04 [Frank] I'm working on the UI redesign
+  Day3 10:27 [Frank] Thanks for the advice!
+  Day3 10:28 [Henry] Anyone want to play games?
+  Day3 10:27 [Diana] Hey everyone! the new update
+  Day3 10:28 [Charlie] Hey everyone! the new update
+  Day3 10:23 [Charlie] Can someone help me with Git conflicts?
+  Day3 10:12 [Grace] Anyone want to grab lunch?
+
+[Day3 10:30-Day3 10:59] Chunk 142/144:
+  Day3 10:40 [Frank] Can someone help me with Git conflicts?
+  Day3 10:33 [Charlie] Hey everyone! this project
+  Day3 10:44 [Charlie] Anyone want to play games?
+  Day3 10:48 [Diana] That's wild!
+
+[Day3 11:00-Day3 11:29] Chunk 143/144:
+  Day3 11:01 [Henry] I just learned Rust
+  Day3 11:18 [Alice] Thanks for the help!
+  Day3 11:26 [Grace] Does anyone know how to center a div?
+  Day3 11:08 [Bob] Just finished the refactor, feeling great
+  Day3 11:23 [Charlie] Can someone help me with my code?
+
+[Day3 11:30-Day3 11:59] Chunk 144/144:
+  Day3 11:30 [Henry] Just finished the documentation, feeling great
+  Day3 11:32 [Alice] Can someone help me with Git conflicts?
+  Day3 11:36 [Eve] Hey everyone! the weather
+  Day3 11:46 [Frank] this project is really interesting today
+  Day3 11:55 [Bob] Just finished my homework, feeling great
+  Day3 11:34 [Frank] Just finished code review, feeling great
+================================================================================
+  PHASE 2: Creating Level-1 Summaries (30min chunks)
+================================================================================
+
+[12:00-12:29] Level-1 Summary:
+  3 user(s) active (Alice, Eve, Frank) | 3 messages | discussing games | Q&A
+
+[12:30-12:59] Level-1 Summary:
+  4 user(s) active (Diana, Frank, Grace...) | 5 messages | Q&A
+
+[13:00-13:29] Level-1 Summary:
+  4 user(s) active (Diana, Eve, Frank...) | 5 messages
+
+[13:30-13:59] Level-1 Summary:
+  4 user(s) active (Alice, Frank, Grace...) | 4 messages | project work | Q&A
+
+[14:00-14:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Eve...) | 8 messages | discussing games | project work | Q&A
+
+[14:30-14:59] Level-1 Summary:
+  6 user(s) active (Bob, Charlie, Eve...) | 8 messages | project work | Q&A
+
+[15:00-15:29] Level-1 Summary:
+  3 user(s) active (Bob, Frank, Grace) | 3 messages | project work
+
+[15:30-15:59] Level-1 Summary:
+  3 user(s) active (Charlie, Diana, Henry) | 6 messages | project work | Q&A
+
+[16:00-16:29] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Grace) | 4 messages | Q&A
+
+[16:30-16:59] Level-1 Summary:
+  4 user(s) active (Bob, Charlie, Diana...) | 6 messages | Q&A
+
+[17:00-17:29] Level-1 Summary:
+  4 user(s) active (Bob, Eve, Frank...) | 5 messages | Q&A
+
+[17:30-17:59] Level-1 Summary:
+  2 user(s) active (Alice, Eve) | 3 messages | Q&A
+
+[18:00-18:29] Level-1 Summary:
+  3 user(s) active (Bob, Diana, Eve) | 3 messages | Q&A
+
+[18:30-18:59] Level-1 Summary:
+  3 user(s) active (Eve, Frank, Henry) | 5 messages | discussing games | project work
+
+[19:00-19:29] Level-1 Summary:
+  3 user(s) active (Diana, Eve, Frank) | 3 messages
+
+[19:30-19:59] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 7 messages | Q&A
+
+[20:00-20:29] Level-1 Summary:
+  3 user(s) active (Alice, Charlie, Eve) | 3 messages | project work
+
+[20:30-20:59] Level-1 Summary:
+  3 user(s) active (Alice, Bob, Diana) | 4 messages | project work | Q&A
+
+[21:00-21:29] Level-1 Summary:
+  3 user(s) active (Bob, Charlie, Eve) | 4 messages | project work | Q&A
+
+[21:30-21:59] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Eve) | 3 messages | discussing games | Q&A
+
+[22:00-22:29] Level-1 Summary:
+  4 user(s) active (Bob, Charlie, Grace...) | 4 messages | discussing games
+
+[22:30-22:59] Level-1 Summary:
+  2 user(s) active (Bob, Eve) | 3 messages | discussing games | project work | Q&A
+
+[23:00-23:29] Level-1 Summary:
+  5 user(s) active (Alice, Diana, Eve...) | 7 messages | discussing games | project work | Q&A
+
+[23:30-23:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 7 messages | project work | Q&A
+
+[00:00-00:29] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Frank...) | 5 messages | Q&A
+
+[00:30-00:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 5 messages | project work | Q&A
+
+[01:00-01:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 6 messages | discussing games | project work | Q&A
+
+[01:30-01:59] Level-1 Summary:
+  4 user(s) active (Alice, Charlie, Grace...) | 7 messages | discussing games | Q&A
+
+[02:00-02:29] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 8 messages | discussing games | project work | Q&A
+
+[02:30-02:59] Level-1 Summary:
+  3 user(s) active (Alice, Bob, Grace) | 4 messages
+
+[03:00-03:29] Level-1 Summary:
+  2 user(s) active (Alice, Henry) | 3 messages | project work
+
+[03:30-03:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 6 messages | Q&A
+
+[04:00-04:29] Level-1 Summary:
+  3 user(s) active (Eve, Frank, Henry) | 4 messages | project work | Q&A
+
+[04:30-04:59] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 8 messages | project work | Q&A
+
+[05:00-05:29] Level-1 Summary:
+  3 user(s) active (Alice, Bob, Frank) | 4 messages | Q&A
+
+[05:30-05:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Eve...) | 7 messages | project work | Q&A
+
+[06:00-06:29] Level-1 Summary:
+  5 user(s) active (Alice, Diana, Frank...) | 7 messages | project work | Q&A
+
+[06:30-06:59] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Charlie...) | 4 messages | Q&A
+
+[07:00-07:29] Level-1 Summary:
+  6 user(s) active (Alice, Diana, Eve...) | 7 messages | Q&A
+
+[07:30-07:59] Level-1 Summary:
+  5 user(s) active (Bob, Diana, Eve...) | 8 messages | project work | Q&A
+
+[08:00-08:29] Level-1 Summary:
+  4 user(s) active (Bob, Diana, Frank...) | 6 messages | Q&A
+
+[08:30-08:59] Level-1 Summary:
+  3 user(s) active (Alice, Eve, Grace) | 3 messages | Q&A
+
+[09:00-09:29] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 8 messages | project work | Q&A
+
+[09:30-09:59] Level-1 Summary:
+  3 user(s) active (Diana, Eve, Frank) | 4 messages | Q&A
+
+[10:00-10:29] Level-1 Summary:
+  4 user(s) active (Charlie, Eve, Frank...) | 6 messages | project work | Q&A
+
+[10:30-10:59] Level-1 Summary:
+  5 user(s) active (Alice, Charlie, Diana...) | 8 messages | project work | Q&A
+
+[11:00-11:29] Level-1 Summary:
+  4 user(s) active (Alice, Charlie, Frank...) | 4 messages | Q&A
+
+[11:30-11:59] Level-1 Summary:
+  5 user(s) active (Alice, Diana, Eve...) | 5 messages | discussing games | Q&A
+
+[Day2 12:00-Day2 12:29] Level-1 Summary:
+  3 user(s) active (Bob, Diana, Eve) | 3 messages | discussing games | Q&A
+
+[Day2 12:30-Day2 12:59] Level-1 Summary:
+  3 user(s) active (Frank, Grace, Henry) | 5 messages | project work | Q&A
+
+[Day2 13:00-Day2 13:29] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Frank) | 7 messages | discussing games | Q&A
+
+[Day2 13:30-Day2 13:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 5 messages | project work
+
+[Day2 14:00-Day2 14:29] Level-1 Summary:
+  6 user(s) active (Alice, Charlie, Diana...) | 7 messages | Q&A
+
+[Day2 14:30-Day2 14:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 6 messages | Q&A
+
+[Day2 15:00-Day2 15:29] Level-1 Summary:
+  4 user(s) active (Charlie, Frank, Grace...) | 5 messages | project work | Q&A
+
+[Day2 15:30-Day2 15:59] Level-1 Summary:
+  4 user(s) active (Bob, Diana, Eve...) | 4 messages | project work | Q&A
+
+[Day2 16:00-Day2 16:29] Level-1 Summary:
+  4 user(s) active (Charlie, Eve, Grace...) | 5 messages | discussing games | Q&A
+
+[Day2 16:30-Day2 16:59] Level-1 Summary:
+  2 user(s) active (Bob, Frank) | 3 messages
+
+[Day2 17:00-Day2 17:29] Level-1 Summary:
+  2 user(s) active (Charlie, Eve) | 3 messages | Q&A
+
+[Day2 17:30-Day2 17:59] Level-1 Summary:
+  2 user(s) active (Eve, Henry) | 3 messages | Q&A
+
+[Day2 18:00-Day2 18:29] Level-1 Summary:
+  4 user(s) active (Alice, Eve, Frank...) | 7 messages | project work | Q&A
+
+[Day2 18:30-Day2 18:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 7 messages | project work | Q&A
+
+[Day2 19:00-Day2 19:29] Level-1 Summary:
+  3 user(s) active (Alice, Eve, Frank) | 4 messages | project work | Q&A
+
+[Day2 19:30-Day2 19:59] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Eve...) | 8 messages | project work | Q&A
+
+[Day2 20:00-Day2 20:29] Level-1 Summary:
+  4 user(s) active (Bob, Eve, Frank...) | 4 messages | project work | Q&A
+
+[Day2 20:30-Day2 20:59] Level-1 Summary:
+  4 user(s) active (Bob, Diana, Eve...) | 8 messages | discussing games | project work | Q&A
+
+[Day2 21:00-Day2 21:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Eve...) | 5 messages | Q&A
+
+[Day2 21:30-Day2 21:59] Level-1 Summary:
+  4 user(s) active (Charlie, Frank, Grace...) | 8 messages | project work | Q&A
+
+[Day2 22:00-Day2 22:29] Level-1 Summary:
+  3 user(s) active (Bob, Grace, Henry) | 6 messages | project work | Q&A
+
+[Day2 22:30-Day2 22:59] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Henry) | 4 messages | Q&A
+
+[Day2 23:00-Day2 23:29] Level-1 Summary:
+  4 user(s) active (Bob, Charlie, Diana...) | 8 messages | project work | Q&A
+
+[Day2 23:30-Day2 23:59] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 6 messages | project work | Q&A
+
+[Day2 00:00-Day2 00:29] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Eve...) | 7 messages | Q&A
+
+[Day2 00:30-Day2 00:59] Level-1 Summary:
+  4 user(s) active (Charlie, Eve, Frank...) | 4 messages | project work
+
+[Day2 01:00-Day2 01:29] Level-1 Summary:
+  4 user(s) active (Alice, Eve, Grace...) | 6 messages | discussing games | Q&A
+
+[Day2 01:30-Day2 01:59] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Eve) | 5 messages | Q&A
+
+[Day2 02:00-Day2 02:29] Level-1 Summary:
+  2 user(s) active (Frank, Grace) | 3 messages
+
+[Day2 02:30-Day2 02:59] Level-1 Summary:
+  3 user(s) active (Bob, Diana, Henry) | 6 messages | project work | Q&A
+
+[Day2 03:00-Day2 03:29] Level-1 Summary:
+  5 user(s) active (Charlie, Eve, Frank...) | 7 messages | project work | Q&A
+
+[Day2 03:30-Day2 03:59] Level-1 Summary:
+  4 user(s) active (Bob, Diana, Eve...) | 5 messages | project work | Q&A
+
+[Day2 04:00-Day2 04:29] Level-1 Summary:
+  3 user(s) active (Alice, Bob, Frank) | 5 messages | discussing games | project work | Q&A
+
+[Day2 04:30-Day2 04:59] Level-1 Summary:
+  2 user(s) active (Charlie, Eve) | 4 messages | project work | Q&A
+
+[Day2 05:00-Day2 05:29] Level-1 Summary:
+  4 user(s) active (Alice, Charlie, Frank...) | 5 messages | project work | Q&A
+
+[Day2 05:30-Day2 05:59] Level-1 Summary:
+  3 user(s) active (Alice, Charlie, Henry) | 6 messages | project work | Q&A
+
+[Day2 06:00-Day2 06:29] Level-1 Summary:
+  3 user(s) active (Bob, Charlie, Diana) | 4 messages
+
+[Day2 06:30-Day2 06:59] Level-1 Summary:
+  2 user(s) active (Eve, Grace) | 3 messages | project work | Q&A
+
+[Day2 07:00-Day2 07:29] Level-1 Summary:
+  4 user(s) active (Alice, Charlie, Frank...) | 6 messages | project work | Q&A
+
+[Day2 07:30-Day2 07:59] Level-1 Summary:
+  2 user(s) active (Eve, Frank) | 3 messages | discussing games | Q&A
+
+[Day2 08:00-Day2 08:29] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Charlie...) | 6 messages | project work | Q&A
+
+[Day2 08:30-Day2 08:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 5 messages | project work | Q&A
+
+[Day2 09:00-Day2 09:29] Level-1 Summary:
+  5 user(s) active (Alice, Charlie, Diana...) | 7 messages | project work | Q&A
+
+[Day2 09:30-Day2 09:59] Level-1 Summary:
+  3 user(s) active (Bob, Diana, Henry) | 4 messages | project work | Q&A
+
+[Day2 10:00-Day2 10:29] Level-1 Summary:
+  5 user(s) active (Charlie, Eve, Frank...) | 8 messages | Q&A
+
+[Day2 10:30-Day2 10:59] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Diana...) | 6 messages | discussing games | Q&A
+
+[Day2 11:00-Day2 11:29] Level-1 Summary:
+  4 user(s) active (Eve, Frank, Grace...) | 7 messages | project work | Q&A
+
+[Day2 11:30-Day2 11:59] Level-1 Summary:
+  8 user(s) active (Alice, Bob, Charlie...) | 8 messages | Q&A
+
+[Day3 12:00-Day3 12:29] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Grace...) | 5 messages | project work | Q&A
+
+[Day3 12:30-Day3 12:59] Level-1 Summary:
+  4 user(s) active (Alice, Charlie, Grace...) | 5 messages | project work | Q&A
+
+[Day3 13:00-Day3 13:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 7 messages | Q&A
+
+[Day3 13:30-Day3 13:59] Level-1 Summary:
+  3 user(s) active (Diana, Frank, Henry) | 5 messages | Q&A
+
+[Day3 14:00-Day3 14:29] Level-1 Summary:
+  6 user(s) active (Alice, Diana, Eve...) | 7 messages | project work | Q&A
+
+[Day3 14:30-Day3 14:59] Level-1 Summary:
+  2 user(s) active (Frank, Henry) | 3 messages | project work
+
+[Day3 15:00-Day3 15:29] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 7 messages | discussing games | Q&A
+
+[Day3 15:30-Day3 15:59] Level-1 Summary:
+  3 user(s) active (Bob, Frank, Henry) | 6 messages | discussing games | Q&A
+
+[Day3 16:00-Day3 16:29] Level-1 Summary:
+  3 user(s) active (Bob, Charlie, Diana) | 3 messages | project work
+
+[Day3 16:30-Day3 16:59] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Eve...) | 6 messages | discussing games | Q&A
+
+[Day3 17:00-Day3 17:29] Level-1 Summary:
+  4 user(s) active (Alice, Diana, Eve...) | 6 messages | discussing games | project work
+
+[Day3 17:30-Day3 17:59] Level-1 Summary:
+  3 user(s) active (Eve, Grace, Henry) | 5 messages | project work | Q&A
+
+[Day3 18:00-Day3 18:29] Level-1 Summary:
+  4 user(s) active (Bob, Charlie, Eve...) | 4 messages | Q&A
+
+[Day3 18:30-Day3 18:59] Level-1 Summary:
+  5 user(s) active (Alice, Charlie, Diana...) | 8 messages | discussing games | Q&A
+
+[Day3 19:00-Day3 19:29] Level-1 Summary:
+  4 user(s) active (Charlie, Diana, Eve...) | 5 messages | Q&A
+
+[Day3 19:30-Day3 19:59] Level-1 Summary:
+  4 user(s) active (Diana, Frank, Grace...) | 5 messages | project work | Q&A
+
+[Day3 20:00-Day3 20:29] Level-1 Summary:
+  3 user(s) active (Bob, Eve, Henry) | 3 messages | Q&A
+
+[Day3 20:30-Day3 20:59] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Charlie...) | 4 messages | discussing games | project work
+
+[Day3 21:00-Day3 21:29] Level-1 Summary:
+  3 user(s) active (Eve, Grace, Henry) | 3 messages
+
+[Day3 21:30-Day3 21:59] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Frank...) | 6 messages | project work | Q&A
+
+[Day3 22:00-Day3 22:29] Level-1 Summary:
+  6 user(s) active (Bob, Charlie, Diana...) | 8 messages | project work | Q&A
+
+[Day3 22:30-Day3 22:59] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Charlie...) | 5 messages | discussing games | project work | Q&A
+
+[Day3 23:00-Day3 23:29] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Diana...) | 6 messages | project work | Q&A
+
+[Day3 23:30-Day3 23:59] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Eve...) | 6 messages | project work | Q&A
+
+[Day3 00:00-Day3 00:29] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Frank...) | 5 messages | project work | Q&A
+
+[Day3 00:30-Day3 00:59] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Frank...) | 7 messages | project work | Q&A
+
+[Day3 01:00-Day3 01:29] Level-1 Summary:
+  4 user(s) active (Alice, Bob, Eve...) | 4 messages | discussing games | project work | Q&A
+
+[Day3 01:30-Day3 01:59] Level-1 Summary:
+  4 user(s) active (Diana, Frank, Grace...) | 7 messages | discussing games | project work | Q&A
+
+[Day3 02:00-Day3 02:29] Level-1 Summary:
+  5 user(s) active (Bob, Diana, Eve...) | 7 messages | project work | Q&A
+
+[Day3 02:30-Day3 02:59] Level-1 Summary:
+  3 user(s) active (Alice, Diana, Frank) | 7 messages | Q&A
+
+[Day3 03:00-Day3 03:29] Level-1 Summary:
+  3 user(s) active (Charlie, Eve, Grace) | 4 messages | discussing games | Q&A
+
+[Day3 03:30-Day3 03:59] Level-1 Summary:
+  3 user(s) active (Alice, Frank, Grace) | 4 messages | Q&A
+
+[Day3 04:00-Day3 04:29] Level-1 Summary:
+  3 user(s) active (Alice, Eve, Henry) | 6 messages | discussing games | Q&A
+
+[Day3 04:30-Day3 04:59] Level-1 Summary:
+  2 user(s) active (Eve, Grace) | 5 messages | Q&A
+
+[Day3 05:00-Day3 05:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 6 messages | project work | Q&A
+
+[Day3 05:30-Day3 05:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 6 messages | Q&A
+
+[Day3 06:00-Day3 06:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 8 messages | project work | Q&A
+
+[Day3 06:30-Day3 06:59] Level-1 Summary:
+  4 user(s) active (Charlie, Eve, Grace...) | 7 messages | discussing games | Q&A
+
+[Day3 07:00-Day3 07:29] Level-1 Summary:
+  4 user(s) active (Charlie, Diana, Eve...) | 5 messages | discussing games | project work | Q&A
+
+[Day3 07:30-Day3 07:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Diana...) | 8 messages | discussing games | Q&A
+
+[Day3 08:00-Day3 08:29] Level-1 Summary:
+  6 user(s) active (Alice, Bob, Charlie...) | 8 messages | project work | Q&A
+
+[Day3 08:30-Day3 08:59] Level-1 Summary:
+  5 user(s) active (Bob, Charlie, Diana...) | 7 messages | Q&A
+
+[Day3 09:00-Day3 09:29] Level-1 Summary:
+  5 user(s) active (Bob, Diana, Frank...) | 5 messages | discussing games | Q&A
+
+[Day3 09:30-Day3 09:59] Level-1 Summary:
+  4 user(s) active (Diana, Eve, Frank...) | 8 messages | project work | Q&A
+
+[Day3 10:00-Day3 10:29] Level-1 Summary:
+  5 user(s) active (Charlie, Diana, Frank...) | 8 messages | discussing games | project work | Q&A
+
+[Day3 10:30-Day3 10:59] Level-1 Summary:
+  3 user(s) active (Charlie, Diana, Frank) | 4 messages | discussing games | project work | Q&A
+
+[Day3 11:00-Day3 11:29] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Charlie...) | 5 messages | Q&A
+
+[Day3 11:30-Day3 11:59] Level-1 Summary:
+  5 user(s) active (Alice, Bob, Eve...) | 6 messages | project work | Q&A
+================================================================================
+  PHASE 3: Creating Level-2 Summaries (1 hour chunks)
+================================================================================
+
+[12:00-12:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[13:00-13:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[14:00-14:59] Level-2 Summary:
+  Combined period: 16 total messages spanning 1.0 hours
+
+[15:00-15:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[16:00-16:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[17:00-17:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[18:00-18:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[19:00-19:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[20:00-20:59] Level-2 Summary:
+  Combined period: 7 total messages spanning 1.0 hours
+
+[21:00-21:59] Level-2 Summary:
+  Combined period: 7 total messages spanning 1.0 hours
+
+[22:00-22:59] Level-2 Summary:
+  Combined period: 7 total messages spanning 1.0 hours
+
+[23:00-23:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[00:00-00:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[01:00-01:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[02:00-02:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[03:00-03:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[04:00-04:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[05:00-05:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[06:00-06:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[07:00-07:59] Level-2 Summary:
+  Combined period: 15 total messages spanning 1.0 hours
+
+[08:00-08:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[09:00-09:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[10:00-10:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[11:00-11:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day2 12:00-Day2 12:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[Day2 13:00-Day2 13:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day2 14:00-Day2 14:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day2 15:00-Day2 15:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day2 16:00-Day2 16:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[Day2 17:00-Day2 17:59] Level-2 Summary:
+  Combined period: 6 total messages spanning 1.0 hours
+
+[Day2 18:00-Day2 18:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[Day2 19:00-Day2 19:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day2 20:00-Day2 20:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day2 21:00-Day2 21:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day2 22:00-Day2 22:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[Day2 23:00-Day2 23:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[Day2 00:00-Day2 00:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day2 01:00-Day2 01:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day2 02:00-Day2 02:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day2 03:00-Day2 03:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day2 04:00-Day2 04:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day2 05:00-Day2 05:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day2 06:00-Day2 06:59] Level-2 Summary:
+  Combined period: 7 total messages spanning 1.0 hours
+
+[Day2 07:00-Day2 07:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day2 08:00-Day2 08:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day2 09:00-Day2 09:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day2 10:00-Day2 10:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[Day2 11:00-Day2 11:59] Level-2 Summary:
+  Combined period: 15 total messages spanning 1.0 hours
+
+[Day3 12:00-Day3 12:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[Day3 13:00-Day3 13:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 14:00-Day3 14:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[Day3 15:00-Day3 15:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day3 16:00-Day3 16:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day3 17:00-Day3 17:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day3 18:00-Day3 18:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 19:00-Day3 19:59] Level-2 Summary:
+  Combined period: 10 total messages spanning 1.0 hours
+
+[Day3 20:00-Day3 20:59] Level-2 Summary:
+  Combined period: 7 total messages spanning 1.0 hours
+
+[Day3 21:00-Day3 21:59] Level-2 Summary:
+  Combined period: 9 total messages spanning 1.0 hours
+
+[Day3 22:00-Day3 22:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day3 23:00-Day3 23:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 00:00-Day3 00:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 01:00-Day3 01:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day3 02:00-Day3 02:59] Level-2 Summary:
+  Combined period: 14 total messages spanning 1.0 hours
+
+[Day3 03:00-Day3 03:59] Level-2 Summary:
+  Combined period: 8 total messages spanning 1.0 hours
+
+[Day3 04:00-Day3 04:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+
+[Day3 05:00-Day3 05:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 06:00-Day3 06:59] Level-2 Summary:
+  Combined period: 15 total messages spanning 1.0 hours
+
+[Day3 07:00-Day3 07:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day3 08:00-Day3 08:59] Level-2 Summary:
+  Combined period: 15 total messages spanning 1.0 hours
+
+[Day3 09:00-Day3 09:59] Level-2 Summary:
+  Combined period: 13 total messages spanning 1.0 hours
+
+[Day3 10:00-Day3 10:59] Level-2 Summary:
+  Combined period: 12 total messages spanning 1.0 hours
+
+[Day3 11:00-Day3 11:59] Level-2 Summary:
+  Combined period: 11 total messages spanning 1.0 hours
+================================================================================
+  PHASE 4: Creating Level-3 Summaries (2 hour chunks)
+================================================================================
+
+[12:00-13:59] Level-3 Summary:
+  Combined period: 17 total messages spanning 2.0 hours
+
+[14:00-15:59] Level-3 Summary:
+  Combined period: 25 total messages spanning 2.0 hours
+
+[16:00-17:59] Level-3 Summary:
+  Combined period: 18 total messages spanning 2.0 hours
+
+[18:00-19:59] Level-3 Summary:
+  Combined period: 18 total messages spanning 2.0 hours
+
+[20:00-21:59] Level-3 Summary:
+  Combined period: 14 total messages spanning 2.0 hours
+
+[22:00-23:59] Level-3 Summary:
+  Combined period: 21 total messages spanning 2.0 hours
+
+[00:00-01:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[02:00-03:59] Level-3 Summary:
+  Combined period: 21 total messages spanning 2.0 hours
+
+[04:00-05:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[06:00-07:59] Level-3 Summary:
+  Combined period: 26 total messages spanning 2.0 hours
+
+[08:00-09:59] Level-3 Summary:
+  Combined period: 21 total messages spanning 2.0 hours
+
+[10:00-11:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[Day2 12:00-Day2 13:59] Level-3 Summary:
+  Combined period: 20 total messages spanning 2.0 hours
+
+[Day2 14:00-Day2 15:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day2 16:00-Day2 17:59] Level-3 Summary:
+  Combined period: 14 total messages spanning 2.0 hours
+
+[Day2 18:00-Day2 19:59] Level-3 Summary:
+  Combined period: 26 total messages spanning 2.0 hours
+
+[Day2 20:00-Day2 21:59] Level-3 Summary:
+  Combined period: 25 total messages spanning 2.0 hours
+
+[Day2 22:00-Day2 23:59] Level-3 Summary:
+  Combined period: 24 total messages spanning 2.0 hours
+
+[Day2 00:00-Day2 01:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day2 02:00-Day2 03:59] Level-3 Summary:
+  Combined period: 21 total messages spanning 2.0 hours
+
+[Day2 04:00-Day2 05:59] Level-3 Summary:
+  Combined period: 20 total messages spanning 2.0 hours
+
+[Day2 06:00-Day2 07:59] Level-3 Summary:
+  Combined period: 16 total messages spanning 2.0 hours
+
+[Day2 08:00-Day2 09:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day2 10:00-Day2 11:59] Level-3 Summary:
+  Combined period: 29 total messages spanning 2.0 hours
+
+[Day3 12:00-Day3 13:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day3 14:00-Day3 15:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[Day3 16:00-Day3 17:59] Level-3 Summary:
+  Combined period: 20 total messages spanning 2.0 hours
+
+[Day3 18:00-Day3 19:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day3 20:00-Day3 21:59] Level-3 Summary:
+  Combined period: 16 total messages spanning 2.0 hours
+
+[Day3 22:00-Day3 23:59] Level-3 Summary:
+  Combined period: 25 total messages spanning 2.0 hours
+
+[Day3 00:00-Day3 01:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[Day3 02:00-Day3 03:59] Level-3 Summary:
+  Combined period: 22 total messages spanning 2.0 hours
+
+[Day3 04:00-Day3 05:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+
+[Day3 06:00-Day3 07:59] Level-3 Summary:
+  Combined period: 28 total messages spanning 2.0 hours
+
+[Day3 08:00-Day3 09:59] Level-3 Summary:
+  Combined period: 28 total messages spanning 2.0 hours
+
+[Day3 10:00-Day3 11:59] Level-3 Summary:
+  Combined period: 23 total messages spanning 2.0 hours
+================================================================================
+  PHASE 5: Creating Level-4 Summaries (4 hour chunks)
+================================================================================
+
+[12:00-15:59] Level-4 Summary:
+  Combined period: 42 total messages spanning 4.0 hours
+
+[16:00-19:59] Level-4 Summary:
+  Combined period: 36 total messages spanning 4.0 hours
+
+[20:00-23:59] Level-4 Summary:
+  Combined period: 35 total messages spanning 4.0 hours
+
+[00:00-03:59] Level-4 Summary:
+  Combined period: 44 total messages spanning 4.0 hours
+
+[04:00-07:59] Level-4 Summary:
+  Combined period: 49 total messages spanning 4.0 hours
+
+[08:00-11:59] Level-4 Summary:
+  Combined period: 44 total messages spanning 4.0 hours
+
+[Day2 12:00-Day2 15:59] Level-4 Summary:
+  Combined period: 42 total messages spanning 4.0 hours
+
+[Day2 16:00-Day2 19:59] Level-4 Summary:
+  Combined period: 40 total messages spanning 4.0 hours
+
+[Day2 20:00-Day2 23:59] Level-4 Summary:
+  Combined period: 49 total messages spanning 4.0 hours
+
+[Day2 00:00-Day2 03:59] Level-4 Summary:
+  Combined period: 43 total messages spanning 4.0 hours
+
+[Day2 04:00-Day2 07:59] Level-4 Summary:
+  Combined period: 36 total messages spanning 4.0 hours
+
+[Day2 08:00-Day2 11:59] Level-4 Summary:
+  Combined period: 51 total messages spanning 4.0 hours
+
+[Day3 12:00-Day3 15:59] Level-4 Summary:
+  Combined period: 45 total messages spanning 4.0 hours
+
+[Day3 16:00-Day3 19:59] Level-4 Summary:
+  Combined period: 42 total messages spanning 4.0 hours
+
+[Day3 20:00-Day3 23:59] Level-4 Summary:
+  Combined period: 41 total messages spanning 4.0 hours
+
+[Day3 00:00-Day3 03:59] Level-4 Summary:
+  Combined period: 45 total messages spanning 4.0 hours
+
+[Day3 04:00-Day3 07:59] Level-4 Summary:
+  Combined period: 51 total messages spanning 4.0 hours
+
+[Day3 08:00-Day3 11:59] Level-4 Summary:
+  Combined period: 51 total messages spanning 4.0 hours
+================================================================================
+  PHASE 6: Creating Level-5 Summaries (8 hour chunks)
+================================================================================
+
+[12:00-19:59] Level-5 Summary:
+  Combined period: 78 total messages spanning 8.0 hours
+
+[20:00-03:59] Level-5 Summary:
+  Combined period: 79 total messages spanning 8.0 hours
+
+[04:00-11:59] Level-5 Summary:
+  Combined period: 93 total messages spanning 8.0 hours
+
+[Day2 12:00-Day2 19:59] Level-5 Summary:
+  Combined period: 82 total messages spanning 8.0 hours
+
+[Day2 20:00-Day2 03:59] Level-5 Summary:
+  Combined period: 92 total messages spanning 8.0 hours
+
+[Day2 04:00-Day2 11:59] Level-5 Summary:
+  Combined period: 87 total messages spanning 8.0 hours
+
+[Day3 12:00-Day3 19:59] Level-5 Summary:
+  Combined period: 87 total messages spanning 8.0 hours
+
+[Day3 20:00-Day3 03:59] Level-5 Summary:
+  Combined period: 86 total messages spanning 8.0 hours
+
+[Day3 04:00-Day3 11:59] Level-5 Summary:
+  Combined period: 102 total messages spanning 8.0 hours
+================================================================================
+  PHASE 7: Context Windows at Different Times
+================================================================================
+
+
+================================================================================
+  CONTEXT WINDOW AT: 00:00 (12 hours in)
+================================================================================
+
+Total context depth: 63.0 hours
+
+--- LEVEL 0: Raw Messages (most recent 1 hour) ---
+  23:14 [Eve] Anyone want to start a project?
+  23:15 [Alice] the game is really fun today
+  23:23 [Frank] Anyone want to watch a movie?
+  23:38 [Bob] I'm working on my portfolio
+  23:42 [Diana] That's concerning!
+  23:46 [Alice] Thanks for the advice!
+  23:48 [Charlie] Can someone help me with this error?
+  23:49 [Grace] the weather is really hectic today
+  23:54 [Bob] I'm working on the UI redesign
+  23:55 [Bob] Anyone want to watch a movie?
+  ... and 4 more messages
+
+--- LEVEL 1: Summaries (4 chunks) ---
+  [21:00-21:29] 3 user(s) active (Bob, Charlie, Eve) | 4 messages | project work | Q&A
+  [21:30-21:59] 3 user(s) active (Alice, Diana, Eve) | 3 messages | discussing games | Q&A
+  [22:00-22:29] 4 user(s) active (Bob, Charlie, Grace...) | 4 messages | discussing games
+  [22:30-22:59] 2 user(s) active (Bob, Eve) | 3 messages | discussing games | project work | Q&A
+
+--- LEVEL 2: Summaries (4 chunks) ---
+  [17:00-17:59] Combined period: 8 total messages spanning 1.0 hours
+  [18:00-18:59] Combined period: 8 total messages spanning 1.0 hours
+  [19:00-19:59] Combined period: 10 total messages spanning 1.0 hours
+  [20:00-20:59] Combined period: 7 total messages spanning 1.0 hours
+
+--- LEVEL 3: Summaries (3 chunks) ---
+  [12:00-13:59] Combined period: 17 total messages spanning 2.0 hours
+  [14:00-15:59] Combined period: 25 total messages spanning 2.0 hours
+  [16:00-17:59] Combined period: 18 total messages spanning 2.0 hours
+
+
+================================================================================
+  CONTEXT WINDOW AT: Day2 12:00 (24 hours in)
+================================================================================
+
+Total context depth: 63.0 hours
+
+--- LEVEL 0: Raw Messages (most recent 1 hour) ---
+  11:09 [Charlie] Can someone help me with my code?
+  11:12 [Alice] I just ran 5k
+  11:16 [Frank] the new update is really productive today
+  11:16 [Grace] today's news is really busy today
+  11:33 [Grace] Hey everyone! the game
+  11:41 [Eve] Hey everyone! the new update
+  11:45 [Alice] today's news is really interesting today
+  11:58 [Henry] Anyone want to chat about AI?
+  11:59 [Diana] That's awesome!
+
+--- LEVEL 1: Summaries (4 chunks) ---
+  [09:00-09:29] 6 user(s) active (Alice, Bob, Charlie...) | 8 messages | project work | Q&A
+  [09:30-09:59] 3 user(s) active (Diana, Eve, Frank) | 4 messages | Q&A
+  [10:00-10:29] 4 user(s) active (Charlie, Eve, Frank...) | 6 messages | project work | Q&A
+  [10:30-10:59] 5 user(s) active (Alice, Charlie, Diana...) | 8 messages | project work | Q&A
+
+--- LEVEL 2: Summaries (4 chunks) ---
+  [05:00-05:59] Combined period: 11 total messages spanning 1.0 hours
+  [06:00-06:59] Combined period: 11 total messages spanning 1.0 hours
+  [07:00-07:59] Combined period: 15 total messages spanning 1.0 hours
+  [08:00-08:59] Combined period: 9 total messages spanning 1.0 hours
+
+--- LEVEL 3: Summaries (5 chunks) ---
+  [20:00-21:59] Combined period: 14 total messages spanning 2.0 hours
+  [22:00-23:59] Combined period: 21 total messages spanning 2.0 hours
+  [00:00-01:59] Combined period: 23 total messages spanning 2.0 hours
+  [02:00-03:59] Combined period: 21 total messages spanning 2.0 hours
+  [04:00-05:59] Combined period: 23 total messages spanning 2.0 hours
+
+--- LEVEL 4: Summaries (3 chunks) ---
+  [12:00-15:59] Combined period: 42 total messages spanning 4.0 hours
+  [16:00-19:59] Combined period: 36 total messages spanning 4.0 hours
+  [20:00-23:59] Combined period: 35 total messages spanning 4.0 hours
+
+
+================================================================================
+  CONTEXT WINDOW AT: Day4 12:00 (72 hours in (end))
+================================================================================
+
+Total context depth: 63.0 hours
+
+--- LEVEL 0: Raw Messages (most recent 1 hour) ---
+  Day3 11:08 [Bob] Just finished the refactor, feeling great
+  Day3 11:18 [Alice] Thanks for the help!
+  Day3 11:23 [Charlie] Can someone help me with my code?
+  Day3 11:26 [Grace] Does anyone know how to center a div?
+  Day3 11:30 [Henry] Just finished the documentation, feeling great
+  Day3 11:32 [Alice] Can someone help me with Git conflicts?
+  Day3 11:34 [Frank] Just finished code review, feeling great
+  Day3 11:36 [Eve] Hey everyone! the weather
+  Day3 11:46 [Frank] this project is really interesting today
+  Day3 11:55 [Bob] Just finished my homework, feeling great
+  ... and 1 more messages
+
+--- LEVEL 1: Summaries (4 chunks) ---
+  [Day3 09:00-Day3 09:29] 5 user(s) active (Bob, Diana, Frank...) | 5 messages | discussing games | Q&A
+  [Day3 09:30-Day3 09:59] 4 user(s) active (Diana, Eve, Frank...) | 8 messages | project work | Q&A
+  [Day3 10:00-Day3 10:29] 5 user(s) active (Charlie, Diana, Frank...) | 8 messages | discussing games | project work | Q&A
+  [Day3 10:30-Day3 10:59] 3 user(s) active (Charlie, Diana, Frank) | 4 messages | discussing games | project work | Q&A
+
+--- LEVEL 2: Summaries (4 chunks) ---
+  [Day3 05:00-Day3 05:59] Combined period: 12 total messages spanning 1.0 hours
+  [Day3 06:00-Day3 06:59] Combined period: 15 total messages spanning 1.0 hours
+  [Day3 07:00-Day3 07:59] Combined period: 13 total messages spanning 1.0 hours
+  [Day3 08:00-Day3 08:59] Combined period: 15 total messages spanning 1.0 hours
+
+--- LEVEL 3: Summaries (5 chunks) ---
+  [Day3 20:00-Day3 21:59] Combined period: 16 total messages spanning 2.0 hours
+  [Day3 22:00-Day3 23:59] Combined period: 25 total messages spanning 2.0 hours
+  [Day3 00:00-Day3 01:59] Combined period: 23 total messages spanning 2.0 hours
+  [Day3 02:00-Day3 03:59] Combined period: 22 total messages spanning 2.0 hours
+  [Day3 04:00-Day3 05:59] Combined period: 23 total messages spanning 2.0 hours
+
+--- LEVEL 4: Summaries (5 chunks) ---
+  [Day2 04:00-Day2 07:59] Combined period: 36 total messages spanning 4.0 hours
+  [Day2 08:00-Day2 11:59] Combined period: 51 total messages spanning 4.0 hours
+  [Day3 12:00-Day3 15:59] Combined period: 45 total messages spanning 4.0 hours
+  [Day3 16:00-Day3 19:59] Combined period: 42 total messages spanning 4.0 hours
+  [Day3 20:00-Day3 23:59] Combined period: 41 total messages spanning 4.0 hours
+
+--- LEVEL 5: Summaries (5 chunks) ---
+  [20:00-03:59] Combined period: 79 total messages spanning 8.0 hours
+  [04:00-11:59] Combined period: 93 total messages spanning 8.0 hours
+  [Day2 12:00-Day2 19:59] Combined period: 82 total messages spanning 8.0 hours
+  [Day2 20:00-Day2 03:59] Combined period: 92 total messages spanning 8.0 hours
+  [Day2 04:00-Day2 11:59] Combined period: 87 total messages spanning 8.0 hours
+
+================================================================================
+  SIMULATION COMPLETE
+================================================================================

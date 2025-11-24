@@ -3,8 +3,8 @@
   "default_price_per_image": 0.03,
   "!": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-schnell",
-    "price_per_image": 0.02
+    "model": "prunaai/hidream-l1-fast",
+    "price_per_image": 0.005
   },
   "$": {
     "api": "replicate",
@@ -21,6 +21,11 @@
     "model": "google/imagen-4-ultra",
     "price_per_image": 0.06
   },
+  "$$$$": {
+    "api": "replicate",
+    "model": "google/nano-banana-pro",
+    "price_per_image": 0.20
+  },
   "^": {
     "api": "svg",
     "model": "gpt-5",
@@ -31,6 +36,12 @@
     "model": "google/nano-banana",
     "mode": "edit",
     "price_per_image": 0.04
+  },
+  "edit pro:": {
+    "api": "replicate",
+    "model": "google/nano-banana-pro",
+    "mode": "edit",
+    "price_per_image": 0.20
   },
   "zoom out": {
     "api": "replicate",

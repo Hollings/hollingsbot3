@@ -362,24 +362,25 @@ class Admin(commands.Cog):
         try:
             status = self._cost_tracker.get_user_status(user.id)
 
-            free_used = status["free_budget_used"]
+            current_budget = status["current_budget"]
             free_total = status["free_budget_total"]
+            hourly_rate = status["hourly_rate"]
             credits_used_today = status["credits_used_today"]
             generation_count = status["generation_count"]
             credit_balance = status["credit_balance"]
-            reset_time = status["reset_time"]
 
             lines = [
                 f"**Balance for {user.mention}:**",
                 f"",
-                f"**Today's usage** (resets in {reset_time}):",
-                f"  • Free budget: ${free_used:.2f} / ${free_total:.2f} used",
+                f"**Current status:**",
+                f"  - Free budget: ${current_budget:.2f} / ${free_total:.2f}",
+                f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]
 
             if credits_used_today > 0:
-                lines.append(f"  • Credits spent today: ${credits_used_today:.2f}")
+                lines.append(f"  - Credits spent today: ${credits_used_today:.2f}")
 
-            lines.append(f"  • Total generations: {generation_count}")
+            lines.append(f"  - Total generations today: {generation_count}")
             lines.append(f"\n**Credit balance:** ${credit_balance:.2f}")
 
             message = "\n".join(lines)

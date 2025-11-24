@@ -1,0 +1,19 @@
+version: '3.9'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+
+  celery_text:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+
+  # Enable image generation worker for API-based generation (no GPU needed)
+  celery_image:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.arm
+    deploy: null  # Clear GPU requirement - using cloud APIs instead
