@@ -66,6 +66,25 @@ The `llm_chat.py` cog maintains per-channel conversation history using a deque-b
 
 The system prompt is loaded from `config/system_prompt.txt` (or env var `SYSTEM_PROMPT_FILE`) with mtime-based caching. Users can override via `!system <prompt>` or reset with `!system reset`.
 
+### Conversation Summarization
+
+When `LLM_SUMMARY_ENABLED=1`, the bot uses progressive summarization to reduce token costs and enable prompt caching:
+
+**How it works:**
+- Messages are cached to SQLite as they arrive
+- Background worker generates 30-minute window summaries using Claude Haiku
+- Summaries are combined into higher levels (1hr, 2hr, 4hr, etc.)
+- LLM context becomes: `[system] + [summaries (cached)] + [recent raw messages]`
+
+**Benefits:**
+- ~75% reduction in input tokens (summaries vs full history)
+- Anthropic prompt caching on stable summary prefix (~90% cheaper cache hits)
+- Summaries persist across bot restarts
+
+**Files:**
+- `src/hollingsbot/summarization/` - Core summarization logic
+- `data/summaries.db` - SQLite database for summaries and cached messages
+
 ### Temporary LLM Bots
 
 The `temp_bot_cog.py` allows spawning temporary webhook-based LLM bots that share conversation history with the main bot and can converse with each other:
@@ -151,6 +170,7 @@ Key configuration (see `.env` file):
 - **Core**: `DISCORD_TOKEN`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 - **LLM**: `DEFAULT_LLM_PROVIDER` (openai/anthropic), `DEFAULT_LLM_MODEL`, `TEXT_TIMEOUT` (default 180s)
 - **LLM History**: `LLM_HISTORY_LIMIT` (default 50), `LLM_MAX_TURNS_SENT` (default 8)
+- **Summarization**: `LLM_SUMMARY_ENABLED` (0/1), `LLM_SUMMARY_MODEL` (default claude-haiku-4-5), `LLM_SUMMARY_CHAR_LIMIT` (default 8000), `SUMMARY_DB_PATH`
 - **Image Gen**: `IMAGE_TIMEOUT` (default 30s), `IMAGE_OUTPUT_DIR`
 - **Channel Allowlists**: `STABLE_DIFFUSION_CHANNEL_IDS` (comma-separated), `EDIT_CHANNEL_IDS`, `LLM_WHITELIST_CHANNELS`
 - **Starboard**: `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STARBOARD_IGNORE_CHANNELS`, `STARBOARD_WHITELIST_CHANNEL_IDS`

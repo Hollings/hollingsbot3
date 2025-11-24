@@ -112,7 +112,28 @@ class AnthropicTextGenerator(TextGeneratorAPI):
             else:
                 # Pass through content as-is for user/assistant messages
                 # (can be string or list of content blocks with images)
-                cleaned.append({"role": role, "content": m.get("content")})
+                content = m.get("content")
+                is_cacheable = m.get("_cacheable", False)
+
+                # If cacheable, add cache_control to content
+                if is_cacheable and content:
+                    if isinstance(content, str):
+                        content = [
+                            {
+                                "type": "text",
+                                "text": content,
+                                "cache_control": {"type": "ephemeral"},
+                            }
+                        ]
+                    elif isinstance(content, list):
+                        # Add cache_control to last content block
+                        content = list(content)  # Copy to avoid mutating original
+                        if content:
+                            last_block = dict(content[-1])
+                            last_block["cache_control"] = {"type": "ephemeral"}
+                            content[-1] = last_block
+
+                cleaned.append({"role": role, "content": content})
         system_text = "\n\n".join(p for p in system_parts if p).strip() or None
 
         client = self._get_client()

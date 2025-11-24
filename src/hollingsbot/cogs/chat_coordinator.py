@@ -7,6 +7,7 @@ import os
 import re
 import time
 from collections import deque
+from pathlib import Path
 from typing import Callable, Deque
 
 import discord
@@ -22,7 +23,29 @@ from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, Mod
 from hollingsbot.cogs.typing_tracker import TypingTracker
 from hollingsbot.utils.discord_utils import get_display_name
 
+# Summarization imports
+from hollingsbot.summarization import (
+    SummaryCache,
+    Summary,
+    CachedMessage,
+    Summarizer,
+    SummaryWorker,
+    get_current_window_boundary,
+)
+from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
+
 _LOG = logging.getLogger(__name__)
+
+
+class _SummarizerLLM:
+    """Adapter to use AnthropicTextGenerator with Summarizer."""
+
+    def __init__(self, model: str = "claude-haiku-4-5"):
+        self._gen = AnthropicTextGenerator(model=model)
+
+    async def generate(self, prompt: str) -> str:
+        return await self._gen.generate(prompt)
+
 
 # Response callback type: bot instance, response text, webhook_id for temp bots
 ResponseCallback = Callable[[object, str, int | None], None]
@@ -56,6 +79,24 @@ class ChatCoordinator(commands.Cog):
 
         # Track active message processing per channel
         self._active_message_tasks: dict[int, asyncio.Task] = {}
+
+        # Summarization setup
+        self.summary_enabled = os.getenv("LLM_SUMMARY_ENABLED", "0") == "1"
+        if self.summary_enabled:
+            db_path = os.getenv("SUMMARY_DB_PATH", "data/summaries.db")
+            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+            self.summary_cache = SummaryCache(db_path)
+            summary_model = os.getenv("LLM_SUMMARY_MODEL", "claude-haiku-4-5")
+            self.summarizer = Summarizer(_SummarizerLLM(summary_model))
+            self.summary_worker = SummaryWorker(self.summary_cache, self.summarizer)
+            self.summary_char_limit = int(os.getenv("LLM_SUMMARY_CHAR_LIMIT", "8000"))
+            _LOG.info("Summarization enabled with model=%s", summary_model)
+        else:
+            self.summary_cache = None
+            self.summarizer = None
+            self.summary_worker = None
+            self.summary_char_limit = 8000
+            _LOG.info("Summarization disabled")
 
         _LOG.info("ChatCoordinator initialized with history_limit=%d", history_limit)
 
@@ -251,6 +292,10 @@ class ChatCoordinator(commands.Cog):
                         f"Added to history: role={turn.role}, author_name='{turn.author_name}', "
                         f"content_preview={turn.content[:80]}..."
                     )
+
+                    # Cache message for summarization (non-blocking)
+                    if self.summary_enabled and self.summary_cache:
+                        self._cache_message_for_summary(turn, channel_id)
                 else:
                     _LOG.info(f"Message {message.id} already in history, skipping")
 
@@ -385,6 +430,11 @@ class ChatCoordinator(commands.Cog):
                     f"message_id={message_id}, text={text[:80]}..."
                 )
 
+                # Cache for summarization and trigger background summarization
+                if self.summary_enabled and self.summary_cache:
+                    self._cache_message_for_summary(turn, channel_id)
+                    await self.trigger_summarization(channel_id)
+
     async def _send_response_to_channel(
         self,
         channel: discord.TextChannel,
@@ -486,6 +536,88 @@ class ChatCoordinator(commands.Cog):
         # Remove raw SVG tags
         text = re.sub(r'<svg[\s\S]*?</svg>', '', text, flags=re.IGNORECASE)
         return text.strip()
+
+    # ==================== Summarization ====================
+
+    def _cache_message_for_summary(self, turn: ConversationTurn, channel_id: int) -> None:
+        """Cache a conversation turn for summarization."""
+        if not self.summary_cache or not turn.message_id:
+            return
+
+        try:
+            cached = CachedMessage(
+                channel_id=channel_id,
+                message_id=turn.message_id,
+                author_id=turn.author_id or 0,
+                author_name=turn.author_name or "Unknown",
+                content=turn.content,
+                timestamp=int(time.time()),
+                has_images=bool(turn.images),
+                has_attachments=False,
+            )
+            self.summary_cache.cache_message(cached)
+            _LOG.debug("Cached message %d for summarization", turn.message_id)
+        except Exception:
+            _LOG.exception("Failed to cache message for summarization")
+
+    async def trigger_summarization(self, channel_id: int) -> None:
+        """Trigger background summarization for a channel (non-blocking)."""
+        if not self.summary_enabled or not self.summary_worker:
+            return
+
+        try:
+            # Run in background, don't wait
+            asyncio.create_task(self.summary_worker.trigger_summarization(channel_id))
+        except Exception:
+            _LOG.exception("Failed to trigger summarization for channel %d", channel_id)
+
+    def get_summarized_context(self, channel_id: int) -> dict:
+        """Get summaries + recent messages for LLM context building.
+
+        Returns:
+            dict with keys:
+                - summaries: list[Summary] - older summarized windows (cacheable)
+                - recent_messages: list[CachedMessage] - current window messages
+                - has_summaries: bool - whether any summaries are available
+        """
+        if not self.summary_enabled or not self.summary_cache:
+            return {
+                "summaries": [],
+                "recent_messages": [],
+                "has_summaries": False,
+            }
+
+        try:
+            current_time = int(time.time())
+            window_start, _ = get_current_window_boundary()
+
+            # Get summaries (older than current window)
+            summaries = self.summary_cache.get_summaries_for_context(
+                channel_id,
+                before_timestamp=window_start,
+                char_limit=self.summary_char_limit,
+            )
+
+            # Get recent messages (current window + 30 min buffer)
+            buffer_seconds = 30 * 60  # 30 minutes
+            recent_messages = self.summary_cache.get_cached_messages(
+                channel_id,
+                start_time=window_start - buffer_seconds,
+                end_time=current_time,
+            )
+
+            return {
+                "summaries": summaries,
+                "recent_messages": recent_messages,
+                "has_summaries": bool(summaries),
+            }
+        except Exception:
+            _LOG.exception("Failed to get summarized context")
+            return {
+                "summaries": [],
+                "recent_messages": [],
+                "has_summaries": False,
+            }
 
 
 async def setup(bot: commands.Bot) -> None:

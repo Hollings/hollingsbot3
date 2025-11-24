@@ -277,7 +277,8 @@ class WendyBot:
 
         # Build conversation payload
         conversation = self._build_conversation_payload(
-            translated_history, current_turn, full_system_prompt
+            translated_history, current_turn, full_system_prompt,
+            channel_id=message.channel.id,
         )
 
         # Cancel any existing generation in this channel
@@ -414,9 +415,25 @@ class WendyBot:
         history: list[ConversationTurn],
         current_turn: ModelTurn,
         system_prompt: str,
+        channel_id: int | None = None,
     ) -> list[dict[str, Any]]:
-        """Build conversation payload for LLM."""
-        # Take recent history
+        """Build conversation payload for LLM.
+
+        If summarization is enabled and summaries exist, uses:
+            [system] + [summaries (cacheable)] + [recent raw] + [current]
+
+        Otherwise falls back to:
+            [system] + [rolling history] + [current]
+        """
+        # Try to use summarized context if available
+        if channel_id is not None and self.coordinator.summary_enabled:
+            summarized = self.coordinator.get_summarized_context(channel_id)
+            if summarized.get("has_summaries"):
+                return self._build_with_summaries(
+                    summarized, current_turn, system_prompt, history
+                )
+
+        # Fallback: Use rolling history
         recent = history[-self.max_turns_sent :]
 
         # Build payload
@@ -453,6 +470,88 @@ class WendyBot:
         )
 
         return conversation
+
+    def _build_with_summaries(
+        self,
+        summarized: dict,
+        current_turn: ModelTurn,
+        system_prompt: str,
+        history: list[ConversationTurn],
+    ) -> list[dict[str, Any]]:
+        """Build conversation payload using summaries + recent messages.
+
+        Structure:
+            [system]
+            [summary context - cacheable]
+            [assistant ack - cacheable]
+            [recent raw messages]
+            [current turn]
+        """
+        conversation: list[dict[str, Any]] = [
+            {
+                "role": "system",
+                "text": system_prompt,
+                "images": [],
+            }
+        ]
+
+        # Format summaries into context block
+        summaries = summarized.get("summaries", [])
+        if summaries:
+            summary_text = self._format_summaries_for_context(summaries)
+            # Mark as cacheable for prompt caching
+            conversation.append({
+                "role": "user",
+                "text": f"[Previous conversation summary]\n{summary_text}",
+                "images": [],
+                "_cacheable": True,
+            })
+            conversation.append({
+                "role": "assistant",
+                "text": "I understand the context from our previous conversation. How can I help you now?",
+                "images": [],
+                "_cacheable": True,
+            })
+
+        # Add recent raw messages from current window
+        recent_messages = summarized.get("recent_messages", [])
+        for msg in recent_messages:
+            # Determine role based on author
+            is_bot = msg.author_id == self.bot.user.id
+            role = "assistant" if is_bot else "user"
+            text = msg.content
+            if role == "assistant":
+                text = self._strip_display_name_prefix(text)
+
+            conversation.append({
+                "role": role,
+                "text": text,
+                "images": [],
+            })
+
+        # Add current turn
+        conversation.append({
+            "role": current_turn.role,
+            "text": current_turn.text,
+            "images": [img.to_payload() for img in current_turn.images],
+        })
+
+        return conversation
+
+    def _format_summaries_for_context(self, summaries: list) -> str:
+        """Format summaries into a context string for the LLM."""
+        from datetime import datetime, timezone
+
+        parts = []
+        for s in summaries:
+            # Format time range
+            start_dt = datetime.fromtimestamp(s.start_time, tz=timezone.utc)
+            end_dt = datetime.fromtimestamp(s.end_time, tz=timezone.utc)
+            time_range = f"{start_dt.strftime('%Y-%m-%d %H:%M')} - {end_dt.strftime('%H:%M')} UTC"
+
+            parts.append(f"[{time_range}]\n{s.summary_text}")
+
+        return "\n\n".join(parts)
 
     def _strip_display_name_prefix(self, text: str) -> str:
         """Strip display name prefix from text (e.g., '<DisplayName>: text' -> 'text')."""
