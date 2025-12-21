@@ -1,5 +1,3 @@
-version: '3.9'
-
 services:
   bot:
     build:
@@ -11,7 +9,7 @@ services:
     volumes:
       - ./:/app
       - ./generated:/app/generated
-      - prompt_db_data:/data
+      - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - redis
@@ -23,9 +21,10 @@ services:
       dockerfile: docker/Dockerfile
     command: celery -A hollingsbot.tasks worker --loglevel=info --concurrency=1 -Q text
     env_file: .env
+    restart: unless-stopped
     volumes:
       - ./:/app
-      - prompt_db_data:/data
+      - ./data:/data
     depends_on:
       - redis
     # No GPU needed here
@@ -40,7 +39,7 @@ services:
     volumes:
       - ./:/app
       - ./generated:/app/generated
-      - prompt_db_data:/data
+      - ./data:/data
     depends_on:
       - redis
     deploy:
@@ -57,5 +56,6 @@ services:
       - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
 
-volumes:
-  prompt_db_data:
+# Old named volume (data migrated to ./data/ bind mount):
+# volumes:
+#   prompt_db_data:
