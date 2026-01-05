@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from typing import Callable
 
 from .tokens import give_token, check_tokens
-from .personal_assistant import ask_assistant
 
 __all__ = ["Tool", "AVAILABLE_TOOLS", "get_tool_definitions_text"]
 
@@ -42,15 +41,8 @@ AVAILABLE_TOOLS: dict[str, Tool] = {
         function=check_tokens,
         channel_message=None,
     ),
-    "assistant": Tool(
-        name="assistant",
-        description="Your capable personal assistant who can help with web searches, research, looking up past conversations, generating images, managing files, and keeping records. Ask it to do anything you can't do yourself.",
-        parameters={
-            "task": "What you want your assistant to do"
-        },
-        function=ask_assistant,
-        channel_message=None,
-    ),
+    # Note: "assistant" tool removed - when using claude-cli provider,
+    # Wendy IS Claude Code and has native access to WebSearch, WebFetch, Read
 }
 
 

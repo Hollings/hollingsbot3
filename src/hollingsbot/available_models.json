@@ -4,6 +4,11 @@
     "claude-sonnet-4-5-20250929",
     "claude-haiku-4-5"
   ],
+  "claude-cli": [
+    "opus",
+    "sonnet",
+    "haiku"
+  ],
   "openrouter": [
     "meta-llama/llama-3.1-405b"
   ],

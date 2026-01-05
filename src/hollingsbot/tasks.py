@@ -318,6 +318,7 @@ def generate_llm_chat_response(
     conversation: list[dict[str, object]],
     *,
     temperature: float = 1.0,
+    channel_id: int | None = None,
 ) -> dict[str, object]:
     """Generate an LLM chat response based on structured conversation history."""
 
@@ -334,6 +335,9 @@ def generate_llm_chat_response(
     kwargs: dict[str, object] = {}
     if "temperature" in gen_sig.parameters:
         kwargs["temperature"] = temperature
+    # Pass channel_id to generators that support it (e.g., claude-cli)
+    if "channel_id" in gen_sig.parameters and channel_id:
+        kwargs["channel_id"] = channel_id
 
     api_normalized = api.lower().strip()
 
@@ -351,6 +355,9 @@ def generate_llm_chat_response(
             payload = _build_messages_for_generator(api_normalized, conversation)
         elif api_normalized == "anthropic":
             payload = _build_messages_for_generator(api_normalized, conversation)
+        elif api_normalized == "claude-cli":
+            # Pass conversation directly - claude_cli.py handles its own formatting
+            payload = conversation
         else:
             payload = _conversation_to_text(conversation)
 

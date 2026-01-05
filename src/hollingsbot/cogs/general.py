@@ -44,6 +44,32 @@ class General(commands.Cog):
         await ctx.send("Pong!")
 
     @commands.command()
+    async def model(self, ctx: commands.Context, provider: str | None = None, model_name: str | None = None) -> None:
+        """Set or show preferred LLM model.
+
+        Usage:
+            !model - Show current model
+            !model <provider> <model> - Set model (e.g., !model claude-cli sonnet)
+        """
+        coordinator = self.bot.get_cog("ChatCoordinator")
+        if not coordinator:
+            await ctx.send("ChatCoordinator not loaded")
+            return
+
+        # Find WendyBot
+        wendy = None
+        for bot_instance in coordinator.bots:
+            if bot_instance.__class__.__name__ == "WendyBot":
+                wendy = bot_instance
+                break
+
+        if not wendy:
+            await ctx.send("WendyBot not found")
+            return
+
+        await wendy.handle_model_command(ctx, provider, model_name)
+
+    @commands.command()
     async def tokens(self, ctx: commands.Context) -> None:
         """Show token leaderboard."""
         from hollingsbot.prompt_db import get_token_leaderboard, get_user_token_balance

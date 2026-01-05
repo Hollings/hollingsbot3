@@ -6,6 +6,7 @@ from .openai_chatgpt import OpenAIChatTextGenerator
 from .grok import GrokTextGenerator
 from .openrouter import OpenRouterTextGenerator, OpenRouterCompletionsGenerator, OpenRouterLoomGenerator
 from .gemini import GeminiTextGenerator
+from .claude_cli import ClaudeCliTextGenerator
 
 __all__ = [
     "TextGeneratorAPI",
@@ -17,6 +18,7 @@ __all__ = [
     "OpenRouterCompletionsGenerator",
     "OpenRouterLoomGenerator",
     "GeminiTextGenerator",
+    "ClaudeCliTextGenerator",
 ]
 
 
@@ -38,4 +40,6 @@ def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
         return OpenRouterLoomGenerator(model)
     if api == "gemini":
         return GeminiTextGenerator(model)
+    if api == "claude-cli":
+        return ClaudeCliTextGenerator(model)
     raise ValueError(f"Unknown API: {api}")

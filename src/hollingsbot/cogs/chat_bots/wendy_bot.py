@@ -7,7 +7,6 @@ import functools
 import json
 import logging
 import os
-import random
 import re
 import time
 from pathlib import Path
@@ -264,13 +263,6 @@ class WendyBot:
             getattr(message.guild, "id", None), message.author.id
         )
 
-        # Use haiku when temp bots are active (cheaper for multi-bot conversations)
-        from hollingsbot.prompt_db import get_temp_bots_for_channel
-        temp_bots = get_temp_bots_for_channel(message.channel.id)
-        if temp_bots:
-            provider, model = "anthropic", "claude-haiku-4-5"
-            _LOG.info(f"Temp bots active, switching to {provider}/{model}")
-
         # Build current turn (already in history, just extract for payload building)
         current_turn = self._extract_current_turn(message, history)
         if not current_turn:
@@ -292,8 +284,15 @@ class WendyBot:
             channel_id=message.channel.id,
         )
 
-        # Cancel any existing generation in this channel
-        await self._cancel_generation(message.channel.id)
+        # Check for existing generation
+        existing_job = self._active_generations.get(message.channel.id)
+        if existing_job and existing_job.task and not existing_job.task.done():
+            # For claude-cli, don't start new generation - let the running CLI check messages
+            if provider == "claude-cli":
+                _LOG.info("claude-cli generation already running in channel %s, skipping (CLI will check messages)", message.channel.id)
+                return None
+            # For other providers, cancel existing generation
+            await self._cancel_generation(message.channel.id)
 
         # Generate and send response
         job = GenerationJob()
@@ -466,11 +465,7 @@ class WendyBot:
         """
         # Try to use summarized context if available
         if channel_id is not None and self.coordinator.summary_enabled:
-            # Calculate raw message count based on taper
-            from hollingsbot.prompt_db import get_daily_llm_call_count
-            daily_count = get_daily_llm_call_count(exclude_haiku=True)
-            raw_count = self._get_raw_message_count(daily_count)
-
+            raw_count = self._get_raw_message_count(0)  # Fixed at 20
             summarized = self.coordinator.get_summarized_context(channel_id, raw_count)
             if summarized.get("has_summaries"):
                 return self._build_with_summaries(
@@ -516,47 +511,12 @@ class WendyBot:
         return conversation
 
     def _get_l2_summary_count(self, daily_count: int) -> int:
-        """Get number of L2 summaries to include based on daily message count.
-
-        Taper schedule (aligned with model taper):
-        - Messages 0-25: 5 summaries (full context during Opus phase)
-        - Messages 25-150: Linear decrease, -1 summary every 25 messages
-        - Messages 150+: 0 summaries (minimal context during Haiku phase)
-
-        This saves ~$9/month in input tokens.
-        """
-        L2_TAPER_START = 25   # Start reducing L2 after Opus phase
-        L2_TAPER_END = 150    # L2 fully removed by Haiku phase
-        MAX_L2_SUMMARIES = 5
-
-        if daily_count < L2_TAPER_START:
-            return MAX_L2_SUMMARIES
-        elif daily_count >= L2_TAPER_END:
-            return 0
-        else:
-            # Linear taper: remove 1 summary every 25 messages
-            summaries_to_remove = (daily_count - L2_TAPER_START) // 25
-            return max(0, MAX_L2_SUMMARIES - summaries_to_remove)
+        """Get number of L2 summaries to include."""
+        return 10
 
     def _get_raw_message_count(self, daily_count: int) -> int:
-        """Get number of raw messages to include based on daily message count.
-
-        Taper schedule:
-        - Messages 0: 20 raw messages (full context)
-        - Messages 150: 5 raw messages (minimal context)
-        - Linear interpolation between
-        """
-        RAW_TAPER_END = 150
-        MAX_RAW_MESSAGES = 20
-        MIN_RAW_MESSAGES = 5
-
-        if daily_count >= RAW_TAPER_END:
-            return MIN_RAW_MESSAGES
-
-        # Linear taper from MAX to MIN over 0-150
-        progress = daily_count / RAW_TAPER_END
-        raw_count = MAX_RAW_MESSAGES - (progress * (MAX_RAW_MESSAGES - MIN_RAW_MESSAGES))
-        return int(raw_count)
+        """Get number of raw messages to include."""
+        return 30
 
     def _build_with_summaries(
         self,
@@ -572,30 +532,17 @@ class WendyBot:
             [raw messages]
             [current turn]
         """
-        from hollingsbot.prompt_db import get_daily_llm_call_count
-
-        # Get daily count for tapers
-        daily_count = get_daily_llm_call_count(exclude_haiku=True)
-        l2_count = self._get_l2_summary_count(daily_count)
-
         # Build summary section for system prompt
         summary_sections = []
 
-        # Add level-2 summaries (oldest, most compressed) - tapered
+        # Add level-2 summaries (oldest, most compressed)
         level_2 = summarized.get("level_2_groups", [])
-        if level_2 and l2_count > 0:
-            tapered_l2 = level_2[-l2_count:] if len(level_2) > l2_count else level_2
-            _LOG.info(
-                "L2 taper: daily_count=%d, using %d/%d L2 summaries",
-                daily_count, len(tapered_l2), len(level_2)
-            )
-            l2_text = self._format_hierarchical_summaries(tapered_l2, "Older conversation notes:")
+        if level_2:
+            # Include up to 10 most recent L2 summaries
+            l2_to_include = level_2[-10:] if len(level_2) > 10 else level_2
+            _LOG.info("Using %d/%d L2 summaries", len(l2_to_include), len(level_2))
+            l2_text = self._format_hierarchical_summaries(l2_to_include, "Older conversation notes:")
             summary_sections.append(l2_text)
-        elif level_2:
-            _LOG.info(
-                "L2 taper: daily_count=%d, skipping all %d L2 summaries",
-                daily_count, len(level_2)
-            )
 
         # Add level-1 summaries
         level_1 = summarized.get("level_1_groups", [])
@@ -617,12 +564,9 @@ class WendyBot:
             }
         ]
 
-        # Add raw messages (tapered: 20 at start of day -> 5 at 150 messages)
-        raw_limit = self._get_raw_message_count(daily_count)
-        _LOG.info(
-            "Raw message taper: daily_count=%d, using %d raw messages",
-            daily_count, raw_limit
-        )
+        # Add raw messages
+        raw_limit = 30
+        _LOG.info("Using %d raw messages", raw_limit)
 
         # Build a lookup from message_id to images from history
         images_by_msg_id: dict[int, list[ImageAttachment]] = {}
@@ -732,35 +676,16 @@ class WendyBot:
 
         Returns dict with message_id, text, webhook_id, bot_name or None on failure.
         """
-        from hollingsbot.prompt_db import get_daily_llm_call_count
-
         channel = message.channel
         tool_debug: list[dict[str, Any]] = []
         response_text = ""
         stored_conversation = conversation.copy()
 
-        # Build taper debug info
-        daily_count = get_daily_llm_call_count(exclude_haiku=True)
-        l2_count = self._get_l2_summary_count(daily_count)
-
-        # Determine model taper phase
-        if daily_count < 25:
-            taper_phase = "opus->sonnet"
-        elif daily_count < 150:
-            taper_phase = "sonnet->haiku"
-        else:
-            taper_phase = "haiku-only"
-
-        # Taper debug info (will be merged with Celery-returned debug)
-        raw_count = self._get_raw_message_count(daily_count)
-        taper_debug: dict[str, Any] = {
-            "daily_message_count": daily_count,
-            "model_taper_phase": taper_phase,
+        # Debug info (will be merged with Celery-returned debug)
+        debug_info: dict[str, Any] = {
             "model_selected": model,
-            "l2_summary_count": l2_count,
-            "l2_summary_max": 5,
-            "raw_message_count": raw_count,
-            "raw_message_max": 20,
+            "l2_summary_count": 10,
+            "raw_message_count": 30,
         }
         llm_debug: dict[str, Any] = {}
 
@@ -777,9 +702,11 @@ class WendyBot:
 
             for iteration in range(max_tool_iterations + 1):
                 # Generate response
-                text, celery_debug, stored_conversation = await self._run_generation(provider, model, conversation, job)
-                # Merge taper debug with Celery-returned debug (taper info takes precedence)
-                llm_debug = {**celery_debug, **taper_debug}
+                text, celery_debug, stored_conversation = await self._run_generation(
+                    provider, model, conversation, job, channel_id=message.channel.id
+                )
+                # Merge debug info with Celery-returned debug
+                llm_debug = {**celery_debug, **debug_info}
                 response_text = text
 
                 # Execute any tool calls
@@ -929,6 +856,7 @@ class WendyBot:
         model: str,
         conversation: list[dict[str, Any]],
         job: GenerationJob,
+        channel_id: int | None = None,
     ) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
         """Run LLM generation via Celery and return (text, debug_info, conversation)."""
         # Debug logging
@@ -949,7 +877,7 @@ class WendyBot:
 
         async_result = generate_llm_chat_response.apply_async(
             (provider, model, conversation),
-            kwargs={"temperature": 1.0},
+            kwargs={"temperature": 1.0, "channel_id": channel_id},
         )
         job.result = async_result
         start = time.monotonic()
@@ -1273,70 +1201,12 @@ class WendyBot:
         key = (provider.lower(), model)
         return key in self._model_lookup
 
-    def _get_tapered_model(self) -> tuple[str, str]:
-        """Select model using smooth daily taper algorithm.
-
-        Taper thresholds (based on actual usage data):
-        - Messages 0-25: Opus fades from 100% to 0%, Sonnet fills in
-        - Messages 25-150: Sonnet fades from 100% to 0%, Haiku fills in
-        - Messages 150+: 100% Haiku
-
-        This saves ~40% on API costs while maintaining quality on quiet days.
-        """
-        from hollingsbot.prompt_db import get_daily_llm_call_count
-
-        daily_count = get_daily_llm_call_count(exclude_haiku=True)
-
-        # Taper breakpoints
-        OPUS_END = 25      # Opus fades out by message 25
-        SONNET_END = 150   # Sonnet fades out by message 150
-
-        if daily_count < OPUS_END:
-            # Phase 1: Opus fading to Sonnet
-            # At 0 = 100% opus, at OPUS_END = 0% opus
-            opus_prob = 1.0 - (daily_count / OPUS_END)
-            roll = random.random()
-            if roll < opus_prob:
-                _LOG.info(
-                    "Taper: msg #%d, phase=opus->sonnet, prob=%.0f%%, roll=%.2f -> opus",
-                    daily_count, opus_prob * 100, roll
-                )
-                return ("anthropic", "claude-opus-4-5")
-            _LOG.info(
-                "Taper: msg #%d, phase=opus->sonnet, prob=%.0f%%, roll=%.2f -> sonnet",
-                daily_count, opus_prob * 100, roll
-            )
-            return ("anthropic", "claude-sonnet-4-5-20250929")
-
-        elif daily_count < SONNET_END:
-            # Phase 2: Sonnet fading to Haiku
-            # At OPUS_END = 100% sonnet, at SONNET_END = 0% sonnet
-            sonnet_prob = 1.0 - ((daily_count - OPUS_END) / (SONNET_END - OPUS_END))
-            roll = random.random()
-            if roll < sonnet_prob:
-                _LOG.info(
-                    "Taper: msg #%d, phase=sonnet->haiku, prob=%.0f%%, roll=%.2f -> sonnet",
-                    daily_count, sonnet_prob * 100, roll
-                )
-                return ("anthropic", "claude-sonnet-4-5-20250929")
-            _LOG.info(
-                "Taper: msg #%d, phase=sonnet->haiku, prob=%.0f%%, roll=%.2f -> haiku",
-                daily_count, sonnet_prob * 100, roll
-            )
-            return ("anthropic", "claude-haiku-4-5")
-
-        else:
-            # Phase 3: All Haiku
-            _LOG.info("Taper: msg #%d, phase=haiku-only -> haiku", daily_count)
-            return ("anthropic", "claude-haiku-4-5")
+    def _get_default_model(self) -> tuple[str, str]:
+        """Return the default model (tapering disabled)."""
+        return (self.default_provider, self.default_model)
 
     def _get_model_for_user(self, guild_id: int | None, user_id: int) -> tuple[str, str]:
-        """Get user's preferred model or return default.
-
-        Priority:
-        1. User's explicit model preference (if set)
-        2. Daily taper algorithm (automatic cost optimization)
-        """
+        """Get user's preferred model or return default."""
         gid = str(guild_id or 0)
         uid = str(user_id)
         entry = self.model_preferences.get(gid, {}).get(uid)
@@ -1346,8 +1216,8 @@ class WendyBot:
             if isinstance(provider, str) and isinstance(model, str) and self._is_valid_model(provider, model):
                 return provider.lower(), model
 
-        # No user preference - use daily taper
-        return self._get_tapered_model()
+        # No user preference - use default
+        return self._get_default_model()
 
     def _set_model_for_user(self, guild_id: int | None, user_id: int, provider: str, model: str) -> None:
         """Save user's model preference."""
