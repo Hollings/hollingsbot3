@@ -21,6 +21,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && apt-get update && apt-get install -y --no-install-recommends docker-ce-cli docker-compose-plugin \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Node.js and Claude Code CLI for agentic search
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+    && apt-get install -y nodejs \
+    && npm install -g @anthropic-ai/claude-code \
+    && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user for Claude CLI (it refuses --dangerously-skip-permissions as root)
+RUN useradd -m -s /bin/bash claude \
+    && mkdir -p /home/claude/.claude \
+    && chown -R claude:claude /home/claude
+
 # Python deps
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

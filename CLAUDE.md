@@ -50,7 +50,7 @@ Image prompts are routed by prefix via `image_gen_config.json`:
 }
 ```
 
-Daily limits are tracked per user in the SQLite database (`prompts.db`). The `edit:` prefix enables image editing mode where the generator receives `image_input` (attachment bytes).
+Daily limits are tracked per user in the SQLite database (`hollingsbot.db`). The `edit:` prefix enables image editing mode where the generator receives `image_input` (attachment bytes).
 
 ### LLM Chat Architecture
 
@@ -83,7 +83,7 @@ When `LLM_SUMMARY_ENABLED=1`, the bot uses progressive summarization to reduce t
 
 **Files:**
 - `src/hollingsbot/summarization/` - Core summarization logic
-- `data/summaries.db` - SQLite database for summaries and cached messages
+- Summary data stored in unified `hollingsbot.db` (tables: `message_groups`, `cached_messages`, `channel_clear_points`)
 
 ### Temporary LLM Bots
 
@@ -160,7 +160,7 @@ pytest
 
 ### State Persistence
 
-- **SQLite database** (`prompts.db` in `/data` volume): Stores image generation tracking, PR notifications, starboard posts
+- **SQLite database** (`hollingsbot.db` in `/data` volume): Unified database storing all bot data including image generation tracking, cost tracking, message history, summaries, starboard posts, temp bots, and more
 - **State files** in `generated/`: LLM chat state (`llm_chat_new_state.json` with system prompts and model preferences)
 - **Generated images**: Written to `generated/` directory, mounted as volume
 
@@ -170,13 +170,13 @@ Key configuration (see `.env` file):
 - **Core**: `DISCORD_TOKEN`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
 - **LLM**: `DEFAULT_LLM_PROVIDER` (openai/anthropic), `DEFAULT_LLM_MODEL`, `TEXT_TIMEOUT` (default 180s)
 - **LLM History**: `LLM_HISTORY_LIMIT` (default 50), `LLM_MAX_TURNS_SENT` (default 8)
-- **Summarization**: `LLM_SUMMARY_ENABLED` (0/1), `LLM_SUMMARY_MODEL` (default claude-haiku-4-5), `LLM_SUMMARY_CHAR_LIMIT` (default 8000), `SUMMARY_DB_PATH`
+- **Summarization**: `LLM_SUMMARY_ENABLED` (0/1), `LLM_SUMMARY_MODEL` (default claude-haiku-4-5), `LLM_SUMMARY_CHAR_LIMIT` (default 8000)
 - **Image Gen**: `IMAGE_TIMEOUT` (default 30s), `IMAGE_OUTPUT_DIR`
 - **Channel Allowlists**: `STABLE_DIFFUSION_CHANNEL_IDS` (comma-separated), `EDIT_CHANNEL_IDS`, `LLM_WHITELIST_CHANNELS`
 - **Starboard**: `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STARBOARD_IGNORE_CHANNELS`, `STARBOARD_WHITELIST_CHANNEL_IDS`
 - **System Prompt**: `SYSTEM_PROMPT_FILE` (path to custom prompt file)
 - **Webhooks**: `WEBHOOK_URL` (for PR notifications)
-- **Database**: `PROMPT_DB_PATH` (default `prompts.db`)
+- **Database**: `PROMPT_DB_PATH` (default `/data/hollingsbot.db`) - unified database for all bot data
 
 ## Adding New Features
 

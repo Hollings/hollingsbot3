@@ -48,6 +48,8 @@ def generate_image(  # noqa: C901
     image_input: list[bytes] | None = None,
     mask: str | None = None,
     output_format: str | None = None,
+    quality: str = "medium",
+    aspect_ratio: str | None = None,
     # Existing kwarg
     timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
 ) -> str | list[str]:
@@ -57,11 +59,12 @@ def generate_image(  # noqa: C901
     """
     start = time.monotonic()
     logger.info(
-        "generate_image[%s] START | api=%s model=%s seed=%s prompt=%s images=%s mask=%s fmt=%s",
+        "generate_image[%s] START | api=%s model=%s seed=%s quality=%s prompt=%s images=%s mask=%s fmt=%s",
         prompt_id,
         api,
         model,
         seed,
+        quality,
         prompt,
         (len(image_input) if image_input else 0),
         ("provided" if mask else "none"),
@@ -69,7 +72,7 @@ def generate_image(  # noqa: C901
     )
     update_status(prompt_id, "started")
 
-    generator = get_image_generator(api, model)
+    generator = get_image_generator(api, model, quality=quality, aspect_ratio=aspect_ratio)
     gen_sig = signature(generator.generate)
     gen_many = getattr(generator, "generate_many", None)
     gen_many_sig = signature(gen_many) if callable(gen_many) else None
@@ -240,7 +243,7 @@ def _build_messages_for_generator(
         if not isinstance(images, list):
             images = []
 
-        if api_normalized in {"openai", "chatgpt"} and role == "user":
+        if api_normalized in {"openai", "chatgpt", "openrouter"} and role == "user":
             content_parts: list[dict[str, object]] = []
             if text:
                 content_parts.append({"type": "input_text", "text": text})
@@ -344,7 +347,7 @@ def generate_llm_chat_response(
     error_traceback = None
 
     try:
-        if api_normalized in {"openai", "chatgpt"}:
+        if api_normalized in {"openai", "chatgpt", "openrouter"}:
             payload = _build_messages_for_generator(api_normalized, conversation)
         elif api_normalized == "anthropic":
             payload = _build_messages_for_generator(api_normalized, conversation)

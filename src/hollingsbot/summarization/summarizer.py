@@ -1,8 +1,7 @@
-"""Summary generation logic."""
+"""Summary generation logic for hierarchical message-count summarization."""
 
-from datetime import datetime, timezone
 from typing import Protocol
-from .summary_cache import CachedMessage, Summary
+from .summary_cache import CachedMessage, MessageGroup
 
 
 class LLMProtocol(Protocol):
@@ -13,82 +12,48 @@ class LLMProtocol(Protocol):
         ...
 
 
-def build_level_1_prompt(messages: list[CachedMessage], overlap_buffer: int = 7) -> str:
+def build_level_1_prompt(messages: list[CachedMessage]) -> str:
     """
     Build prompt for Level-1 summary from raw messages.
 
     Args:
-        messages: List of cached messages to summarize
-        overlap_buffer: Number of messages that continue into next window
+        messages: List of cached messages to summarize (typically 5)
 
     Returns:
         Formatted prompt for LLM
     """
-    formatted_messages = []
-    for msg in messages:
-        formatted_messages.append(f"{msg.author_name}: {msg.content}")
+    messages_text = "\n".join(
+        f"{msg.author_name}: {msg.content}" for msg in messages
+    )
 
-    messages_text = "\n".join(formatted_messages)
-
-    prompt = f"""You are summarizing a 30-minute window of a Discord conversation for context retention.
-
-Summarize the key points, decisions, and important context from these messages.
-Focus on information that would be useful for continuing the conversation later.
-
-Note: The last {overlap_buffer} messages continue into the next window, so ensure
-your summary provides smooth handoff and context continuity.
+    prompt = f"""Write a ONE sentence note about this conversation from Wendy's perspective (first person as Wendy). Be extremely brief. Example: "I talked with Hollings about X" or "We discussed Y". Never say "I talked with Wendy" - you ARE Wendy.
 
 Messages:
 {messages_text}
 
-Provide a concise summary (2-4 paragraphs)."""
+Wendy's one-sentence note:"""
 
     return prompt
 
 
-def build_meta_summary_prompt(summary1: Summary, summary2: Summary) -> str:
+def build_level_2_prompt(summaries: list[str]) -> str:
     """
-    Build prompt for meta-summary from two summaries.
+    Build prompt for Level-2 summary from 5 Level-1 summaries.
 
     Args:
-        summary1: First summary (earlier in time)
-        summary2: Second summary (later in time)
+        summaries: List of exactly 5 summary strings
 
     Returns:
         Formatted prompt for LLM
     """
-    # Calculate gap between summaries
-    gap_seconds = summary2.start_time - summary1.end_time
-    gap_hours = gap_seconds / 3600
+    summaries_text = "\n".join(f"- {s}" for s in summaries)
 
-    if gap_hours > 1:
-        gap_note = f"Note: There is a {gap_hours:.1f} hour gap between these summaries with no messages."
-    else:
-        gap_note = ""
+    prompt = f"""Combine these notes into exactly 2 sentences from Wendy's perspective (first person as Wendy). Merge related topics, drop minor details.
 
-    # Format timestamps
-    def format_timestamp(ts: int) -> str:
-        dt = datetime.fromtimestamp(ts, tz=timezone.utc)
-        return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+Wendy's previous notes:
+{summaries_text}
 
-    prompt = f"""You are creating a higher-level summary by combining two time-window summaries.
-
-Previous summaries cover:
-- Window 1: {format_timestamp(summary1.start_time)} to {format_timestamp(summary1.end_time)}
-- Window 2: {format_timestamp(summary2.start_time)} to {format_timestamp(summary2.end_time)}
-
-{gap_note}
-
-Combine these into a single coherent summary that captures the essential context
-from both time periods.
-
-Summary 1:
-{summary1.summary_text}
-
-Summary 2:
-{summary2.summary_text}
-
-Provide a concise combined summary (2-4 paragraphs)."""
+Wendy's two-sentence summary:"""
 
     return prompt
 
@@ -96,60 +61,49 @@ Provide a concise combined summary (2-4 paragraphs)."""
 class Summarizer:
     """Handles summary generation using an LLM."""
 
-    def __init__(self, llm: LLMProtocol, overlap_buffer: int = 7):
+    def __init__(self, llm: LLMProtocol):
         """
         Initialize summarizer.
 
         Args:
             llm: LLM instance that implements generate() method
-            overlap_buffer: Number of messages to note as continuing into next window
         """
         self.llm = llm
-        self.overlap_buffer = overlap_buffer
 
-    async def summarize_messages(
-        self,
-        messages: list[CachedMessage],
-        window_start: int,
-        window_end: int,
-    ) -> str:
+    async def summarize_messages(self, messages: list[CachedMessage]) -> str:
         """
-        Generate Level-1 summary from raw messages.
+        Generate Level-1 summary from 5 raw messages.
 
         Args:
-            messages: Messages to summarize
-            window_start: Start timestamp of window
-            window_end: End timestamp of window
+            messages: Exactly 5 messages to summarize
 
         Returns:
-            Summary text
+            Summary text (1 sentence, highly compressed)
         """
         if not messages:
-            return "[No messages in this window]"
+            return "[No messages]"
 
-        prompt = build_level_1_prompt(messages, self.overlap_buffer)
+        prompt = build_level_1_prompt(messages)
         summary_text = await self.llm.generate(prompt)
 
         return summary_text.strip()
 
-    async def summarize_summaries(
-        self,
-        summary1: Summary,
-        summary2: Summary,
-        target_level: int,
-    ) -> str:
+    async def summarize_groups(self, groups: list[MessageGroup]) -> str:
         """
-        Generate meta-summary from two lower-level summaries.
+        Generate Level-2 summary from 5 Level-1 groups.
 
         Args:
-            summary1: First summary (earlier in time)
-            summary2: Second summary (later in time)
-            target_level: Target level for the combined summary
+            groups: Exactly 5 MessageGroups with summaries
 
         Returns:
-            Combined summary text
+            Combined summary text (2 sentences, compressed)
         """
-        prompt = build_meta_summary_prompt(summary1, summary2)
+        summaries = [g.summary_text for g in groups if g.summary_text]
+
+        if not summaries:
+            return "[No summaries to combine]"
+
+        prompt = build_level_2_prompt(summaries)
         meta_summary_text = await self.llm.generate(prompt)
 
         return meta_summary_text.strip()

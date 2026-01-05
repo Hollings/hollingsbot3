@@ -26,11 +26,9 @@ from hollingsbot.utils.discord_utils import get_display_name
 # Summarization imports
 from hollingsbot.summarization import (
     SummaryCache,
-    Summary,
     CachedMessage,
     Summarizer,
     SummaryWorker,
-    get_current_window_boundary,
 )
 from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
 
@@ -80,12 +78,10 @@ class ChatCoordinator(commands.Cog):
         # Track active message processing per channel
         self._active_message_tasks: dict[int, asyncio.Task] = {}
 
-        # Summarization setup
+        # Summarization setup (uses shared DB from prompt_db)
         self.summary_enabled = os.getenv("LLM_SUMMARY_ENABLED", "0") == "1"
         if self.summary_enabled:
-            db_path = os.getenv("SUMMARY_DB_PATH", "data/summaries.db")
-            Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-            self.summary_cache = SummaryCache(db_path)
+            self.summary_cache = SummaryCache()  # Uses DB_PATH from prompt_db
             summary_model = os.getenv("LLM_SUMMARY_MODEL", "claude-haiku-4-5")
             self.summarizer = Summarizer(_SummarizerLLM(summary_model))
             self.summary_worker = SummaryWorker(self.summary_cache, self.summarizer)
@@ -293,9 +289,10 @@ class ChatCoordinator(commands.Cog):
                         f"content_preview={turn.content[:80]}..."
                     )
 
-                    # Cache message for summarization (non-blocking)
+                    # Cache message for summarization and trigger background summarization
                     if self.summary_enabled and self.summary_cache:
                         self._cache_message_for_summary(turn, channel_id)
+                        await self.trigger_summarization(channel_id)
                 else:
                     _LOG.info(f"Message {message.id} already in history, skipping")
 
@@ -571,51 +568,48 @@ class ChatCoordinator(commands.Cog):
         except Exception:
             _LOG.exception("Failed to trigger summarization for channel %d", channel_id)
 
-    def get_summarized_context(self, channel_id: int) -> dict:
-        """Get summaries + recent messages for LLM context building.
+    def get_summarized_context(self, channel_id: int, raw_message_count: int | None = None) -> dict:
+        """Get hierarchical summaries + recent messages for LLM context building.
+
+        Args:
+            channel_id: The channel to get context for
+            raw_message_count: Number of raw messages to include (default: 7)
 
         Returns:
             dict with keys:
-                - summaries: list[Summary] - older summarized windows (cacheable)
-                - recent_messages: list[CachedMessage] - current window messages
+                - raw_messages: list[CachedMessage] - recent messages (count varies)
+                - level_1_groups: list[MessageGroup] - up to 5 summaries of 5 messages each
+                - level_2_groups: list[MessageGroup] - up to 5 summaries of 25 messages each
+                - total_message_coverage: int - total messages represented
                 - has_summaries: bool - whether any summaries are available
         """
         if not self.summary_enabled or not self.summary_cache:
             return {
-                "summaries": [],
-                "recent_messages": [],
+                "raw_messages": [],
+                "level_1_groups": [],
+                "level_2_groups": [],
+                "total_message_coverage": 0,
                 "has_summaries": False,
             }
 
         try:
-            current_time = int(time.time())
-            window_start, _ = get_current_window_boundary()
-
-            # Get summaries (older than current window)
-            summaries = self.summary_cache.get_summaries_for_context(
-                channel_id,
-                before_timestamp=window_start,
-                char_limit=self.summary_char_limit,
-            )
-
-            # Get recent messages (current window + 30 min buffer)
-            buffer_seconds = 30 * 60  # 30 minutes
-            recent_messages = self.summary_cache.get_cached_messages(
-                channel_id,
-                start_time=window_start - buffer_seconds,
-                end_time=current_time,
-            )
+            context = self.summary_cache.get_hierarchical_context(channel_id, raw_message_count)
+            has_summaries = bool(context["level_1_groups"]) or bool(context["level_2_groups"])
 
             return {
-                "summaries": summaries,
-                "recent_messages": recent_messages,
-                "has_summaries": bool(summaries),
+                "raw_messages": context["raw_messages"],
+                "level_1_groups": context["level_1_groups"],
+                "level_2_groups": context["level_2_groups"],
+                "total_message_coverage": context["total_message_coverage"],
+                "has_summaries": has_summaries,
             }
         except Exception:
             _LOG.exception("Failed to get summarized context")
             return {
-                "summaries": [],
-                "recent_messages": [],
+                "raw_messages": [],
+                "level_1_groups": [],
+                "level_2_groups": [],
+                "total_message_coverage": 0,
                 "has_summaries": False,
             }
 
@@ -630,15 +624,21 @@ async def setup(bot: commands.Bot) -> None:
     from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot
     from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
+    from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
+    from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
 
     # Initialize bots with typing tracker
     wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)
     temp_bot_manager = TempBotManager(bot, coordinator, coordinator.typing_tracker)
     grok = GrokBot(bot, coordinator, coordinator.typing_tracker)
+    llama = LlamaBot(bot, coordinator, coordinator.typing_tracker)
+    gemini = GeminiBot(bot, coordinator, coordinator.typing_tracker)
 
     # Register with coordinator
     coordinator.register_bot(wendy)
     coordinator.register_bot(temp_bot_manager)
     coordinator.register_bot(grok)
+    coordinator.register_bot(llama)
+    coordinator.register_bot(gemini)
 
     _LOG.info("Chat system initialized with all bots")

@@ -8,8 +8,9 @@
   },
   "$": {
     "api": "replicate",
-    "model": "google/imagen-4-fast",
-    "price_per_image": 0.03
+    "model": "openai/gpt-image-1.5",
+    "quality": "low",
+    "price_per_image": 0.02
   },
   "$$": {
     "api": "replicate",
@@ -18,8 +19,9 @@
   },
   "$$$": {
     "api": "replicate",
-    "model": "google/imagen-4-ultra",
-    "price_per_image": 0.06
+    "model": "openai/gpt-image-1.5",
+    "quality": "high",
+    "price_per_image": 0.15
   },
   "$$$$": {
     "api": "replicate",
@@ -33,9 +35,17 @@
   },
   "edit:": {
     "api": "replicate",
-    "model": "google/nano-banana",
+    "model": "openai/gpt-image-1.5",
     "mode": "edit",
-    "price_per_image": 0.04
+    "quality": "low",
+    "price_per_image": 0.02
+  },
+  "edit high:": {
+    "api": "replicate",
+    "model": "openai/gpt-image-1.5",
+    "mode": "edit",
+    "quality": "high",
+    "price_per_image": 0.05
   },
   "edit pro:": {
     "api": "replicate",
@@ -45,8 +55,10 @@
   },
   "zoom out": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-fill-dev",
-    "mode": "outpaint",
-    "price_per_image": 0.05
+    "model": "openai/gpt-image-1.5",
+    "mode": "edit",
+    "quality": "low",
+    "price_per_image": 0.02,
+    "default_prompt": "zoom out 200%"
   }
 }

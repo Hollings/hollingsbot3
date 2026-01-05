@@ -7,7 +7,6 @@ import logging
 import os
 import random
 import re
-from datetime import datetime, timedelta
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -137,6 +136,9 @@ class GeneratorSpec:
     model: str
     mode: str = "generate"  # "generate", "edit", or "outpaint"
     price_per_image: float | None = None
+    quality: str = "medium"  # For OpenAI: "low", "medium", "high"
+    aspect_ratio: str | None = None  # For OpenAI: "1:1", "3:2", "2:3", etc.
+    default_prompt: str | None = None  # Default prompt if user provides none
 
 
 # ============================================================================
@@ -284,6 +286,8 @@ class ImageGenCog(commands.Cog):
         image_input: list[bytes] | None = None,
         mask: bytes | None = None,
         output_format: str | None = None,
+        quality: str = "medium",
+        aspect_ratio: str | None = None,
         poll_interval: float = _DEFAULT_CELERY_POLL_INTERVAL,
     ) -> str | list[str]:
         """
@@ -298,6 +302,8 @@ class ImageGenCog(commands.Cog):
             image_input: Input images for edit/outpaint modes
             mask: Mask image for inpainting/outpainting
             output_format: Desired output format
+            quality: Quality level for OpenAI ('low', 'medium', 'high')
+            aspect_ratio: Aspect ratio for OpenAI ('1:1', '3:2', '2:3', etc.)
             poll_interval: Seconds between result checks
 
         Returns:
@@ -313,6 +319,8 @@ class ImageGenCog(commands.Cog):
                 "image_input": payload_images,
                 "mask": payload_mask,
                 "output_format": output_format,
+                "quality": quality,
+                "aspect_ratio": aspect_ratio,
             },
             queue="image",
         )
@@ -457,6 +465,58 @@ class ImageGenCog(commands.Cog):
         except Exception as exc:
             _log.warning("Failed to generate outpaint prompt: %s", exc)
             return "."  # Fallback to minimal prompt
+
+    async def _get_aspect_ratio_for_prompt(self, prompt: str) -> str:
+        """
+        Use Claude to determine the best aspect ratio for an image generation prompt.
+
+        Args:
+            prompt: The image generation prompt
+
+        Returns:
+            Aspect ratio string: "1:1", "2:3", or "3:2" (defaults to "3:2" on error)
+        """
+        valid_ratios = {"1:1", "2:3", "3:2"}
+        default_ratio = "3:2"
+
+        try:
+            generator = get_text_generator("anthropic", "claude-opus-4-5")
+
+            messages = [
+                {
+                    "role": "user",
+                    "content": (
+                        f"You are helping select the optimal aspect ratio for an AI image generation. "
+                        f"Consider the following factors:\n\n"
+                        f"- Subject size and orientation (tall subjects like people/buildings suit portrait, wide scenes suit landscape)\n"
+                        f"- Artistic intent and composition (centered subjects may suit square, dynamic scenes may need width)\n"
+                        f"- Context and environment (landscapes, horizons, and vistas suit wide; portraits and vertical subjects suit tall)\n"
+                        f"- Visual balance and framing\n\n"
+                        f"Available aspect ratios:\n"
+                        f"- 1:1 = square (balanced, centered compositions, profile pictures, symmetrical subjects)\n"
+                        f"- 2:3 = portrait/tall (people, buildings, standing figures, vertical subjects)\n"
+                        f"- 3:2 = landscape/wide (scenery, groups, action scenes, horizontal subjects)\n\n"
+                        f"Image prompt: {prompt}\n\n"
+                        f"Reply with one sentence explaining your reasoning, then the aspect ratio (1:1, 2:3, or 3:2)."
+                    ),
+                }
+            ]
+
+            response = await asyncio.wait_for(generator.generate(messages), timeout=30.0)
+            response_text = response.strip()
+
+            # Extract ratio from response (may contain reasoning text)
+            for valid in valid_ratios:
+                if valid in response_text:
+                    _log.info("Aspect ratio %s for '%s': %s", valid, prompt[:50], response_text)
+                    return valid
+
+            _log.warning("Invalid aspect ratio response '%s', using default %s", response_text, default_ratio)
+            return default_ratio
+
+        except Exception as exc:
+            _log.warning("Failed to get aspect ratio: %s, using default %s", exc, default_ratio)
+            return default_ratio
 
     def _build_filename(
         self,
@@ -643,6 +703,7 @@ class ImageGenCog(commands.Cog):
         image_input: list[bytes] | None,
         mask: bytes | None,
         use_png_format: bool,
+        aspect_ratio_override: str | None = None,
     ) -> list[tuple[str, list[bytes]] | Exception]:
         """
         Execute multiple generation tasks concurrently.
@@ -655,10 +716,12 @@ class ImageGenCog(commands.Cog):
             image_input: Input images for edit/outpaint
             mask: Mask for inpainting
             use_png_format: Whether to force PNG output
+            aspect_ratio_override: Override aspect ratio (used for dynamic gpt-image aspect ratios)
 
         Returns:
             List of results (prompt, images) or exceptions
         """
+        aspect_ratio = aspect_ratio_override if aspect_ratio_override else spec.aspect_ratio
 
         async def _launch_single(prompt_id: int, prompt: str) -> tuple[str, list[bytes]] | Exception:
             try:
@@ -671,6 +734,8 @@ class ImageGenCog(commands.Cog):
                     image_input=image_input,
                     mask=mask,
                     output_format="png" if use_png_format else None,
+                    quality=spec.quality,
+                    aspect_ratio=aspect_ratio,
                 )
 
                 # Convert result to bytes
@@ -829,6 +894,10 @@ class ImageGenCog(commands.Cog):
         # Parse seed and clean prompt
         raw_prompt, seed = self._parse_seed_from_prompt(raw_prompt)
 
+        # Use default prompt if user provided none and spec has one
+        if not raw_prompt and spec.default_prompt:
+            raw_prompt = spec.default_prompt
+
         # Check for outpaint mode with no prompt
         is_outpaint = spec.mode == "outpaint"
         needs_generated_prompt = not raw_prompt and is_outpaint
@@ -903,6 +972,13 @@ class ImageGenCog(commands.Cog):
             spec.model,
         )
 
+        # For gpt-image models (non-edit), get dynamic aspect ratio from Claude
+        aspect_ratio_override: str | None = None
+        is_gpt_image = "gpt-image" in spec.model.lower()
+        if is_gpt_image and not (do_edit or do_outpaint):
+            # Use the first prompt for aspect ratio detection (they're usually all similar)
+            aspect_ratio_override = await self._get_aspect_ratio_for_prompt(prompts[0])
+
         # Execute generation tasks
         results = await self._execute_generation_tasks(
             prompt_ids,
@@ -912,6 +988,7 @@ class ImageGenCog(commands.Cog):
             all_edit_images if (do_edit or do_outpaint) else None,
             outpaint_mask if do_outpaint else None,
             do_edit or do_outpaint,
+            aspect_ratio_override,
         )
 
         # Process and send results
@@ -949,11 +1026,16 @@ class ImageGenCog(commands.Cog):
             # Check content early to allow a separate allowlist for edit: and zoom out
             cleaned = (message.content or "").strip()
             if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
-                # Not in general image channels. Allow if this is an edit: or zoom out prompt
+                # Not in general image channels. Allow if this is an edit prompt or zoom out
                 # and the channel is in EDIT_CHANNEL_IDS.
                 cleaned_lower = cleaned.lower()
-                if not ((cleaned_lower.startswith("edit:") or cleaned_lower.startswith("zoom out"))
-                        and message.channel.id in self._edit_channel_ids):
+                is_edit_cmd = (
+                    cleaned_lower.startswith("edit:") or
+                    cleaned_lower.startswith("edit high:") or
+                    cleaned_lower.startswith("edit pro:") or
+                    cleaned_lower.startswith("zoom out")
+                )
+                if not (is_edit_cmd and message.channel.id in self._edit_channel_ids):
                     return
         # For DMs or allowed guild messages, continue.
         cleaned = (message.content or "").strip()

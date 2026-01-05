@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import re
 import logging
-from typing import NamedTuple
+from typing import NamedTuple, TYPE_CHECKING
 
-from . import AVAILABLE_TOOLS
+if TYPE_CHECKING:
+    from . import AVAILABLE_TOOLS
 
 _LOG = logging.getLogger(__name__)
 
@@ -80,11 +81,14 @@ def _extract_args(text: str, start: int) -> tuple[str | None, int]:
     while i < len(text):
         char = text[i]
 
-        # Handle quote state
+        # Handle quote state - only start quote after = or , or at start
         if char in ('"', "'"):
             if not in_quote:
-                in_quote = True
-                quote_char = char
+                # Only treat as quote start if preceded by =, comma, or whitespace
+                # This prevents apostrophes in words like "What's" from breaking parsing
+                if i == start or (i > 0 and text[i-1] in ('=', ',', ' ', '\t', '\n')):
+                    in_quote = True
+                    quote_char = char
             elif char == quote_char:
                 # Check if it's escaped (simple check for preceding backslash)
                 if i > 0 and text[i-1] != '\\':
@@ -176,13 +180,60 @@ def _split_respecting_quotes(text: str) -> list[str]:
 
 def execute_tool_call(tool_call: ToolCall) -> tuple[str, str]:
     """
-    Execute a tool call and return (result, error).
+    Execute a synchronous tool call and return (result, error).
+
+    For async tools, use execute_tool_call_async instead.
 
     Returns:
         tuple: (result_text, error_text)
         - If successful: (result, "")
         - If error: ("", error_message)
     """
+    from . import AVAILABLE_TOOLS  # Import at runtime to avoid circular import
+
+    tool_name = tool_call.tool_name
+
+    # Check if tool exists
+    if tool_name not in AVAILABLE_TOOLS:
+        return "", f"Unknown tool: {tool_name}"
+
+    tool = AVAILABLE_TOOLS[tool_name]
+
+    # Check if async (shouldn't be called with this function)
+    if tool.is_async:
+        return "", f"Tool {tool_name} is async - use execute_tool_call_async"
+
+    # Parse arguments
+    try:
+        args = parse_arguments(tool_call.raw_args)
+    except Exception as exc:
+        _LOG.exception("Failed to parse tool arguments: %s", tool_call.raw_args)
+        return "", f"Failed to parse arguments: {exc}"
+
+    # Execute tool
+    try:
+        result = tool.function(**args)
+        return str(result), ""
+    except TypeError as exc:
+        # Wrong arguments
+        _LOG.warning("Tool %s called with invalid arguments: %s", tool_name, exc)
+        return "", f"Invalid arguments for {tool_name}: {exc}"
+    except Exception as exc:
+        _LOG.exception("Tool %s execution failed", tool_name)
+        return "", f"Tool execution failed: {exc}"
+
+
+async def execute_tool_call_async(tool_call: ToolCall) -> tuple[str, str]:
+    """
+    Execute a tool call (sync or async) and return (result, error).
+
+    Returns:
+        tuple: (result_text, error_text)
+        - If successful: (result, "")
+        - If error: ("", error_message)
+    """
+    from . import AVAILABLE_TOOLS  # Import at runtime to avoid circular import
+
     tool_name = tool_call.tool_name
 
     # Check if tool exists
@@ -200,7 +251,10 @@ def execute_tool_call(tool_call: ToolCall) -> tuple[str, str]:
 
     # Execute tool
     try:
-        result = tool.function(**args)
+        if tool.is_async:
+            result = await tool.function(**args)
+        else:
+            result = tool.function(**args)
         return str(result), ""
     except TypeError as exc:
         # Wrong arguments

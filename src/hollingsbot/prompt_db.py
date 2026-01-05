@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
-DEFAULT_DB = Path(__file__).resolve().with_name("prompts.db")
+DEFAULT_DB = Path("/data/hollingsbot.db")
 DB_PATH = Path(os.getenv("PROMPT_DB_PATH", str(DEFAULT_DB))).expanduser()
 
 
@@ -69,18 +69,33 @@ def init_db() -> None:
                 webhook_id INTEGER NOT NULL,
                 name TEXT NOT NULL,
                 avatar_url TEXT,
+                avatar_bytes BLOB,
                 spawn_prompt TEXT NOT NULL,
                 replies_remaining INTEGER NOT NULL,
-                spawn_message_id INTEGER
+                spawn_message_id INTEGER,
+                is_active INTEGER DEFAULT 1,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                deactivated_at TEXT,
+                conversation_summary TEXT
             )
             """
         )
-        # Add spawn_message_id column to existing tables
-        try:
-            conn.execute("ALTER TABLE temp_bots ADD COLUMN spawn_message_id INTEGER")
-        except sqlite3.OperationalError:
-            # Column already exists
-            pass
+        # Migration: Add new columns to existing temp_bots tables
+        for col, col_type, default in [
+            ("spawn_message_id", "INTEGER", None),
+            ("is_active", "INTEGER", "1"),
+            ("created_at", "TEXT", None),
+            ("deactivated_at", "TEXT", None),
+            ("avatar_bytes", "BLOB", None),
+            ("conversation_summary", "TEXT", None),
+        ]:
+            try:
+                if default is not None:
+                    conn.execute(f"ALTER TABLE temp_bots ADD COLUMN {col} {col_type} DEFAULT {default}")
+                else:
+                    conn.execute(f"ALTER TABLE temp_bots ADD COLUMN {col} {col_type}")
+            except sqlite3.OperationalError:
+                pass  # Column already exists
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS llm_api_logs (
@@ -138,6 +153,93 @@ def init_db() -> None:
             )
             """
         )
+
+        # ==================== User Tokens Table ====================
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_tokens (
+                user_id INTEGER PRIMARY KEY,
+                tokens INTEGER DEFAULT 0,
+                last_received_at TEXT
+            )
+        """)
+
+        # ==================== Cost Tracking Tables ====================
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_daily_costs (
+                user_id INTEGER NOT NULL,
+                date TEXT NOT NULL,
+                total_cost REAL DEFAULT 0.0,
+                free_budget_used REAL DEFAULT 0.0,
+                credits_used REAL DEFAULT 0.0,
+                generation_count INTEGER DEFAULT 0,
+                PRIMARY KEY (user_id, date)
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_credits (
+                user_id INTEGER PRIMARY KEY,
+                balance REAL DEFAULT 0.0,
+                lifetime_spent REAL DEFAULT 0.0,
+                last_updated TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS user_hourly_budget (
+                user_id INTEGER PRIMARY KEY,
+                current_budget REAL DEFAULT 0.0,
+                last_tick_minute TIMESTAMP NOT NULL
+            )
+        """)
+
+        # ==================== Summary Cache Tables ====================
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS message_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id INTEGER NOT NULL,
+                level INTEGER NOT NULL,
+                start_message_id INTEGER NOT NULL,
+                end_message_id INTEGER NOT NULL,
+                summary_text TEXT,
+                message_count INTEGER NOT NULL,
+                start_timestamp INTEGER,
+                end_timestamp INTEGER,
+                created_at INTEGER NOT NULL,
+                UNIQUE(channel_id, level, start_message_id)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_groups_channel_level
+            ON message_groups(channel_id, level)
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_groups_channel_messages
+            ON message_groups(channel_id, start_message_id, end_message_id)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS cached_messages (
+                channel_id INTEGER NOT NULL,
+                message_id INTEGER NOT NULL,
+                author_id INTEGER,
+                author_name TEXT,
+                content TEXT,
+                timestamp INTEGER NOT NULL,
+                has_images BOOLEAN DEFAULT 0,
+                has_attachments BOOLEAN DEFAULT 0,
+                PRIMARY KEY (channel_id, message_id)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_messages_channel_time
+            ON cached_messages(channel_id, timestamp)
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS channel_clear_points (
+                channel_id INTEGER PRIMARY KEY,
+                clear_after_message_id INTEGER NOT NULL,
+                cleared_at INTEGER NOT NULL
+            )
+        """)
+
         conn.commit()
 
 
@@ -374,16 +476,25 @@ def create_temp_bot(
     spawn_prompt: str,
     replies_remaining: int,
     spawn_message_id: int | None = None,
+    avatar_bytes: bytes | None = None,
 ) -> int:
     """Create a new temporary bot record."""
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
-            INSERT INTO temp_bots (channel_id, webhook_id, name, avatar_url, spawn_prompt, replies_remaining, spawn_message_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO temp_bots (
+                channel_id, webhook_id, name, avatar_url, avatar_bytes,
+                spawn_prompt, replies_remaining, spawn_message_id,
+                is_active, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             """,
-            (channel_id, webhook_id, name, avatar_url, spawn_prompt, replies_remaining, spawn_message_id),
+            (
+                channel_id, webhook_id, name, avatar_url, avatar_bytes,
+                spawn_prompt, replies_remaining, spawn_message_id,
+                datetime.utcnow().isoformat(),
+            ),
         )
         conn.commit()
         return cur.lastrowid
@@ -395,9 +506,10 @@ def get_temp_bots_for_channel(channel_id: int) -> list[dict]:
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
-            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt, replies_remaining, spawn_message_id
+            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                   replies_remaining, spawn_message_id, avatar_bytes, created_at
             FROM temp_bots
-            WHERE channel_id = ?
+            WHERE channel_id = ? AND is_active = 1
             """,
             (channel_id,),
         )
@@ -411,6 +523,8 @@ def get_temp_bots_for_channel(channel_id: int) -> list[dict]:
                 "spawn_prompt": row[5],
                 "replies_remaining": row[6],
                 "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
             }
             for row in cur.fetchall()
         ]
@@ -422,7 +536,8 @@ def get_temp_bot_by_webhook_id(webhook_id: int) -> dict | None:
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
-            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt, replies_remaining, spawn_message_id
+            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                   replies_remaining, spawn_message_id, avatar_bytes, created_at
             FROM temp_bots
             WHERE webhook_id = ?
             """,
@@ -439,27 +554,44 @@ def get_temp_bot_by_webhook_id(webhook_id: int) -> dict | None:
                 "spawn_prompt": row[5],
                 "replies_remaining": row[6],
                 "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
             }
         return None
 
 
-def delete_temp_bot(webhook_id: int) -> None:
-    """Delete a temp bot record."""
+def deactivate_temp_bot(webhook_id: int) -> None:
+    """Mark a temp bot as inactive (soft delete)."""
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute("DELETE FROM temp_bots WHERE webhook_id = ?", (webhook_id,))
+        conn.execute(
+            """
+            UPDATE temp_bots
+            SET is_active = 0, deactivated_at = ?
+            WHERE webhook_id = ?
+            """,
+            (datetime.utcnow().isoformat(), webhook_id),
+        )
         conn.commit()
 
 
+# Keep delete_temp_bot as alias for backwards compatibility
+def delete_temp_bot(webhook_id: int) -> None:
+    """Mark a temp bot as inactive (soft delete). Alias for deactivate_temp_bot."""
+    deactivate_temp_bot(webhook_id)
+
+
 def get_depleted_temp_bots() -> list[dict]:
-    """Get all temp bots that have run out of replies."""
+    """Get all active temp bots that have run out of replies."""
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
         cur = conn.execute(
             """
-            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt, replies_remaining, spawn_message_id
+            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                   replies_remaining, spawn_message_id, avatar_bytes, created_at,
+                   conversation_summary
             FROM temp_bots
-            WHERE replies_remaining <= 0
+            WHERE replies_remaining <= 0 AND is_active = 1
             """
         )
         return [
@@ -472,9 +604,247 @@ def get_depleted_temp_bots() -> list[dict]:
                 "spawn_prompt": row[5],
                 "replies_remaining": row[6],
                 "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
+                "conversation_summary": row[10],
             }
             for row in cur.fetchall()
         ]
+
+
+def get_historical_temp_bots(
+    channel_id: int | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    """Get historical (inactive) temp bots, optionally filtered by channel.
+
+    Returns bots ordered by most recently deactivated first.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        if channel_id is not None:
+            cur = conn.execute(
+                """
+                SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                       replies_remaining, spawn_message_id, avatar_bytes, created_at, deactivated_at
+                FROM temp_bots
+                WHERE channel_id = ? AND is_active = 0
+                ORDER BY deactivated_at DESC
+                LIMIT ?
+                """,
+                (channel_id, limit),
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                       replies_remaining, spawn_message_id, avatar_bytes, created_at, deactivated_at
+                FROM temp_bots
+                WHERE is_active = 0
+                ORDER BY deactivated_at DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+        return [
+            {
+                "id": row[0],
+                "channel_id": row[1],
+                "webhook_id": row[2],
+                "name": row[3],
+                "avatar_url": row[4],
+                "spawn_prompt": row[5],
+                "replies_remaining": row[6],
+                "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
+                "deactivated_at": row[10],
+            }
+            for row in cur.fetchall()
+        ]
+
+
+def get_temp_bot_by_name(name: str, channel_id: int | None = None) -> dict | None:
+    """Find a temp bot by name (case-insensitive), preferring the most recent.
+
+    If channel_id is provided, searches that channel first.
+    Returns the most recently created/deactivated bot with that name.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        # Try channel-specific search first
+        if channel_id is not None:
+            cur = conn.execute(
+                """
+                SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                       replies_remaining, spawn_message_id, avatar_bytes, created_at, deactivated_at, is_active
+                FROM temp_bots
+                WHERE channel_id = ? AND LOWER(name) = LOWER(?)
+                ORDER BY created_at DESC
+                LIMIT 1
+                """,
+                (channel_id, name),
+            )
+            row = cur.fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "channel_id": row[1],
+                    "webhook_id": row[2],
+                    "name": row[3],
+                    "avatar_url": row[4],
+                    "spawn_prompt": row[5],
+                    "replies_remaining": row[6],
+                    "spawn_message_id": row[7],
+                    "avatar_bytes": row[8],
+                    "created_at": row[9],
+                    "deactivated_at": row[10],
+                    "is_active": bool(row[11]),
+                }
+
+        # Global search
+        cur = conn.execute(
+            """
+            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                   replies_remaining, spawn_message_id, avatar_bytes, created_at, deactivated_at, is_active
+            FROM temp_bots
+            WHERE LOWER(name) = LOWER(?)
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (name,),
+        )
+        row = cur.fetchone()
+        if row:
+            return {
+                "id": row[0],
+                "channel_id": row[1],
+                "webhook_id": row[2],
+                "name": row[3],
+                "avatar_url": row[4],
+                "spawn_prompt": row[5],
+                "replies_remaining": row[6],
+                "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
+                "deactivated_at": row[10],
+                "is_active": bool(row[11]),
+            }
+        return None
+
+
+def search_temp_bots(query: str, limit: int = 10) -> list[dict]:
+    """Search temp bots by name or spawn_prompt (case-insensitive).
+
+    Returns matching bots ordered by most recent first.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            SELECT id, channel_id, webhook_id, name, avatar_url, spawn_prompt,
+                   replies_remaining, spawn_message_id, avatar_bytes, created_at, deactivated_at, is_active
+            FROM temp_bots
+            WHERE LOWER(name) LIKE LOWER(?) OR LOWER(spawn_prompt) LIKE LOWER(?)
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (f"%{query}%", f"%{query}%", limit),
+        )
+        return [
+            {
+                "id": row[0],
+                "channel_id": row[1],
+                "webhook_id": row[2],
+                "name": row[3],
+                "avatar_url": row[4],
+                "spawn_prompt": row[5],
+                "replies_remaining": row[6],
+                "spawn_message_id": row[7],
+                "avatar_bytes": row[8],
+                "created_at": row[9],
+                "deactivated_at": row[10],
+                "is_active": bool(row[11]),
+            }
+            for row in cur.fetchall()
+        ]
+
+
+def get_temp_bot_previous_messages(
+    channel_id: int, bot_name: str, limit: int = 5
+) -> list[dict]:
+    """Get a temp bot's most recent messages from their last session.
+
+    Args:
+        channel_id: The channel to search in
+        bot_name: The bot's display name
+        limit: Max number of messages to return
+
+    Returns:
+        List of message dicts with author_name, content, timestamp
+        Ordered chronologically (oldest first)
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            SELECT author_name, content, timestamp
+            FROM cached_messages
+            WHERE channel_id = ? AND author_name = ?
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (channel_id, bot_name, limit),
+        )
+        messages = [
+            {
+                "author_name": row[0],
+                "content": row[1],
+                "timestamp": row[2],
+            }
+            for row in cur.fetchall()
+        ]
+        # Return in chronological order (oldest first)
+        return list(reversed(messages))
+
+
+def get_messages_since_bot_left(channel_id: int, bot_name: str) -> int:
+    """Count how many messages have been sent since a bot was last active.
+
+    Args:
+        channel_id: The channel to check
+        bot_name: The bot's display name
+
+    Returns:
+        Number of messages since the bot's last message, or 0 if not found
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        # Find the bot's last message timestamp
+        cur = conn.execute(
+            """
+            SELECT MAX(timestamp)
+            FROM cached_messages
+            WHERE channel_id = ? AND author_name = ?
+            """,
+            (channel_id, bot_name),
+        )
+        row = cur.fetchone()
+        if not row or row[0] is None:
+            return 0
+
+        last_timestamp = row[0]
+
+        # Count messages after that timestamp
+        cur = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM cached_messages
+            WHERE channel_id = ? AND timestamp > ?
+            """,
+            (channel_id, last_timestamp),
+        )
+        return cur.fetchone()[0]
 
 
 def decrement_temp_bot_replies(webhook_id: int) -> int:
@@ -536,6 +906,38 @@ def log_llm_api_call(
         )
         conn.commit()
         return cur.lastrowid
+
+
+def get_daily_llm_call_count(exclude_haiku: bool = True) -> int:
+    """Get the count of LLM API calls made today (UTC).
+
+    Args:
+        exclude_haiku: If True, exclude haiku calls (temp bots) from count.
+                       The taper only applies to main bot, not temp bots.
+
+    Returns:
+        Number of successful LLM calls today.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        if exclude_haiku:
+            cur = conn.execute(
+                """
+                SELECT COUNT(*) FROM llm_api_logs
+                WHERE date(timestamp) = date('now')
+                AND status = 'success'
+                AND model != 'claude-haiku-4-5'
+                """
+            )
+        else:
+            cur = conn.execute(
+                """
+                SELECT COUNT(*) FROM llm_api_logs
+                WHERE date(timestamp) = date('now')
+                AND status = 'success'
+                """
+            )
+        return cur.fetchone()[0]
 
 
 # ------------------------- Message history -------------------------
@@ -825,3 +1227,120 @@ def get_feature_request_by_questions_message_id(questions_message_id: int) -> di
                 "updated_at": row[9],
             }
         return None
+
+
+# ------------------------- User tokens -------------------------
+
+def give_user_token(user_id: int) -> int:
+    """Give one token to a user. Returns the user's new token balance."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT INTO user_tokens (user_id, tokens, last_received_at)
+            VALUES (?, 1, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                tokens = tokens + 1,
+                last_received_at = excluded.last_received_at
+            """,
+            (user_id, datetime.utcnow().isoformat()),
+        )
+        cur = conn.execute(
+            "SELECT tokens FROM user_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        conn.commit()
+        return row[0] if row else 0
+
+
+def get_user_token_balance(user_id: int) -> int:
+    """Get a user's token balance."""
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT tokens FROM user_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else 0
+
+
+def deduct_user_tokens(user_id: int, amount: int) -> tuple[bool, int]:
+    """Deduct tokens from a user. Returns (success, new_balance).
+
+    Returns (False, current_balance) if user doesn't have enough tokens.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            "SELECT tokens FROM user_tokens WHERE user_id = ?",
+            (user_id,),
+        )
+        row = cur.fetchone()
+        current_balance = row[0] if row else 0
+
+        if current_balance < amount:
+            return (False, current_balance)
+
+        conn.execute(
+            "UPDATE user_tokens SET tokens = tokens - ? WHERE user_id = ?",
+            (amount, user_id),
+        )
+        conn.commit()
+        return (True, current_balance - amount)
+
+
+def get_token_leaderboard(limit: int = 10) -> list[tuple[int, int]]:
+    """Get the top token holders.
+
+    Returns:
+        List of (user_id, tokens) tuples, sorted by tokens descending.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        cur = conn.execute(
+            """
+            SELECT user_id, tokens FROM user_tokens
+            WHERE tokens > 0
+            ORDER BY tokens DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        return [(row[0], row[1]) for row in cur.fetchall()]
+
+
+def resolve_user_by_display_name(display_name: str, channel_id: int | None = None) -> int | None:
+    """Try to resolve a display name to a user ID from cached messages.
+
+    Searches for exact match (case-insensitive) in author_name.
+    If channel_id provided, prefers matches from that channel.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        # Try channel-specific search first if channel_id provided
+        if channel_id:
+            cur = conn.execute(
+                """
+                SELECT author_id FROM cached_messages
+                WHERE channel_id = ? AND LOWER(author_name) = LOWER(?)
+                ORDER BY timestamp DESC LIMIT 1
+                """,
+                (channel_id, display_name),
+            )
+            row = cur.fetchone()
+            if row:
+                return row[0]
+
+        # Fall back to global search
+        cur = conn.execute(
+            """
+            SELECT author_id FROM cached_messages
+            WHERE LOWER(author_name) = LOWER(?)
+            ORDER BY timestamp DESC LIMIT 1
+            """,
+            (display_name,),
+        )
+        row = cur.fetchone()
+        return row[0] if row else None

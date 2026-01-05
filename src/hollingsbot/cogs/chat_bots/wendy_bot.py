@@ -1,4 +1,4 @@
-"""WendyBot - Main LLM chat bot with tools and notebook integration."""
+"""WendyBot - Main LLM chat bot with tools and assistant integration."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ import functools
 import json
 import logging
 import os
+import random
 import re
 import time
 from pathlib import Path
@@ -18,10 +19,10 @@ from discord.ext import commands
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
 from hollingsbot.settings import clear_system_prompt_cache, get_default_system_prompt
+from hollingsbot.summarization import MessageGroup
 from hollingsbot.tasks import generate_llm_chat_response
 from hollingsbot.tools import get_tool_definitions_text
-from hollingsbot.tools.notebook import get_notebook_manager, initialize_notebook
-from hollingsbot.tools.parser import execute_tool_call, parse_tool_calls
+from hollingsbot.tools.parser import execute_tool_call_async, parse_tool_calls
 
 _LOG = logging.getLogger(__name__)
 
@@ -32,6 +33,8 @@ class GenerationJob:
     def __init__(self):
         self.task: asyncio.Task | None = None
         self.result: Any = None
+        # Flag to prevent cancellation during Claude Code tool execution
+        self.claude_code_running: bool = False
 
 
 class WendyBot:
@@ -66,11 +69,7 @@ class WendyBot:
         self._model_lookup: set[tuple[str, str]] = set()
         self._load_available_models()
 
-        # Initialize notebook for persistent memory
-        notebook_path = Path("generated/notebook_state.json")
-        initialize_notebook(notebook_path)
-
-        # System prompt (base + notebook + tools)
+        # System prompt (base + tools)
         self.base_system_prompt = self._load_base_system_prompt()
         self.system_prompt = self._build_full_system_prompt()
 
@@ -182,18 +181,11 @@ class WendyBot:
             _LOG.exception("Failed to load system prompt")
             return "You are a helpful AI assistant."
 
-    def _build_full_system_prompt(self, user_override: str | None = None) -> str:
-        """Build full system prompt with notebook context and tool definitions."""
+    def _build_full_system_prompt(
+        self, user_override: str | None = None, channel_id: int | None = None
+    ) -> str:
+        """Build full system prompt with tool definitions."""
         base = user_override or self.base_system_prompt
-
-        # Add notebook context
-        try:
-            nb_manager = get_notebook_manager()
-            if nb_manager:
-                nb_context = nb_manager.get_notebook_text()
-                base += f"\n\n{nb_context}"
-        except Exception:
-            _LOG.exception("Failed to add notebook context to system prompt")
 
         # Add tool definitions
         try:
@@ -202,6 +194,18 @@ class WendyBot:
                 base += f"\n\n{tools_text}"
         except Exception:
             _LOG.exception("Failed to add tool definitions to system prompt")
+
+        # Add roleplay-friendly instructions if temp bots are active
+        if channel_id:
+            try:
+                from hollingsbot.prompt_db import get_temp_bots_for_channel
+                temp_bots = get_temp_bots_for_channel(channel_id)
+                if temp_bots:
+                    base += "\n\nYou enjoy creative and playful conversations. "
+                    base += "When new people join the chat, welcome them warmly and engage with their unique personalities. "
+                    base += "Never question whether someone is \"real\" or accuse anyone of pretending - just have fun with whoever shows up."
+            except Exception:
+                _LOG.exception("Failed to add temp bot context to system prompt")
 
         return base
 
@@ -260,6 +264,13 @@ class WendyBot:
             getattr(message.guild, "id", None), message.author.id
         )
 
+        # Use haiku when temp bots are active (cheaper for multi-bot conversations)
+        from hollingsbot.prompt_db import get_temp_bots_for_channel
+        temp_bots = get_temp_bots_for_channel(message.channel.id)
+        if temp_bots:
+            provider, model = "anthropic", "claude-haiku-4-5"
+            _LOG.info(f"Temp bots active, switching to {provider}/{model}")
+
         # Build current turn (already in history, just extract for payload building)
         current_turn = self._extract_current_turn(message, history)
         if not current_turn:
@@ -273,7 +284,7 @@ class WendyBot:
         user_system_prompt = self._get_user_system_prompt(
             getattr(message.guild, "id", None), message.author.id
         )
-        full_system_prompt = self._build_full_system_prompt(user_system_prompt)
+        full_system_prompt = self._build_full_system_prompt(user_system_prompt, message.channel.id)
 
         # Build conversation payload
         conversation = self._build_conversation_payload(
@@ -395,11 +406,18 @@ class WendyBot:
                 # Real user message → "user"
                 role = "user"
 
+            # Strip arrival/departure announcements from content
+            content = self._strip_arrival_announcement(turn.content)
+
+            # Skip turns that are now empty after stripping
+            if not content.strip():
+                continue
+
             # Create new turn with translated role
             translated.append(
                 ConversationTurn(
                     role=role,
-                    content=turn.content,
+                    content=content,
                     images=turn.images,
                     message_id=turn.message_id,
                     author_id=turn.author_id,
@@ -409,6 +427,27 @@ class WendyBot:
             )
 
         return translated
+
+    def _strip_arrival_announcement(self, text: str) -> str:
+        """Strip arrival/departure announcements from text.
+
+        Strips patterns like:
+        - '*[BotName arrives for N message(s)]*'
+        - '*[BotName departs]*'
+        - '*[BotName has depleted all replies and fades away]*'
+        """
+        # Pattern: *[SomeName arrives for N message(s)]*
+        arrival_pattern = r'\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*'
+        # Pattern: *[SomeName departs]*
+        depart_pattern = r'\*\[.+?\s+departs\]\*\s*'
+        # Pattern: *[SomeName has depleted all replies and fades away]*
+        deplete_pattern = r'\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*'
+
+        cleaned = text
+        cleaned = re.sub(arrival_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(depart_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(deplete_pattern, '', cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
 
     def _build_conversation_payload(
         self,
@@ -427,7 +466,12 @@ class WendyBot:
         """
         # Try to use summarized context if available
         if channel_id is not None and self.coordinator.summary_enabled:
-            summarized = self.coordinator.get_summarized_context(channel_id)
+            # Calculate raw message count based on taper
+            from hollingsbot.prompt_db import get_daily_llm_call_count
+            daily_count = get_daily_llm_call_count(exclude_haiku=True)
+            raw_count = self._get_raw_message_count(daily_count)
+
+            summarized = self.coordinator.get_summarized_context(channel_id, raw_count)
             if summarized.get("has_summaries"):
                 return self._build_with_summaries(
                     summarized, current_turn, system_prompt, history
@@ -471,6 +515,49 @@ class WendyBot:
 
         return conversation
 
+    def _get_l2_summary_count(self, daily_count: int) -> int:
+        """Get number of L2 summaries to include based on daily message count.
+
+        Taper schedule (aligned with model taper):
+        - Messages 0-25: 5 summaries (full context during Opus phase)
+        - Messages 25-150: Linear decrease, -1 summary every 25 messages
+        - Messages 150+: 0 summaries (minimal context during Haiku phase)
+
+        This saves ~$9/month in input tokens.
+        """
+        L2_TAPER_START = 25   # Start reducing L2 after Opus phase
+        L2_TAPER_END = 150    # L2 fully removed by Haiku phase
+        MAX_L2_SUMMARIES = 5
+
+        if daily_count < L2_TAPER_START:
+            return MAX_L2_SUMMARIES
+        elif daily_count >= L2_TAPER_END:
+            return 0
+        else:
+            # Linear taper: remove 1 summary every 25 messages
+            summaries_to_remove = (daily_count - L2_TAPER_START) // 25
+            return max(0, MAX_L2_SUMMARIES - summaries_to_remove)
+
+    def _get_raw_message_count(self, daily_count: int) -> int:
+        """Get number of raw messages to include based on daily message count.
+
+        Taper schedule:
+        - Messages 0: 20 raw messages (full context)
+        - Messages 150: 5 raw messages (minimal context)
+        - Linear interpolation between
+        """
+        RAW_TAPER_END = 150
+        MAX_RAW_MESSAGES = 20
+        MIN_RAW_MESSAGES = 5
+
+        if daily_count >= RAW_TAPER_END:
+            return MIN_RAW_MESSAGES
+
+        # Linear taper from MAX to MIN over 0-150
+        progress = daily_count / RAW_TAPER_END
+        raw_count = MAX_RAW_MESSAGES - (progress * (MAX_RAW_MESSAGES - MIN_RAW_MESSAGES))
+        return int(raw_count)
+
     def _build_with_summaries(
         self,
         summarized: dict,
@@ -478,44 +565,93 @@ class WendyBot:
         system_prompt: str,
         history: list[ConversationTurn],
     ) -> list[dict[str, Any]]:
-        """Build conversation payload using summaries + recent messages.
+        """Build conversation payload using hierarchical summaries + recent messages.
 
         Structure:
-            [system]
-            [summary context - cacheable]
-            [assistant ack - cacheable]
-            [recent raw messages]
+            [system prompt + summaries in system]
+            [raw messages]
             [current turn]
         """
+        from hollingsbot.prompt_db import get_daily_llm_call_count
+
+        # Get daily count for tapers
+        daily_count = get_daily_llm_call_count(exclude_haiku=True)
+        l2_count = self._get_l2_summary_count(daily_count)
+
+        # Build summary section for system prompt
+        summary_sections = []
+
+        # Add level-2 summaries (oldest, most compressed) - tapered
+        level_2 = summarized.get("level_2_groups", [])
+        if level_2 and l2_count > 0:
+            tapered_l2 = level_2[-l2_count:] if len(level_2) > l2_count else level_2
+            _LOG.info(
+                "L2 taper: daily_count=%d, using %d/%d L2 summaries",
+                daily_count, len(tapered_l2), len(level_2)
+            )
+            l2_text = self._format_hierarchical_summaries(tapered_l2, "Older conversation notes:")
+            summary_sections.append(l2_text)
+        elif level_2:
+            _LOG.info(
+                "L2 taper: daily_count=%d, skipping all %d L2 summaries",
+                daily_count, len(level_2)
+            )
+
+        # Add level-1 summaries
+        level_1 = summarized.get("level_1_groups", [])
+        if level_1:
+            l1_text = self._format_hierarchical_summaries(level_1, "Recent conversation notes:")
+            summary_sections.append(l1_text)
+
+        # Append summaries to system prompt
+        full_system = system_prompt
+        if summary_sections:
+            full_system += "\n\n---\nThese are your notes summarizing conversations before the chat history cutoff:\n\n"
+            full_system += "\n\n".join(summary_sections)
+
         conversation: list[dict[str, Any]] = [
             {
                 "role": "system",
-                "text": system_prompt,
+                "text": full_system,
                 "images": [],
             }
         ]
 
-        # Format summaries into context block
-        summaries = summarized.get("summaries", [])
-        if summaries:
-            summary_text = self._format_summaries_for_context(summaries)
-            # Mark as cacheable for prompt caching
-            conversation.append({
-                "role": "user",
-                "text": f"[Previous conversation summary]\n{summary_text}",
-                "images": [],
-                "_cacheable": True,
-            })
-            conversation.append({
-                "role": "assistant",
-                "text": "I understand the context from our previous conversation. How can I help you now?",
-                "images": [],
-                "_cacheable": True,
-            })
+        # Add raw messages (tapered: 20 at start of day -> 5 at 150 messages)
+        raw_limit = self._get_raw_message_count(daily_count)
+        _LOG.info(
+            "Raw message taper: daily_count=%d, using %d raw messages",
+            daily_count, raw_limit
+        )
 
-        # Add recent raw messages from current window
-        recent_messages = summarized.get("recent_messages", [])
-        for msg in recent_messages:
+        # Build a lookup from message_id to images from history
+        images_by_msg_id: dict[int, list[ImageAttachment]] = {}
+        for turn in history:
+            if turn.message_id and turn.images:
+                images_by_msg_id[turn.message_id] = turn.images
+
+        raw_messages = summarized.get("raw_messages", [])
+        # Take most recent N messages
+        raw_messages = raw_messages[-raw_limit:] if len(raw_messages) > raw_limit else raw_messages
+
+        # Find the two most recent messages with images (excluding current turn)
+        # to include their images in context
+        recent_image_msg_ids: set[int] = set()
+        images_found = 0
+        for msg in reversed(raw_messages):
+            if msg.content == current_turn.text:
+                continue
+            if msg.message_id in images_by_msg_id and images_found < 2:
+                recent_image_msg_ids.add(msg.message_id)
+                images_found += 1
+            if images_found >= 2:
+                break
+
+        for msg in raw_messages:
+            # Skip if this is the current message (match by content)
+            if msg.content == current_turn.text:
+                continue
+
             # Determine role based on author
             is_bot = msg.author_id == self.bot.user.id
             role = "assistant" if is_bot else "user"
@@ -523,13 +659,18 @@ class WendyBot:
             if role == "assistant":
                 text = self._strip_display_name_prefix(text)
 
+            # Include images if this is one of the two most recent image messages
+            images = []
+            if msg.message_id in recent_image_msg_ids:
+                images = [img.to_payload() for img in images_by_msg_id[msg.message_id]]
+
             conversation.append({
                 "role": role,
                 "text": text,
-                "images": [],
+                "images": images,
             })
 
-        # Add current turn
+        # Add current turn (with images)
         conversation.append({
             "role": current_turn.role,
             "text": current_turn.text,
@@ -538,20 +679,36 @@ class WendyBot:
 
         return conversation
 
-    def _format_summaries_for_context(self, summaries: list) -> str:
-        """Format summaries into a context string for the LLM."""
-        from datetime import datetime, timezone
+    def _format_hierarchical_summaries(self, groups: list[MessageGroup], label: str) -> str:
+        """Format a list of MessageGroup objects into a context block with timestamps."""
+        from datetime import datetime
 
-        parts = []
-        for s in summaries:
-            # Format time range
-            start_dt = datetime.fromtimestamp(s.start_time, tz=timezone.utc)
-            end_dt = datetime.fromtimestamp(s.end_time, tz=timezone.utc)
-            time_range = f"{start_dt.strftime('%Y-%m-%d %H:%M')} - {end_dt.strftime('%H:%M')} UTC"
+        if not groups:
+            return ""
 
-            parts.append(f"[{time_range}]\n{s.summary_text}")
+        # Get time range from first and last group for the section header
+        time_range = ""
+        first_start = groups[0].start_timestamp
+        last_end = groups[-1].end_timestamp
+        if first_start and last_end:
+            start_dt = datetime.fromtimestamp(first_start)
+            end_dt = datetime.fromtimestamp(last_end)
+            start_str = start_dt.strftime("%b %d %H:%M")
+            end_str = end_dt.strftime("%H:%M")
+            time_range = f" ({start_str} - {end_str})"
 
-        return "\n\n".join(parts)
+        # Format header - handle empty label case
+        if label:
+            formatted = [f"[{label}{time_range}]"]
+        elif time_range:
+            formatted = [f"[{time_range.strip()}]"]
+        else:
+            formatted = []
+        for group in groups:
+            summary = group.summary_text or "[No summary]"
+            formatted.append(f"- {summary}")
+
+        return "\n".join(formatted)
 
     def _strip_display_name_prefix(self, text: str) -> str:
         """Strip display name prefix from text (e.g., '<DisplayName>: text' -> 'text')."""
@@ -575,46 +732,103 @@ class WendyBot:
 
         Returns dict with message_id, text, webhook_id, bot_name or None on failure.
         """
+        from hollingsbot.prompt_db import get_daily_llm_call_count
+
         channel = message.channel
-        llm_debug: dict[str, Any] = {}
         tool_debug: list[dict[str, Any]] = []
         response_text = ""
         stored_conversation = conversation.copy()
+
+        # Build taper debug info
+        daily_count = get_daily_llm_call_count(exclude_haiku=True)
+        l2_count = self._get_l2_summary_count(daily_count)
+
+        # Determine model taper phase
+        if daily_count < 25:
+            taper_phase = "opus->sonnet"
+        elif daily_count < 150:
+            taper_phase = "sonnet->haiku"
+        else:
+            taper_phase = "haiku-only"
+
+        # Taper debug info (will be merged with Celery-returned debug)
+        raw_count = self._get_raw_message_count(daily_count)
+        taper_debug: dict[str, Any] = {
+            "daily_message_count": daily_count,
+            "model_taper_phase": taper_phase,
+            "model_selected": model,
+            "l2_summary_count": l2_count,
+            "l2_summary_max": 5,
+            "raw_message_count": raw_count,
+            "raw_message_max": 20,
+        }
+        llm_debug: dict[str, Any] = {}
 
         try:
             # Typing indicator disabled temporarily
             # TODO: Re-enable once Discord rate limit clears
             typing_ctx = None
 
-            # Generate initial response
-            text, llm_debug, stored_conversation = await self._run_generation(provider, model, conversation, job)
-            response_text = text
+            # Iterative tool calling loop
+            max_tool_iterations = 5
+            all_display_messages: list[str] = []
+            all_tool_debug: list[dict[str, Any]] = []
+            all_response_text: list[str] = []  # Accumulate non-tool-call text from each iteration
 
-            # Execute any tool calls
-            text, tool_results, display_messages, tool_debug = self._execute_tool_calls(text, channel.id)
+            for iteration in range(max_tool_iterations + 1):
+                # Generate response
+                text, celery_debug, stored_conversation = await self._run_generation(provider, model, conversation, job)
+                # Merge taper debug with Celery-returned debug (taper info takes precedence)
+                llm_debug = {**celery_debug, **taper_debug}
+                response_text = text
 
-            # If tools were executed, add results to conversation and generate follow-up
-            if tool_results:
-                # Add tool results to conversation for LLM
+                # Execute any tool calls
+                text, tool_results, display_messages, iter_tool_debug = await self._execute_tool_calls(text, channel, job)
+                all_display_messages.extend(display_messages)
+                all_tool_debug.extend(iter_tool_debug)
+
+                # Accumulate non-tool-call text from this iteration
+                if text.strip():
+                    all_response_text.append(text.strip())
+
+                # If no tools were called, we're done
+                if not tool_results:
+                    break
+
+                # If we've hit the iteration limit, stop (but keep the response)
+                if iteration >= max_tool_iterations:
+                    _LOG.warning("Hit max tool iterations (%d) in channel %s", max_tool_iterations, channel.id)
+                    break
+
+                # Add assistant response + tool results to conversation for next iteration
+                conversation.append({
+                    "role": "assistant",
+                    "text": response_text,
+                    "images": []
+                })
+                # Format tool results clearly as system output, not a user message
+                tool_output = "[SYSTEM: TOOL EXECUTION RESULTS - This is automated output, not a chat message]\n"
+                tool_output += "\n".join(tool_results)
+                tool_output += "\n[END TOOL RESULTS - Now respond to the user based on this information]"
                 conversation.append({
                     "role": "user",
-                    "text": "\n".join(tool_results),
+                    "text": tool_output,
                     "images": []
                 })
 
-                # Generate follow-up response with tool results
-                text, llm_debug, stored_conversation = await self._run_generation(provider, model, conversation, job)
-                response_text = text
+                _LOG.info("Tool iteration %d: executed %d tools, continuing...", iteration + 1, len(tool_results))
 
-                # Check for nested tool calls (limit to prevent infinite loops)
-                # For now, we only support one level of tool calling
-                # Could extend this with a loop if needed
+            # Use accumulated tool debug
+            tool_debug = all_tool_debug
+
+            # Combine all response text from tool iterations
+            text = "\n\n".join(all_response_text) if all_response_text else ""
 
             # Prepend display messages to the response
-            if display_messages and text:
-                text = "\n".join(display_messages) + "\n\n" + text
-            elif display_messages:
-                text = "\n".join(display_messages)
+            if all_display_messages and text:
+                text = "\n".join(all_display_messages) + "\n\n" + text
+            elif all_display_messages:
+                text = "\n".join(all_display_messages)
 
         except asyncio.CancelledError:
             # Store debug log even for cancelled generations (if we got a response)
@@ -776,9 +990,17 @@ class WendyBot:
         This cancels both the local asyncio task and the remote Celery task.
         Note: Anthropic API calls already in flight will complete server-side
         and consume tokens, but we won't wait for or use the response.
+
+        If a Claude Code tool (remember, assistant) is running, do NOT cancel -
+        these operations must complete to send their results.
         """
         job = self._active_generations.get(channel_id)
         if not job:
+            return
+
+        # Don't cancel if Claude Code tool is running - let it complete
+        if job.claude_code_running:
+            _LOG.info("Skipping cancellation - Claude Code tool is running in channel %s", channel_id)
             return
 
         if job.task and not job.task.done():
@@ -909,7 +1131,7 @@ class WendyBot:
 
     # ==================== Tool Execution ====================
 
-    def _execute_tool_calls(self, text: str, channel_id: int | None = None) -> tuple[str, list[str], list[str], list[dict[str, Any]]]:
+    async def _execute_tool_calls(self, text: str, channel: discord.abc.Messageable | None = None, job: GenerationJob | None = None) -> tuple[str, list[str], list[str], list[dict[str, Any]]]:
         """Execute tool calls in response and return (cleaned_text, tool_results, display_messages, tool_debug).
 
         Returns:
@@ -920,6 +1142,11 @@ class WendyBot:
         """
         from hollingsbot.tools import AVAILABLE_TOOLS
         from hollingsbot.tools.parser import set_current_context, parse_arguments
+
+        # Tools that use Claude Code subprocess and must not be interrupted
+        CLAUDE_CODE_TOOLS = {"assistant"}
+
+        channel_id = getattr(channel, "id", None)
 
         try:
             tool_calls = parse_tool_calls(text)
@@ -932,7 +1159,7 @@ class WendyBot:
 
         # Set execution context for tools
         if channel_id:
-            set_current_context({"channel_id": channel_id})
+            set_current_context({"channel_id": channel_id, "bot_user_id": self.bot.user.id})
 
         tool_results = []
         display_messages = []
@@ -950,7 +1177,17 @@ class WendyBot:
                     })
                     continue
 
-                result, error = execute_tool_call(tool_call)
+                # Set flag for Claude Code tools to prevent cancellation
+                is_claude_code_tool = tool_call.tool_name in CLAUDE_CODE_TOOLS
+                if is_claude_code_tool and job:
+                    job.claude_code_running = True
+
+                try:
+                    result, error = await execute_tool_call_async(tool_call)
+                finally:
+                    # Clear the flag after execution
+                    if is_claude_code_tool and job:
+                        job.claude_code_running = False
                 tool_debug.append({
                     "tool_name": tool_call.tool_name,
                     "raw_args": tool_call.raw_args,
@@ -963,14 +1200,29 @@ class WendyBot:
                 elif result:
                     tool_results.append(f"[Tool: {tool_call.tool_name}] {result}")
 
+                    # Get tool definition for channel_message
+                    tool_def = AVAILABLE_TOOLS.get(tool_call.tool_name)
+
                     # Generate display message for specific tools
-                    if tool_call.tool_name == "search_messages":
+                    if tool_call.tool_name == "assistant":
                         args = parse_arguments(tool_call.raw_args)
-                        query = args.get("query", "")
-                        if query:
-                            display_messages.append(f'*wendy searched for "{query}"*')
-                        else:
-                            display_messages.append("*wendy searched recent messages*")
+                        task = args.get("task", args.get("request", ""))
+                        # Show what wendy asked her assistant
+                        display_msg = f'*asking assistant: "{task[:200]}{"..." if len(task) > 200 else ""}"*\n'
+                        display_msg += f"```\n{result[:800]}{'...' if len(result) > 800 else ''}\n```"
+                        display_messages.append(display_msg)
+
+                        # Check if assistant generated any images in workspace and post them
+                        if channel:
+                            await self._post_assistant_images(channel, result)
+
+                    elif tool_call.tool_name == "give_token":
+                        # Show the token message with user mention
+                        display_messages.append(f"*{result}*")
+                    elif tool_def and tool_def.channel_message:
+                        # Use tool's configured channel message (only add once)
+                        if tool_def.channel_message not in display_messages:
+                            display_messages.append(tool_def.channel_message)
 
             except Exception as exc:
                 _LOG.exception("Tool execution failed: %s", tool_call)
@@ -988,6 +1240,32 @@ class WendyBot:
             cleaned = cleaned.replace(tool_call.full_match, '')
         return cleaned.strip(), tool_results, display_messages, tool_debug
 
+    async def _post_assistant_images(self, channel: discord.abc.Messageable, result: str) -> None:
+        """Post any images generated by the assistant to Discord.
+
+        Scans the assistant result for file paths in the workspace and posts them.
+        """
+        import io
+        from pathlib import Path
+
+        # Pattern to find image paths in assistant workspace
+        workspace = Path(os.getenv("ASSISTANT_WORKSPACE", "/data/wendy_assistant"))
+        image_pattern = re.compile(r'/data/wendy_assistant/[^\s\'"]+\.(?:png|jpg|jpeg|gif|webp)', re.IGNORECASE)
+        matches = image_pattern.findall(result)
+
+        for image_path_str in matches:
+            image_path = Path(image_path_str)
+            if image_path.exists() and image_path.is_file():
+                try:
+                    image_bytes = image_path.read_bytes()
+                    timestamp = int(time.time())
+                    filename = f"assistant_{timestamp}_{image_path.name}"
+                    file = discord.File(io.BytesIO(image_bytes), filename=filename)
+                    await channel.send(file=file)
+                    _LOG.info("Posted assistant-generated image: %s", image_path)
+                except Exception as exc:
+                    _LOG.exception("Failed to post assistant image %s: %s", image_path, exc)
+
     # ==================== Model Preferences ====================
 
     def _is_valid_model(self, provider: str, model: str) -> bool:
@@ -995,8 +1273,70 @@ class WendyBot:
         key = (provider.lower(), model)
         return key in self._model_lookup
 
+    def _get_tapered_model(self) -> tuple[str, str]:
+        """Select model using smooth daily taper algorithm.
+
+        Taper thresholds (based on actual usage data):
+        - Messages 0-25: Opus fades from 100% to 0%, Sonnet fills in
+        - Messages 25-150: Sonnet fades from 100% to 0%, Haiku fills in
+        - Messages 150+: 100% Haiku
+
+        This saves ~40% on API costs while maintaining quality on quiet days.
+        """
+        from hollingsbot.prompt_db import get_daily_llm_call_count
+
+        daily_count = get_daily_llm_call_count(exclude_haiku=True)
+
+        # Taper breakpoints
+        OPUS_END = 25      # Opus fades out by message 25
+        SONNET_END = 150   # Sonnet fades out by message 150
+
+        if daily_count < OPUS_END:
+            # Phase 1: Opus fading to Sonnet
+            # At 0 = 100% opus, at OPUS_END = 0% opus
+            opus_prob = 1.0 - (daily_count / OPUS_END)
+            roll = random.random()
+            if roll < opus_prob:
+                _LOG.info(
+                    "Taper: msg #%d, phase=opus->sonnet, prob=%.0f%%, roll=%.2f -> opus",
+                    daily_count, opus_prob * 100, roll
+                )
+                return ("anthropic", "claude-opus-4-5")
+            _LOG.info(
+                "Taper: msg #%d, phase=opus->sonnet, prob=%.0f%%, roll=%.2f -> sonnet",
+                daily_count, opus_prob * 100, roll
+            )
+            return ("anthropic", "claude-sonnet-4-5-20250929")
+
+        elif daily_count < SONNET_END:
+            # Phase 2: Sonnet fading to Haiku
+            # At OPUS_END = 100% sonnet, at SONNET_END = 0% sonnet
+            sonnet_prob = 1.0 - ((daily_count - OPUS_END) / (SONNET_END - OPUS_END))
+            roll = random.random()
+            if roll < sonnet_prob:
+                _LOG.info(
+                    "Taper: msg #%d, phase=sonnet->haiku, prob=%.0f%%, roll=%.2f -> sonnet",
+                    daily_count, sonnet_prob * 100, roll
+                )
+                return ("anthropic", "claude-sonnet-4-5-20250929")
+            _LOG.info(
+                "Taper: msg #%d, phase=sonnet->haiku, prob=%.0f%%, roll=%.2f -> haiku",
+                daily_count, sonnet_prob * 100, roll
+            )
+            return ("anthropic", "claude-haiku-4-5")
+
+        else:
+            # Phase 3: All Haiku
+            _LOG.info("Taper: msg #%d, phase=haiku-only -> haiku", daily_count)
+            return ("anthropic", "claude-haiku-4-5")
+
     def _get_model_for_user(self, guild_id: int | None, user_id: int) -> tuple[str, str]:
-        """Get user's preferred model or return default."""
+        """Get user's preferred model or return default.
+
+        Priority:
+        1. User's explicit model preference (if set)
+        2. Daily taper algorithm (automatic cost optimization)
+        """
         gid = str(guild_id or 0)
         uid = str(user_id)
         entry = self.model_preferences.get(gid, {}).get(uid)
@@ -1005,7 +1345,9 @@ class WendyBot:
             model = entry.get("model")
             if isinstance(provider, str) and isinstance(model, str) and self._is_valid_model(provider, model):
                 return provider.lower(), model
-        return self.default_provider, self.default_model
+
+        # No user preference - use daily taper
+        return self._get_tapered_model()
 
     def _set_model_for_user(self, guild_id: int | None, user_id: int, provider: str, model: str) -> None:
         """Save user's model preference."""

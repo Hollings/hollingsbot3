@@ -26,6 +26,8 @@ class NotebookManager:
         """
         self.state_path = state_path
         self.slots: list[str] = self._load_state()
+        # Pending changes awaiting confirmation: slot_num -> new_content
+        self._pending: dict[int, str] = {}
 
     def _load_state(self) -> list[str]:
         """Load notebook slots from disk."""
@@ -50,15 +52,17 @@ class NotebookManager:
         tmp_path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), "utf-8")
         tmp_path.replace(self.state_path)
 
+    MAX_SLOT_LENGTH = 500
+
     def save_memory(self, slot: int, content: str) -> str:
-        """Save content to a memory slot.
+        """Stage a memory slot overwrite (requires confirmation).
 
         Args:
             slot: Slot number (1-5)
-            content: Content to save
+            content: New content to write to the slot
 
         Returns:
-            Success or error message
+            Confirmation prompt for the LLM to respond to
         """
         try:
             slot_num = int(slot)
@@ -68,15 +72,68 @@ class NotebookManager:
         if slot_num < 1 or slot_num > self.NUM_SLOTS:
             return f"Error: slot must be between 1 and {self.NUM_SLOTS}"
 
-        # Convert to 0-indexed
+        content = str(content).strip()
+
+        # Check length limit
+        if len(content) > self.MAX_SLOT_LENGTH:
+            return f"Error: content is {len(content)} chars, max is {self.MAX_SLOT_LENGTH}"
+
+        # Get current content
         idx = slot_num - 1
+        current = self.slots[idx]
 
-        # Store the content
-        self.slots[idx] = str(content).strip()
-        self._save_state()
+        # Stage the change
+        self._pending[slot_num] = content
 
-        _LOG.info("Saved memory to slot %d: %s", slot_num, content[:50])
-        return f"Memory saved to slot {slot_num}"
+        # Build confirmation prompt
+        if current:
+            old_preview = current[:100] + ("..." if len(current) > 100 else "")
+            new_preview = content[:100] + ("..." if len(content) > 100 else "")
+            return f"Replacing slot {slot_num} content '{old_preview}' with '{new_preview}', are you sure? Y/N"
+        else:
+            new_preview = content[:100] + ("..." if len(content) > 100 else "")
+            return f"Writing to empty slot {slot_num}: '{new_preview}', are you sure? Y/N"
+
+    def confirm_memory(self, slot: int, confirm: str) -> str:
+        """Confirm or cancel a pending memory slot change.
+
+        Args:
+            slot: Slot number (1-5)
+            confirm: 'Y' to confirm, 'N' to cancel
+
+        Returns:
+            Success or cancellation message
+        """
+        try:
+            slot_num = int(slot)
+        except (ValueError, TypeError):
+            return f"Error: slot must be a number between 1 and {self.NUM_SLOTS}"
+
+        if slot_num < 1 or slot_num > self.NUM_SLOTS:
+            return f"Error: slot must be between 1 and {self.NUM_SLOTS}"
+
+        # Check for pending change
+        if slot_num not in self._pending:
+            return f"Error: no pending change for slot {slot_num}"
+
+        confirm = str(confirm).strip().upper()
+
+        if confirm == "Y":
+            # Commit the change
+            content = self._pending.pop(slot_num)
+            idx = slot_num - 1
+            self.slots[idx] = content
+            self._save_state()
+
+            _LOG.info("Confirmed slot %d: %s", slot_num, content[:50])
+            return f"Slot {slot_num} saved ({len(content)}/{self.MAX_SLOT_LENGTH} chars): {content}"
+        elif confirm == "N":
+            # Cancel the change
+            self._pending.pop(slot_num)
+            _LOG.info("Cancelled pending change for slot %d", slot_num)
+            return f"Cancelled - slot {slot_num} unchanged"
+        else:
+            return "Error: please respond with Y or N"
 
     def get_notebook_text(self) -> str:
         """Get formatted notebook text for inclusion in system prompt.
@@ -87,14 +144,7 @@ class NotebookManager:
         lines = [
             "# Your Notebook",
             "",
-            "You have a persistent notebook with 5 memory slots for your own use. These are",
-            "notes from yourself to yourself - reminders you've written for future reference.",
-            "The notebook persists even when conversation history is cleared.",
-            "",
-            "**USE THIS OFTEN.** Actively save important information: facts about the user,",
-            "their preferences, ongoing tasks, conversation context, or anything you want to",
-            "remember. Pay attention to what's currently stored and update it as you learn new",
-            "things. When all slots are full, overwrite the least relevant one.",
+            f"You have 5 memory slots (max {self.MAX_SLOT_LENGTH} chars each). These persist across restarts.",
             "",
             "Current notebook contents:",
             ""
@@ -102,13 +152,14 @@ class NotebookManager:
 
         for i, content in enumerate(self.slots, start=1):
             if content:
-                lines.append(f"{i}. {content}")
+                lines.append(f"{i}. {content} ({len(content)}/{self.MAX_SLOT_LENGTH})")
             else:
                 lines.append(f"{i}. [empty]")
 
         lines.extend([
             "",
-            "To update a slot, use: TOOL_CALL: save_memory(slot=1, content=\"your note to yourself\")",
+            "To save: save_memory(slot=1, content=\"your text here\")",
+            "You will be asked to confirm with Y/N before the change is saved.",
             ""
         ])
 
@@ -140,16 +191,32 @@ def get_notebook_manager() -> NotebookManager | None:
 
 
 def save_memory(slot: str, content: str) -> str:
-    """Tool function to save content to a memory slot.
+    """Tool function to stage a memory slot overwrite.
 
     Args:
         slot: Slot number (1-5)
-        content: Content to save
+        content: New content to write to the slot
 
     Returns:
-        Success or error message
+        Confirmation prompt for the LLM
     """
     if _notebook_manager is None:
         return "Error: Notebook not initialized"
 
     return _notebook_manager.save_memory(slot, content)
+
+
+def confirm_memory(slot: str, confirm: str) -> str:
+    """Tool function to confirm or cancel a pending memory change.
+
+    Args:
+        slot: Slot number (1-5)
+        confirm: 'Y' to confirm, 'N' to cancel
+
+    Returns:
+        Success or cancellation message
+    """
+    if _notebook_manager is None:
+        return "Error: Notebook not initialized"
+
+    return _notebook_manager.confirm_memory(slot, confirm)

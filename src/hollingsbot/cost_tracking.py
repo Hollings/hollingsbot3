@@ -5,6 +5,8 @@ This module provides the CostTracker class which manages:
 - Credit balance management
 - Cost deduction for image generations
 - Usage history and reporting
+
+Tables are created by prompt_db.init_db() - this module just uses them.
 """
 
 from __future__ import annotations
@@ -32,67 +34,11 @@ class CostTracker:
         """
         self.db_path = db_path
         self.daily_free_budget = daily_free_budget
-        self._ensure_tables_exist()
+        # Tables are created by prompt_db.init_db() which runs at bot startup
         _log.info(
             f"CostTracker initialized with db_path={db_path}, "
             f"daily_free_budget=${daily_free_budget:.2f}"
         )
-
-    def _ensure_tables_exist(self) -> None:
-        """Create the cost tracking tables if they don't exist."""
-        with sqlite3.connect(self.db_path) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_daily_costs (
-                    user_id INTEGER NOT NULL,
-                    date TEXT NOT NULL,
-                    total_cost REAL DEFAULT 0.0,
-                    free_budget_used REAL DEFAULT 0.0,
-                    credits_used REAL DEFAULT 0.0,
-                    generation_count INTEGER DEFAULT 0,
-                    PRIMARY KEY (user_id, date)
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_credits (
-                    user_id INTEGER PRIMARY KEY,
-                    balance REAL DEFAULT 0.0,
-                    lifetime_spent REAL DEFAULT 0.0,
-                    last_updated TIMESTAMP
-                )
-            """)
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS user_hourly_budget (
-                    user_id INTEGER PRIMARY KEY,
-                    current_budget REAL DEFAULT 0.0,
-                    last_tick_minute TIMESTAMP NOT NULL
-                )
-            """)
-
-            # Migration: rename last_tick_hour to last_tick_minute if it exists
-            # Check if the old column exists
-            cursor = conn.execute("PRAGMA table_info(user_hourly_budget)")
-            columns = [row[1] for row in cursor.fetchall()]
-
-            if "last_tick_hour" in columns and "last_tick_minute" not in columns:
-                _log.info("Migrating user_hourly_budget: renaming last_tick_hour to last_tick_minute")
-                # SQLite doesn't support RENAME COLUMN in older versions, so we need to recreate the table
-                conn.execute("""
-                    CREATE TABLE user_hourly_budget_new (
-                        user_id INTEGER PRIMARY KEY,
-                        current_budget REAL DEFAULT 0.0,
-                        last_tick_minute TIMESTAMP NOT NULL
-                    )
-                """)
-                conn.execute("""
-                    INSERT INTO user_hourly_budget_new (user_id, current_budget, last_tick_minute)
-                    SELECT user_id, current_budget, last_tick_hour FROM user_hourly_budget
-                """)
-                conn.execute("DROP TABLE user_hourly_budget")
-                conn.execute("ALTER TABLE user_hourly_budget_new RENAME TO user_hourly_budget")
-                _log.info("Migration completed successfully")
-
-            conn.commit()
-        _log.debug("Database tables ensured to exist")
 
     def _get_today_string(self) -> str:
         """Get today's date as a string in YYYY-MM-DD format (UTC).

@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
-from .notebook import save_memory
-from .search_history import search_messages
+from .tokens import give_token, check_tokens
+from .personal_assistant import ask_assistant
 
 __all__ = ["Tool", "AVAILABLE_TOOLS", "get_tool_definitions_text"]
 
@@ -19,28 +19,36 @@ class Tool:
     parameters: dict[str, str]  # param_name -> description
     function: Callable[..., str]
     channel_message: str | None = None  # Optional message to append to bot's response
+    is_async: bool = False  # Whether the function is async
 
 
-# Registry of all available tools
+# Registry of available tools (reduced set - assistant handles memory/search/images)
 AVAILABLE_TOOLS: dict[str, Tool] = {
-    "save_memory": Tool(
-        name="save_memory",
-        description="Save a note to yourself in one of 5 persistent memory slots. This is for your own use - write reminders to your future self about facts, preferences, ongoing tasks, or other context you want to remember. Use this actively and often whenever you learn something worth remembering. When all slots are full, overwrite the least relevant one. These notes persist across conversations and history clears.",
+    "give_token": Tool(
+        name="give_token",
+        description="Give one token to a user as a reward or gift. Tokens are tracked in the database.",
         parameters={
-            "slot": "Slot number (1-5) where to store your note",
-            "content": "Your note to yourself (should be a clear, concise reminder)"
+            "user": "The user to give a token to. Can be a @mention (e.g., <@123456>), user ID (e.g., 123456), or display name (e.g., John)"
         },
-        function=save_memory,
-        channel_message="*the bot will remember that*",
+        function=give_token,
+        channel_message="*hands over a token*",
     ),
-    "search_messages": Tool(
-        name="search_messages",
-        description="Search through the message history of the current channel. Returns the 5 most recent matching messages with their content, author, timestamp, and attachments. Use this to recall past conversations, find specific information discussed previously, or check what was said by particular users.",
+    "check_tokens": Tool(
+        name="check_tokens",
+        description="Check how many tokens a user has.",
         parameters={
-            "query": "Text to search for in message content (optional, leave empty to get recent messages)",
-            "author_id": "Discord user ID to filter by specific author (optional)"
+            "user": "The user to check. Can be a @mention, user ID, or display name"
         },
-        function=search_messages,
+        function=check_tokens,
+        channel_message=None,
+    ),
+    "assistant": Tool(
+        name="assistant",
+        description="Your capable personal assistant who can help with web searches, research, looking up past conversations, generating images, managing files, and keeping records. Ask it to do anything you can't do yourself.",
+        parameters={
+            "task": "What you want your assistant to do"
+        },
+        function=ask_assistant,
         channel_message=None,
     ),
 }

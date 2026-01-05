@@ -56,7 +56,7 @@ async def main():
 
         await _ensure_loaded("hollingsbot.cogs.general")
         await _ensure_loaded("hollingsbot.cogs.image_gen_cog")
-        await _ensure_loaded("hollingsbot.cogs.gpt2_chat")
+        # await _ensure_loaded("hollingsbot.cogs.gpt2_chat")  # Disabled
         await _ensure_loaded("hollingsbot.cogs.admin")
         await _ensure_loaded("hollingsbot.cogs.credits_cog")
         await _ensure_loaded("hollingsbot.cogs.gif_chain")

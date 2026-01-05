@@ -1,235 +1,187 @@
-"""Background summarization worker with cascade logic."""
+"""Background summarization worker for hierarchical message-count summarization.
+
+This module provides a worker that generates hierarchical summaries of Discord
+messages in the background. Level-1 summaries cover groups of raw messages,
+and level-2 summaries cover groups of level-1 summaries.
+"""
 
 import asyncio
-from typing import Optional
-from .summary_cache import SummaryCache, Summary
+import logging
+from typing import Union
+
+from .summary_cache import CachedMessage, MessageGroup, SummaryCache
 from .summarizer import Summarizer
-from .time_windows import get_current_window_boundary, calculate_summary_level
+
+_LOG = logging.getLogger(__name__)
 
 
 class SummaryWorker:
-    """Handles background summarization cascades."""
+    """Handles background summarization with message-count-based grouping.
 
-    def __init__(self, cache: SummaryCache, summarizer: Summarizer):
-        """
-        Initialize worker.
+    This worker generates hierarchical summaries asynchronously:
+    - Level-1: Summarizes groups of raw messages
+    - Level-2: Summarizes groups of level-1 summaries
+
+    Uses per-channel locking to prevent concurrent summarization of the same channel.
+    """
+
+    def __init__(self, cache: SummaryCache, summarizer: Summarizer) -> None:
+        """Initialize the summary worker.
 
         Args:
-            cache: Summary cache for database operations
-            summarizer: Summarizer for generating summaries
+            cache: Summary cache for database operations.
+            summarizer: Summarizer instance for generating summary text.
         """
         self.cache = cache
         self.summarizer = summarizer
-        self._active_jobs: dict[int, asyncio.Task] = {}
         self._job_locks: dict[int, asyncio.Lock] = {}
 
     def _get_lock(self, channel_id: int) -> asyncio.Lock:
-        """Get or create lock for a channel."""
+        """Get or create a lock for a specific channel.
+
+        Args:
+            channel_id: The Discord channel ID.
+
+        Returns:
+            An asyncio.Lock instance for the channel.
+        """
         if channel_id not in self._job_locks:
             self._job_locks[channel_id] = asyncio.Lock()
         return self._job_locks[channel_id]
 
-    def _find_combinable_pairs(
+    async def _generate_summary_for_group(
         self,
         channel_id: int,
         level: int,
-    ) -> list[tuple[Summary, Summary]]:
-        """
-        Find pairs of same-level summaries that can be combined.
+        items: Union[list[CachedMessage], list[MessageGroup]],
+    ) -> None:
+        """Generate and save a summary for a group of messages or lower-level groups.
 
         Args:
-            channel_id: Channel to search
-            level: Summary level to look for
-
-        Returns:
-            List of (summary1, summary2) tuples, sorted by time
+            channel_id: The Discord channel ID.
+            level: The summary level (1 for messages, 2 for level-1 groups).
+            items: Either a list of CachedMessage (level 1) or MessageGroup (level 2+).
         """
-        summaries = self.cache.get_summaries_by_level(channel_id, level)
+        if level == 1:
+            messages = items
+            summary_text = await self.summarizer.summarize_messages(messages)
+            start_id = messages[0].message_id
+            end_id = messages[-1].message_id
+            start_timestamp = messages[0].timestamp
+            end_timestamp = messages[-1].timestamp
+            message_count = len(messages)
+        else:
+            groups = items
+            summary_text = await self.summarizer.summarize_groups(groups)
+            start_id = groups[0].start_message_id
+            end_id = groups[-1].end_message_id
+            start_timestamp = groups[0].start_timestamp
+            end_timestamp = groups[-1].end_timestamp
+            message_count = sum(g.message_count for g in groups)
 
-        if len(summaries) < 2:
-            return []
-
-        # Sort by start time (should already be sorted, but ensure it)
-        summaries.sort(key=lambda s: s.start_time)
-
-        # Pair them sequentially: [0,1], [2,3], [4,5], ...
-        pairs = []
-        for i in range(0, len(summaries) - 1, 2):
-            pairs.append((summaries[i], summaries[i + 1]))
-
-        return pairs
-
-    async def _generate_level_1_summary(
-        self,
-        channel_id: int,
-        window_start: int,
-        window_end: int,
-    ) -> Optional[Summary]:
-        """
-        Generate a Level-1 summary for a time window.
-
-        Args:
-            channel_id: Channel ID
-            window_start: Window start timestamp
-            window_end: Window end timestamp
-
-        Returns:
-            Summary object, or None if window is empty or already summarized
-        """
-        # Check if summary already exists
-        existing = self.cache.get_summary(channel_id, window_start, window_end, 1)
-        if existing:
-            return None
-
-        # Get messages in this window
-        messages = self.cache.get_cached_messages(channel_id, window_start, window_end)
-
-        if not messages:
-            return None  # Empty window, skip
-
-        # Generate summary
-        summary_text = await self.summarizer.summarize_messages(
-            messages,
-            window_start,
-            window_end,
-        )
-
-        # Create Summary object
-        summary = Summary(
+        group = MessageGroup(
+            id=None,
             channel_id=channel_id,
-            start_time=window_start,
-            end_time=window_end,
-            summary_level=1,
+            level=level,
+            start_message_id=start_id,
+            end_message_id=end_id,
             summary_text=summary_text,
-            message_count=len(messages),
+            message_count=message_count,
+            start_timestamp=start_timestamp,
+            end_timestamp=end_timestamp,
+        )
+        self.cache.save_message_group(group)
+
+        _LOG.info(
+            "Generated level-%d summary for channel %d: messages %d-%d (%d total)",
+            level,
+            channel_id,
+            start_id,
+            end_id,
+            message_count,
         )
 
-        return summary
-
-    async def _combine_summaries(
-        self,
-        summary1: Summary,
-        summary2: Summary,
-    ) -> Summary:
-        """
-        Combine two summaries into a higher-level summary.
+    async def _generate_level_1_summaries(self, channel_id: int) -> int:
+        """Generate level-1 summaries for message groups that need them.
 
         Args:
-            summary1: First summary (earlier in time)
-            summary2: Second summary (later in time)
+            channel_id: The Discord channel ID.
 
         Returns:
-            Combined summary at next level
+            Number of summaries generated.
         """
-        # Calculate new level based on actual time span
-        new_start = summary1.start_time
-        new_end = summary2.end_time
-        new_level = calculate_summary_level(new_start, new_end)
+        groups_to_summarize = self.cache.get_messages_needing_level1_summary(channel_id)
+        if not groups_to_summarize:
+            return 0
 
-        # Generate combined summary text
-        combined_text = await self.summarizer.summarize_summaries(
-            summary1,
-            summary2,
-            target_level=new_level,
-        )
+        for messages in groups_to_summarize:
+            await self._generate_summary_for_group(channel_id, level=1, items=messages)
 
-        # Create combined Summary object
-        combined = Summary(
-            channel_id=summary1.channel_id,
-            start_time=new_start,
-            end_time=new_end,
-            summary_level=new_level,
-            summary_text=combined_text,
-            message_count=summary1.message_count + summary2.message_count,
-        )
+        return len(groups_to_summarize)
 
-        return combined
-
-    async def _run_cascade(self, channel_id: int) -> list[Summary]:
-        """
-        Run full summarization cascade for a channel.
-
-        1. Generate Level-1 summaries for unsummarized windows
-        2. Combine Level-1 summaries into Level-2
-        3. Combine Level-2 summaries into Level-3
-        4. Continue until no more pairs can be formed
+    async def _generate_level_2_summaries(self, channel_id: int) -> int:
+        """Generate level-2 summaries for level-1 groups that need them.
 
         Args:
-            channel_id: Channel to summarize
+            channel_id: The Discord channel ID.
 
         Returns:
-            List of newly created summaries (not yet saved to DB)
+            Number of summaries generated.
         """
-        new_summaries: list[Summary] = []
+        groups_to_summarize = self.cache.get_level1_groups_needing_level2(channel_id)
+        if not groups_to_summarize:
+            return 0
 
-        # Step 1: Generate Level-1 summaries from raw messages
-        # We need to identify closed windows that have messages but no summaries
+        for level_1_groups in groups_to_summarize:
+            await self._generate_summary_for_group(
+                channel_id, level=2, items=level_1_groups
+            )
 
-        # Get current window boundary
-        current_window_start, _ = get_current_window_boundary()
+        return len(groups_to_summarize)
 
-        # Get all cached messages for this channel
-        # (In real implementation, we'd query by time range)
-        # For now, we'll just try to summarize windows that have messages
+    async def _run_summarization(self, channel_id: int) -> dict[str, int]:
+        """Run summarization for a channel at all levels.
 
-        # Get all existing Level-1 summaries to know which windows are already done
-        existing_level_1 = self.cache.get_summaries_by_level(channel_id, 1)
-        existing_windows = {(s.start_time, s.end_time) for s in existing_level_1}
+        Generates level-1 summaries first, then level-2 summaries if enough
+        level-1 summaries exist.
 
-        # For testing purposes, we'll try to generate Level-1 summaries
-        # for windows that have messages but no summaries
-        # In real implementation, this would iterate through closed windows
+        Args:
+            channel_id: The Discord channel ID to summarize.
 
-        # For now, let's just handle the combining logic since Level-1 generation
-        # is tested separately
+        Returns:
+            Dictionary with counts: {"level_1": int, "level_2": int}.
+        """
+        result = {
+            "level_1": await self._generate_level_1_summaries(channel_id),
+            "level_2": await self._generate_level_2_summaries(channel_id),
+        }
 
-        # Step 2+: Combine summaries at each level
-        current_level = 1
-        max_iterations = 10  # Prevent infinite loops
+        if result["level_1"] > 0 or result["level_2"] > 0:
+            _LOG.info(
+                "Summarization complete for channel %d: %d level-1, %d level-2",
+                channel_id,
+                result["level_1"],
+                result["level_2"],
+            )
 
-        for _ in range(max_iterations):
-            pairs = self._find_combinable_pairs(channel_id, current_level)
-
-            if not pairs:
-                # No more pairs at this level, move to next
-                current_level += 1
-                pairs = self._find_combinable_pairs(channel_id, current_level)
-
-                if not pairs:
-                    # No pairs at next level either, we're done
-                    break
-
-            # Combine all pairs at this level
-            for summary1, summary2 in pairs:
-                combined = await self._combine_summaries(summary1, summary2)
-
-                # Check if this summary already exists
-                existing = self.cache.get_summary(
-                    combined.channel_id,
-                    combined.start_time,
-                    combined.end_time,
-                    combined.summary_level,
-                )
-
-                if not existing:
-                    new_summaries.append(combined)
-                    # Save immediately so it's available for next level
-                    self.cache.save_summary(combined)
-
-        return new_summaries
+        return result
 
     async def trigger_summarization(self, channel_id: int) -> None:
-        """
-        Trigger background summarization for a channel.
+        """Trigger background summarization for a channel.
 
-        If summarization is already running for this channel, does nothing.
+        If summarization is already running for this channel, this method
+        returns immediately without doing anything.
 
         Args:
-            channel_id: Channel to summarize
+            channel_id: The Discord channel ID to summarize.
         """
         lock = self._get_lock(channel_id)
 
-        # Try to acquire lock (non-blocking)
         if not lock.locked():
             async with lock:
-                await self._run_cascade(channel_id)
+                try:
+                    await self._run_summarization(channel_id)
+                except Exception:
+                    _LOG.exception(
+                        "Error during summarization for channel %d", channel_id
+                    )

@@ -1,18 +1,16 @@
-"""Summarization system for conversation history."""
+"""Summarization system for hierarchical message-count conversation summarization."""
 
-from .summary_cache import SummaryCache, Summary, CachedMessage
+from .summary_cache import SummaryCache, MessageGroup, CachedMessage, GROUP_SIZE, RAW_MESSAGE_COUNT
 from .summarizer import Summarizer, LLMProtocol
 from .summary_worker import SummaryWorker
-from .time_windows import get_window_at_time, get_current_window_boundary, calculate_summary_level
 
 __all__ = [
     "SummaryCache",
-    "Summary",
+    "MessageGroup",
     "CachedMessage",
+    "GROUP_SIZE",
+    "RAW_MESSAGE_COUNT",
     "Summarizer",
     "LLMProtocol",
     "SummaryWorker",
-    "get_window_at_time",
-    "get_current_window_boundary",
-    "calculate_summary_level",
 ]

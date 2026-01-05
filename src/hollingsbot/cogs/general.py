@@ -43,6 +43,31 @@ class General(commands.Cog):
         _log.debug("Ping command invoked by %s", ctx.author)
         await ctx.send("Pong!")
 
+    @commands.command()
+    async def tokens(self, ctx: commands.Context) -> None:
+        """Show token leaderboard."""
+        from hollingsbot.prompt_db import get_token_leaderboard, get_user_token_balance
+
+        leaderboard = get_token_leaderboard(10)
+
+        if not leaderboard:
+            await ctx.send("No tokens have been given yet!")
+            return
+
+        lines = ["**Token Leaderboard**"]
+        for rank, (user_id, tokens) in enumerate(leaderboard, 1):
+            lines.append(f"**{rank}.** <@{user_id}> - {tokens} token(s)")
+
+        # Show caller's rank if not in top 10
+        caller_id = ctx.author.id
+        caller_in_top = any(uid == caller_id for uid, _ in leaderboard)
+        if not caller_in_top:
+            balance = get_user_token_balance(caller_id)
+            lines.append(f"\nYou have **{balance}** token(s).")
+
+        import discord
+        await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
+
     @commands.command(name="help")
     async def help_cmd(self, ctx: commands.Context) -> None:
         """Display comprehensive bot help documentation.
@@ -88,6 +113,7 @@ class General(commands.Cog):
             "- `!reset` restart the project containers (the bot may go offline briefly).\n\n"
             "Other\n"
             "- `ping` returns `Pong!`.\n"
+            "- `!tokens` show token leaderboard.\n"
             "- If a starboard is enabled, reacting to a bot message can repost it there.\n"
         )
 

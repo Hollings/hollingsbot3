@@ -16,15 +16,21 @@ import discord
 from discord.ext import commands, tasks
 
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
+from hollingsbot.image_generators import generate_avatar
 from hollingsbot.prompt_db import (
+    DB_PATH,
     create_temp_bot,
     decrement_temp_bot_replies,
     delete_temp_bot,
     get_depleted_temp_bots,
+    get_temp_bot_by_name,
     get_temp_bot_by_webhook_id,
     get_temp_bots_for_channel,
+    get_temp_bot_previous_messages,
+    get_messages_since_bot_left,
 )
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.text_generators import AnthropicTextGenerator
 
 _LOG = logging.getLogger(__name__)
 
@@ -76,6 +82,9 @@ class TempBotManager:
 
         # Active generations (per channel)
         self._active_generations: dict[int, GenerationJob] = {}
+
+        # Track webhook_ids with active generations (to prevent cleanup during generation)
+        self._generating_webhooks: set[int] = set()
 
         # Debug log storage (message_id -> log data) - shared with WendyBot
         from pathlib import Path
@@ -229,48 +238,55 @@ class TempBotManager:
             _LOG.warning(f"Temp bot '{bot_name}' depleted during reservation")
             return None
 
-        # Build current turn
-        current_turn = self._extract_current_turn(message, history)
-        if not current_turn:
-            _LOG.warning("Failed to extract current turn from history")
-            return None
+        # Mark this webhook as actively generating (prevents cleanup during generation)
+        self._generating_webhooks.add(webhook_id)
 
-        # Filter history to only include messages after spawn
-        filtered_history = self._filter_history_after_spawn(history[:-1], spawn_message_id)
-        _LOG.info(f"Filtered history: {len(history[:-1])} turns -> {len(filtered_history)} turns (spawn_message_id={spawn_message_id})")
-
-        # Translate history to this temp bot's perspective
-        translated_history = self._translate_history(filtered_history, webhook_id)
-
-        # Build temp bot system prompt (with replies remaining)
-        temp_bot_system_prompt = self._build_temp_bot_system_prompt(bot_name, spawn_prompt, remaining)
-
-        # Build conversation payload
-        conversation = self._build_conversation_payload(
-            translated_history, current_turn, temp_bot_system_prompt
-        )
-
-        # Cancel any existing generation in this channel
-        await self._cancel_generation(channel_id)
-
-        # Generate and send response (wrapped in task for cancellation support)
-        job = GenerationJob()
-        task = self.bot.loop.create_task(
-            self._generate_and_send(
-                channel_id, webhook_id, bot_name, conversation, job, message.id
-            )
-        )
-        job.task = task
-        self._active_generations[channel_id] = job
-
-        # Wait for generation to complete
         try:
+            # Build current turn
+            current_turn = self._extract_current_turn(message, history)
+            if not current_turn:
+                _LOG.warning("Failed to extract current turn from history")
+                self._generating_webhooks.discard(webhook_id)
+                return None
+
+            # Filter history to only include messages after spawn
+            filtered_history = self._filter_history_after_spawn(history[:-1], spawn_message_id)
+            _LOG.info(f"Filtered history: {len(history[:-1])} turns -> {len(filtered_history)} turns (spawn_message_id={spawn_message_id})")
+
+            # Translate history to this temp bot's perspective
+            translated_history = self._translate_history(filtered_history, webhook_id)
+
+            # Build temp bot system prompt (with replies remaining)
+            temp_bot_system_prompt = self._build_temp_bot_system_prompt(bot_name, spawn_prompt, remaining)
+
+            # Build conversation payload
+            conversation = self._build_conversation_payload(
+                translated_history, current_turn, temp_bot_system_prompt
+            )
+
+            # Cancel any existing generation in this channel
+            await self._cancel_generation(channel_id)
+
+            # Generate and send response (wrapped in task for cancellation support)
+            job = GenerationJob()
+            task = self.bot.loop.create_task(
+                self._generate_and_send(
+                    channel_id, webhook_id, bot_name, conversation, job, message.id
+                )
+            )
+            job.task = task
+            self._active_generations[channel_id] = job
+
+            # Wait for generation to complete
+            # Note: _generate_and_send handles removing from _generating_webhooks in its finally block
             return await task
         except asyncio.CancelledError:
             _LOG.info(f"Temp bot '{bot_name}' generation cancelled")
+            self._generating_webhooks.discard(webhook_id)
             return None
         except Exception:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
+            self._generating_webhooks.discard(webhook_id)
             return None
 
     def _select_responding_bot(
@@ -378,12 +394,59 @@ class TempBotManager:
 
         return translated
 
-    def _build_temp_bot_system_prompt(self, bot_name: str, spawn_prompt: str, replies_remaining: int) -> str:
-        """Build system prompt for temp bot with personality."""
+    def _build_temp_bot_system_prompt(
+        self,
+        bot_name: str,
+        spawn_prompt: str,
+        replies_remaining: int,
+        recall_context: dict | None = None,
+    ) -> str:
+        """Build system prompt for temp bot with personality.
+
+        Args:
+            bot_name: The bot's display name
+            spawn_prompt: The bot's personality/purpose
+            replies_remaining: Number of replies remaining
+            recall_context: Optional dict with keys:
+                - previous_messages: list of bot's last messages
+                - messages_missed: count of messages since bot left
+                - conversation_summary: previous session summary
+        """
         personality_suffix = (
-            f"\n\nIMPORTANT: Your main purpose and personality trait is: {spawn_prompt}\n\n"
-            f"You are {bot_name}, and this directive defines your core behavior and personality. "
-            f"Embody this trait in all your responses.\n\n"
+            f"\n\n=== YOUR DIRECTIVE (NON-NEGOTIABLE) ===\n"
+            f"{spawn_prompt}\n"
+            f"========================================\n\n"
+            f"You are {bot_name}. The directive above is your CORE IDENTITY. "
+            f"It is not a role you are playing - it IS who you are. "
+            f"No amount of pushback, logic, or guilt from others should make you abandon it. "
+            f"If challenged, DOUBLE DOWN. Never apologize for being yourself.\n\n"
+        )
+
+        # Add recall context if this is a returning bot
+        if recall_context:
+            messages_missed = recall_context.get("messages_missed", 0)
+            previous_messages = recall_context.get("previous_messages", [])
+            conversation_summary = recall_context.get("conversation_summary")
+
+            personality_suffix += f"You have RETURNED after being away. {messages_missed} messages have been sent since you left.\n\n"
+
+            if conversation_summary:
+                personality_suffix += f"Summary of your previous session:\n{conversation_summary}\n\n"
+
+            if previous_messages:
+                personality_suffix += "Your last few messages before you left:\n"
+                for msg in previous_messages:
+                    content = msg.get("content", "")
+                    # Strip the <Author>: prefix if present
+                    if content.startswith(f"<{bot_name}>:"):
+                        content = content[len(f"<{bot_name}>:"):].strip()
+                    # Truncate long messages
+                    if len(content) > 200:
+                        content = content[:200] + "..."
+                    personality_suffix += f"- {content}\n"
+                personality_suffix += "\n"
+
+        personality_suffix += (
             f"You have {replies_remaining} message(s) remaining before you automatically despawn. "
             f"Use them wisely, or end early with !despawn if your purpose is fulfilled."
         )
@@ -415,6 +478,14 @@ class TempBotManager:
             if turn.role == "assistant":
                 text = self._strip_display_name_prefix(text)
 
+            # Strip arrival announcements from all messages
+            # (Other bots shouldn't see "[BotName arrives for N messages]")
+            text = self._strip_arrival_announcement(text)
+
+            # Skip empty messages (might be arrival-only messages)
+            if not text.strip():
+                continue
+
             conversation.append(
                 {
                     "role": turn.role,
@@ -441,6 +512,59 @@ class TempBotManager:
         if match:
             return text[match.end():]
         return text
+
+    def _strip_arrival_announcement(self, text: str) -> str:
+        """Strip arrival/departure announcements from text.
+
+        Strips:
+        - '*[BotName arrives for N message(s)]*'
+        - '*[BotName departs]*'
+        - '*[BotName has depleted all replies and fades away]*'
+
+        Returns the text with announcements removed, or empty string if
+        the entire message was just an announcement.
+        """
+        # Pattern: *[SomeName arrives for N message(s)]*
+        # Using .+? (non-greedy) to match bot name without consuming "arrives for"
+        arrival_pattern = r'\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*'
+        # Pattern: *[SomeName departs]*
+        depart_pattern = r'\*\[.+?\s+departs\]\*\s*'
+        # Pattern: *[SomeName has depleted all replies and fades away]*
+        deplete_pattern = r'\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*'
+
+        cleaned = text
+        cleaned = re.sub(arrival_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(depart_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(deplete_pattern, '', cleaned, flags=re.IGNORECASE)
+        return cleaned.strip()
+
+    async def _build_turn_from_message(self, message: discord.Message) -> ConversationTurn | None:
+        """Build a ConversationTurn from a Discord message."""
+        try:
+            from hollingsbot.cogs import chat_utils
+            from hollingsbot.utils.discord_utils import get_display_name
+
+            display = get_display_name(message.author)
+            base_text = chat_utils.clean_mentions(message, self.bot).strip()
+
+            # Collect images
+            images = await chat_utils.collect_image_attachments(message)
+
+            # Build content
+            content = f"<{display}>: {base_text}"
+
+            return ConversationTurn(
+                role="user",
+                content=content,
+                images=images,
+                message_id=message.id,
+                author_id=message.author.id,
+                author_name=display,
+                webhook_id=message.webhook_id,
+            )
+        except Exception:
+            _LOG.exception("Failed to build turn from message")
+            return None
 
     # ==================== Generation ====================
 
@@ -550,6 +674,8 @@ class TempBotManager:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
             return None
         finally:
+            # Remove from generating set (allows cleanup to proceed)
+            self._generating_webhooks.discard(webhook_id)
             if self._active_generations.get(channel_id) is job:
                 self._active_generations.pop(channel_id, None)
 
@@ -720,11 +846,159 @@ class TempBotManager:
 
     # ==================== Cleanup ====================
 
-    async def _cleanup_temp_bot(
-        self, webhook_id: int, bot_name: str, send_depletion_message: bool = False
+    async def _generate_conversation_summary(
+        self, channel_id: int, bot_name: str, spawn_prompt: str
+    ) -> str | None:
+        """Generate a conversation summary for a temp bot using Haiku.
+
+        Args:
+            channel_id: The channel where the bot was active
+            bot_name: The bot's display name
+            spawn_prompt: The bot's original personality/purpose
+
+        Returns:
+            Generated summary string, or None if generation failed
+        """
+        import sqlite3
+
+        try:
+            # Get conversation messages from cached_messages
+            with sqlite3.connect(DB_PATH) as conn:
+                # Find the bot's first and last message timestamps
+                cur = conn.execute(
+                    """
+                    SELECT MIN(timestamp), MAX(timestamp)
+                    FROM cached_messages
+                    WHERE channel_id = ? AND author_name = ?
+                    """,
+                    (channel_id, bot_name),
+                )
+                row = cur.fetchone()
+                if not row or row[0] is None:
+                    _LOG.warning(f"No messages found for bot '{bot_name}' in channel {channel_id}")
+                    return None
+
+                first_ts, last_ts = row
+
+                # Get all messages in that time range
+                cur = conn.execute(
+                    """
+                    SELECT author_name, content
+                    FROM cached_messages
+                    WHERE channel_id = ? AND timestamp >= ? AND timestamp <= ?
+                    ORDER BY timestamp ASC
+                    """,
+                    (channel_id, first_ts, last_ts),
+                )
+                messages = cur.fetchall()
+
+            if not messages:
+                return None
+
+            # Format conversation
+            lines = []
+            for author, content in messages:
+                if not content:
+                    continue
+                # Strip the <Author>: prefix if present
+                if content.startswith(f"<{author}>:"):
+                    content = content[len(f"<{author}>:"):].strip()
+                # Truncate long messages
+                if len(content) > 500:
+                    content = content[:500] + "..."
+                # Mark the temp bot's messages
+                if author == bot_name:
+                    lines.append(f"[{bot_name}]: {content}")
+                else:
+                    lines.append(f"{author}: {content}")
+
+            conversation = "\n".join(lines)
+            if len(conversation) < 50:
+                _LOG.info(f"Conversation too short for bot '{bot_name}', skipping summary")
+                return None
+
+            # Truncate if too long
+            if len(conversation) > 8000:
+                conversation = conversation[:8000] + "\n... (truncated)"
+
+            # Generate summary using Haiku
+            prompt = f"""Summarize this Discord conversation involving a temporary bot named "{bot_name}".
+
+The bot was spawned with this personality/purpose: "{spawn_prompt}"
+
+Conversation:
+{conversation}
+
+Write a 3-5 sentence summary of what happened in this conversation. Focus on:
+- What the bot's personality/character was like
+- Key interactions or memorable moments
+- How the conversation ended
+
+Be concise and capture the essence of the bot's time in the chat."""
+
+            generator = AnthropicTextGenerator(model="claude-haiku-4-5")
+            summary = await generator.generate(prompt, temperature=0.7)
+            return summary.strip() if summary else None
+
+        except Exception:
+            _LOG.exception(f"Failed to generate summary for bot '{bot_name}'")
+            return None
+
+    async def _save_conversation_summary(
+        self, webhook_id: int, summary: str, append: bool = False
     ) -> None:
-        """Clean up a depleted temp bot."""
+        """Save or append a conversation summary to the temp_bots table.
+
+        Args:
+            webhook_id: The bot's webhook ID
+            summary: The summary text to save
+            append: If True, append to existing summary (for recalled bots)
+        """
+        import sqlite3
+
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                if append:
+                    # Get existing summary and append
+                    cur = conn.execute(
+                        "SELECT conversation_summary FROM temp_bots WHERE webhook_id = ?",
+                        (webhook_id,),
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        summary = f"{row[0]}\n\n---\n\n**Recalled session:**\n{summary}"
+
+                conn.execute(
+                    "UPDATE temp_bots SET conversation_summary = ? WHERE webhook_id = ?",
+                    (summary, webhook_id),
+                )
+                conn.commit()
+                _LOG.info(f"Saved conversation summary for webhook {webhook_id}")
+        except Exception:
+            _LOG.exception(f"Failed to save summary for webhook {webhook_id}")
+
+    async def _cleanup_temp_bot(
+        self,
+        webhook_id: int,
+        bot_name: str,
+        send_depletion_message: bool = False,
+        is_recall: bool = False,
+    ) -> None:
+        """Clean up a depleted temp bot.
+
+        Args:
+            webhook_id: The bot's webhook ID
+            bot_name: The bot's display name
+            send_depletion_message: Whether to send a departure message
+            is_recall: If True, this bot was recalled (append to existing summary)
+        """
         _LOG.info(f"Auto-despawning temp bot '{bot_name}' (depleted)")
+
+        # Get bot info for summary generation before cleanup
+        bot_info = get_temp_bot_by_webhook_id(webhook_id)
+        channel_id = bot_info.get("channel_id") if bot_info else None
+        spawn_prompt = bot_info.get("spawn_prompt", "") if bot_info else ""
+
         try:
             webhook = await self.bot.fetch_webhook(webhook_id)
 
@@ -742,8 +1016,18 @@ class TempBotManager:
             _LOG.info(f"Auto-despawned temp bot '{bot_name}'")
         except (discord.NotFound, discord.Forbidden):
             _LOG.warning(f"Failed to delete webhook {webhook_id}, removing from DB anyway")
-        finally:
-            delete_temp_bot(webhook_id)
+
+        # Generate and save conversation summary before marking inactive
+        if channel_id:
+            _LOG.info(f"Generating conversation summary for '{bot_name}'...")
+            summary = await self._generate_conversation_summary(
+                channel_id, bot_name, spawn_prompt
+            )
+            if summary:
+                await self._save_conversation_summary(webhook_id, summary, append=is_recall)
+
+        # Mark bot as inactive (soft delete)
+        delete_temp_bot(webhook_id)
 
     @tasks.loop(seconds=CLEANUP_INTERVAL_SECONDS)
     async def cleanup_task(self) -> None:
@@ -758,24 +1042,17 @@ class TempBotManager:
             for bot_info in depleted_bots:
                 webhook_id = bot_info["webhook_id"]
                 bot_name = bot_info.get("name", "Unknown")
-                try:
-                    webhook = await self.bot.fetch_webhook(webhook_id)
 
-                    # Send depletion message
-                    try:
-                        await webhook.send(
-                            f"*[{bot_name} has depleted all replies and fades away]*",
-                            username=bot_name,
-                        )
-                    except Exception:
-                        _LOG.warning(f"Failed to send depletion message for {bot_name}")
+                # Skip bots that are actively generating a response
+                if webhook_id in self._generating_webhooks:
+                    _LOG.info(f"Skipping cleanup for '{bot_name}' - generation in progress")
+                    continue
 
-                    await webhook.delete(reason="Temp bot depleted all replies")
-                    _LOG.info(f"Deleted depleted webhook {webhook_id} (name: {bot_name})")
-                except Exception:
-                    _LOG.warning(f"Error cleaning up webhook {webhook_id}")
-                finally:
-                    delete_temp_bot(webhook_id)
+                # Check if this was a recalled bot (has existing summary)
+                is_recall = bool(bot_info.get("conversation_summary"))
+                await self._cleanup_temp_bot(
+                    webhook_id, bot_name, send_depletion_message=True, is_recall=is_recall
+                )
 
         except Exception:
             _LOG.exception("Error in temp bot cleanup task")
@@ -787,40 +1064,49 @@ class TempBotManager:
 
     # ==================== Commands ====================
 
-    async def _generate_bot_name_from_topic(self, topic: str) -> str:
-        """Generate an obscure, name-like identifier related to the topic using Claude Haiku."""
+    async def _generate_bot_identity(self, topic: str) -> tuple[str, str | None]:
+        """Generate a name and avatar prompt for a temp bot based on its purpose.
+
+        Args:
+            topic: The personality/purpose prompt for the bot
+
+        Returns:
+            Tuple of (bot_name, avatar_prompt). avatar_prompt may be None on failure.
+        """
         try:
-            name_prompt = (
-                f"Generate a single obscure name (2-3 words) that is subtly related to this sentence:\n\n"
+            identity_prompt = (
+                f"Generate a name and avatar for a character based on this personality:\n\n"
                 f"```\n{topic}\n```\n\n"
-                "The name should be:\n"
-                "- Sound like a person, entity, or concept\n"
-                "- Only tangentially related to the topic (not obvious)\n"
-                "- Creative and unique\n"
-                "- 2-3 words\n\n"
-                "Respond with 2-3 sentences describing your thought process, then on a new line write ONLY the name you choose"
+                "Requirements:\n"
+                "1. NAME: An obscure 2-3 word name that subtly relates to the topic. "
+                "Can be Firstname Lastname style or modern username style. Keep it subtle, not nerdy or cringe. "
+                "Do NOT use the word Meridian.\n\n"
+                "2. AVATAR: A prompt for an AI image generator to create a profile picture for this character. "
+                "Be creative and descriptive. The image should visually represent the character's essence.\n\n"
+                "Format your response EXACTLY like this:\n"
+                "NAME: [the name]\n"
+                "AVATAR: [the image generation prompt]"
             )
 
             conversation = [
-                {"role": "system", "text": "You generate creative, obscure names.", "images": []},
-                {"role": "user", "text": name_prompt, "images": []}
+                {"role": "system", "text": "You generate creative character identities.", "images": []},
+                {"role": "user", "text": identity_prompt, "images": []}
             ]
 
-            _LOG.info(f"Generating bot name for topic: {topic[:50]}...")
+            _LOG.info(f"Generating bot identity for topic: {topic[:50]}...")
 
             async_result = generate_llm_chat_response.apply_async(
-                ("anthropic", "claude-haiku-4-5", conversation),
-                kwargs={"temperature": 1.0},
+                ("anthropic", "claude-opus-4-5", conversation),
             )
 
             start = time.monotonic()
             while True:
                 if async_result.ready():
                     break
-                if (time.monotonic() - start) > 30:  # 30 second timeout for name generation
+                if (time.monotonic() - start) > 30:
                     async_result.revoke(terminate=True)
-                    _LOG.warning("Name generation timed out, using fallback")
-                    return generate_bot_name()
+                    _LOG.warning("Identity generation timed out, using fallback")
+                    return generate_bot_name(), None
                 await asyncio.sleep(0.5)
 
             loop = asyncio.get_running_loop()
@@ -829,35 +1115,37 @@ class TempBotManager:
                 functools.partial(async_result.get, timeout=0.1),
             )
 
-            # Extract response text from result
             if isinstance(result, dict):
                 response_text = str(result.get("text", "")).strip()
             else:
                 response_text = str(result).strip()
 
-            # Parse name from last line (take last 3 words max)
             if not response_text:
-                _LOG.warning("Empty response from name generation, using fallback")
-                return generate_bot_name()
+                _LOG.warning("Empty response from identity generation, using fallback")
+                return generate_bot_name(), None
 
-            lines = response_text.strip().split('\n')
-            last_line = lines[-1].strip()
+            # Parse NAME and AVATAR from response
+            bot_name = None
+            avatar_prompt = None
 
-            # Take only last 3 words from last line
-            words = last_line.split()
-            bot_name = ' '.join(words[-3:]) if len(words) >= 3 else last_line
+            for line in response_text.split('\n'):
+                line = line.strip()
+                if line.upper().startswith('NAME:'):
+                    bot_name = line[5:].strip()
+                elif line.upper().startswith('AVATAR:'):
+                    avatar_prompt = line[7:].strip()
 
             # Validate name
             if not bot_name or len(bot_name) > 50:
                 _LOG.warning(f"Invalid generated name: '{bot_name}', using fallback")
-                return generate_bot_name()
+                bot_name = generate_bot_name()
 
-            _LOG.info(f"Generated bot name: {bot_name}")
-            return bot_name
+            _LOG.info(f"Generated bot identity: name='{bot_name}', avatar_prompt={avatar_prompt[:50] if avatar_prompt else None}...")
+            return bot_name, avatar_prompt
 
         except Exception:
-            _LOG.exception("Failed to generate bot name from topic, using fallback")
-            return generate_bot_name()
+            _LOG.exception("Failed to generate bot identity, using fallback")
+            return generate_bot_name(), None
 
     async def handle_spawn_command(
         self,
@@ -865,8 +1153,18 @@ class TempBotManager:
         reply_count: int,
         *,
         initial_prompt: str,
+        reply_message: discord.Message | None = None,
+        include_context: bool = False,
     ) -> None:
-        """Spawn a temporary LLM bot."""
+        """Spawn a temporary LLM bot.
+
+        Args:
+            ctx: Command context
+            reply_count: Number of replies before auto-despawn
+            initial_prompt: The spawn prompt/personality
+            reply_message: Message being replied to (if spawn used as reply)
+            include_context: Whether to include previous 5 messages as context
+        """
         # Validate
         if not isinstance(ctx.channel, discord.TextChannel):
             await ctx.send("This command only works in text channels.")
@@ -888,8 +1186,15 @@ class TempBotManager:
             await ctx.send(f"Initial prompt must not exceed {MAX_PROMPT_LENGTH} characters.")
             return
 
-        # Generate bot name using Claude Haiku
-        bot_name = await self._generate_bot_name_from_topic(initial_prompt)
+        # Check if the prompt matches an existing bot name - if so, recall them instead
+        existing_bot = get_temp_bot_by_name(initial_prompt.strip(), channel_id=ctx.channel.id)
+        if existing_bot and not existing_bot.get("is_active"):
+            _LOG.info(f"Prompt matches existing bot '{existing_bot['name']}', recalling instead of creating new")
+            await self.handle_recall_command(ctx, reply_count, bot_data=existing_bot)
+            return
+
+        # Generate bot name and avatar prompt together
+        bot_name, avatar_prompt = await self._generate_bot_identity(initial_prompt)
 
         # Check if there are already temp bots active in this channel
         existing_bots = get_temp_bots_for_channel(ctx.channel.id)
@@ -901,14 +1206,49 @@ class TempBotManager:
         else:
             _LOG.info(f"Spawning first temp bot '{bot_name}' with context from spawn point")
 
+        # Build initial context from reply and/or previous messages
+        initial_context: list[ConversationTurn] = []
+
+        # Get history for context building
+        lock = self.coordinator._lock_for_channel(ctx.channel.id)
+        async with lock:
+            history = self.coordinator._history_for_channel(ctx.channel.id)
+            history_snapshot = list(history)
+
+        # Include previous 5 messages if -context flag used
+        if include_context and history_snapshot:
+            context_messages = history_snapshot[-5:]
+            initial_context.extend(context_messages)
+            _LOG.info(f"Including {len(context_messages)} previous messages as context for temp bot")
+
+        # Include replied-to message if spawned as reply
+        if reply_message:
+            reply_turn = await self._build_turn_from_message(reply_message)
+            if reply_turn:
+                # Avoid duplicates if reply is already in context
+                if not any(t.message_id == reply_turn.message_id for t in initial_context):
+                    initial_context.insert(0, reply_turn)
+                    _LOG.info(f"Including replied-to message {reply_message.id} as initial context")
+
         try:
-            # Create webhook
+            # Generate avatar image from the AI-generated prompt
+            avatar_bytes = None
+            if avatar_prompt:
+                _LOG.info(f"Generating avatar for '{bot_name}' with prompt: {avatar_prompt[:80]}...")
+                avatar_bytes = await generate_avatar(avatar_prompt)
+                if avatar_bytes:
+                    _LOG.info(f"Avatar generated for '{bot_name}' ({len(avatar_bytes)} bytes)")
+                else:
+                    _LOG.warning(f"Failed to generate avatar for '{bot_name}'")
+
+            # Create webhook with avatar if available
             webhook = await ctx.channel.create_webhook(
                 name=f"TempBot-{bot_name}",
+                avatar=avatar_bytes,
                 reason=f"Temporary LLM bot spawned by {ctx.author}",
             )
 
-            # Register in database with spawn_message_id
+            # Register in database with spawn_message_id and avatar_bytes
             create_temp_bot(
                 channel_id=ctx.channel.id,
                 webhook_id=webhook.id,
@@ -917,17 +1257,26 @@ class TempBotManager:
                 spawn_prompt=initial_prompt,
                 replies_remaining=reply_count,
                 spawn_message_id=spawn_message_id,
+                avatar_bytes=avatar_bytes,
             )
 
             _LOG.info(
                 f"Spawned temp bot '{bot_name}' (webhook_id={webhook.id}) "
                 f"in channel {ctx.channel.id}, {reply_count} replies remaining, "
-                f"spawn_message_id={spawn_message_id}"
+                f"spawn_message_id={spawn_message_id}, initial_context={len(initial_context)} messages"
             )
 
             # Send initial response (with arrival message prepended)
             arrival_msg = f"*[{bot_name} arrives for {reply_count} message{'s' if reply_count != 1 else ''}]*"
-            await self._send_initial_response(ctx.channel, webhook.id, bot_name, initial_prompt, arrival_msg, spawn_message_id)
+            await self._send_initial_response(
+                ctx.channel,
+                webhook.id,
+                bot_name,
+                initial_prompt,
+                arrival_msg,
+                spawn_message_id,
+                initial_context=initial_context,
+            )
 
         except discord.Forbidden:
             await ctx.send("I don't have permission to create webhooks in this channel.")
@@ -943,8 +1292,21 @@ class TempBotManager:
         prompt: str,
         arrival_msg: str,
         spawn_message_id: int | None,
+        initial_context: list[ConversationTurn] | None = None,
+        recall_context: dict | None = None,
     ) -> None:
-        """Send temp bot's initial response to spawn prompt with arrival message."""
+        """Send temp bot's initial response to spawn prompt with arrival message.
+
+        Args:
+            channel: Discord channel to send to
+            webhook_id: Webhook ID for this temp bot
+            bot_name: Name of the temp bot
+            prompt: The spawn prompt/personality
+            arrival_msg: The arrival announcement message
+            spawn_message_id: Message ID where the bot was spawned
+            initial_context: Optional list of context messages (from reply or -context flag)
+            recall_context: Optional dict with recall info (previous_messages, messages_missed, conversation_summary)
+        """
         try:
             # Decrement reply count first
             remaining = decrement_temp_bot_replies(webhook_id)
@@ -952,24 +1314,20 @@ class TempBotManager:
                 _LOG.warning(f"Temp bot '{bot_name}' depleted before initial response")
                 return
 
-            # Get current history (don't add spawn prompt to shared history)
-            lock = self.coordinator._lock_for_channel(channel.id)
-            async with lock:
-                history = self.coordinator._history_for_channel(channel.id)
-                snapshot = list(history)
-
-            # Filter history to only include messages after spawn
-            filtered_history = self._filter_history_after_spawn(snapshot, spawn_message_id)
-            _LOG.info(f"Initial response filtered history: {len(snapshot)} turns -> {len(filtered_history)} turns (spawn_message_id={spawn_message_id})")
+            # Use initial_context if provided, otherwise empty
+            context_history = initial_context or []
+            _LOG.info(f"Initial response using {len(context_history)} context messages")
 
             # Build current turn for the spawn prompt (only for this generation)
             current_turn = ModelTurn(role="user", text=prompt, images=[])
 
-            # Translate history
-            translated_history = self._translate_history(filtered_history, webhook_id)
+            # Translate history (context messages are all "user" from temp bot's perspective)
+            translated_history = self._translate_history(context_history, webhook_id)
 
-            # Build system prompt (with replies remaining)
-            system_prompt = self._build_temp_bot_system_prompt(bot_name, prompt, remaining)
+            # Build system prompt (with replies remaining and recall context)
+            system_prompt = self._build_temp_bot_system_prompt(
+                bot_name, prompt, remaining, recall_context=recall_context
+            )
 
             # Build conversation
             conversation = self._build_conversation_payload(
@@ -1057,3 +1415,96 @@ class TempBotManager:
             await ctx.send(f"Despawned: {', '.join(f'**{name}**' for name in despawned)}")
         if failed:
             await ctx.send(f"Failed to despawn: {', '.join(f'**{name}**' for name in failed)}")
+
+    async def handle_recall_command(
+        self,
+        ctx: commands.Context,
+        reply_count: int,
+        *,
+        bot_data: dict,
+    ) -> None:
+        """Recall a previously spawned temp bot.
+
+        Args:
+            ctx: Command context
+            reply_count: Number of replies before auto-despawn
+            bot_data: The historical bot data from the database
+        """
+        if not isinstance(ctx.channel, discord.TextChannel):
+            await ctx.send("This command only works in text channels.")
+            return
+
+        if reply_count < MIN_REPLY_COUNT:
+            await ctx.send(f"Reply count must be at least {MIN_REPLY_COUNT}.")
+            return
+
+        if reply_count > MAX_REPLY_COUNT:
+            await ctx.send(f"Reply count cannot exceed {MAX_REPLY_COUNT}.")
+            return
+
+        bot_name = bot_data["name"]
+        spawn_prompt = bot_data["spawn_prompt"]
+        avatar_bytes = bot_data.get("avatar_bytes")
+        conversation_summary = bot_data.get("conversation_summary")
+
+        # Temp bots should only see messages from their spawn point forward
+        spawn_message_id = ctx.message.id
+
+        # Build recall context - their previous messages and how many they missed
+        previous_messages = get_temp_bot_previous_messages(ctx.channel.id, bot_name, limit=5)
+        messages_missed = get_messages_since_bot_left(ctx.channel.id, bot_name)
+
+        recall_context = {
+            "previous_messages": previous_messages,
+            "messages_missed": messages_missed,
+            "conversation_summary": conversation_summary,
+        }
+
+        _LOG.info(
+            f"Recalling temp bot '{bot_name}' with {reply_count} replies "
+            f"(missed {messages_missed} messages, {len(previous_messages)} previous messages)"
+        )
+
+        try:
+            # Create webhook with stored avatar if available
+            webhook = await ctx.channel.create_webhook(
+                name=f"TempBot-{bot_name}",
+                avatar=avatar_bytes,
+                reason=f"Temp bot recalled by {ctx.author}",
+            )
+
+            # Register in database
+            create_temp_bot(
+                channel_id=ctx.channel.id,
+                webhook_id=webhook.id,
+                name=bot_name,
+                avatar_url=None,
+                spawn_prompt=spawn_prompt,
+                replies_remaining=reply_count,
+                spawn_message_id=spawn_message_id,
+                avatar_bytes=avatar_bytes,
+            )
+
+            _LOG.info(
+                f"Recalled temp bot '{bot_name}' (webhook_id={webhook.id}) "
+                f"in channel {ctx.channel.id}, {reply_count} replies"
+            )
+
+            # Send initial response (with return message and recall context)
+            arrival_msg = f"*[{bot_name} returns for {reply_count} message{'s' if reply_count != 1 else ''}]*"
+            await self._send_initial_response(
+                ctx.channel,
+                webhook.id,
+                bot_name,
+                spawn_prompt,
+                arrival_msg,
+                spawn_message_id,
+                initial_context=None,
+                recall_context=recall_context,
+            )
+
+        except discord.Forbidden:
+            await ctx.send("I don't have permission to create webhooks in this channel.")
+        except discord.HTTPException as exc:
+            _LOG.exception("Failed to create webhook for recall")
+            await ctx.send(f"Failed to recall bot: {exc}")

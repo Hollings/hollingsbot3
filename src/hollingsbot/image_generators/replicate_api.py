@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import os
 from dataclasses import dataclass, field
 import logging
@@ -9,8 +10,45 @@ from tempfile import NamedTemporaryFile
 
 import aiohttp
 import replicate
+from PIL import Image
 
 from .base import ImageGeneratorAPI  # local import
+
+# Maximum dimension for gpt-image edit input images
+_MAX_GPT_IMAGE_DIMENSION = 1024
+
+
+def _scale_image_to_max_dimension(image_bytes: bytes, max_dim: int) -> bytes:
+    """Scale an image so its longest side is at most max_dim pixels."""
+    img = Image.open(io.BytesIO(image_bytes))
+
+    # Convert to RGB if necessary
+    if img.mode in ("RGBA", "P"):
+        background = Image.new("RGB", img.size, (255, 255, 255))
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        background.paste(img, mask=img.split()[-1] if img.mode == "RGBA" else None)
+        img = background
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+
+    width, height = img.size
+    longest_side = max(width, height)
+
+    if longest_side <= max_dim:
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+
+    scale = max_dim / longest_side
+    new_width = int(width * scale)
+    new_height = int(height * scale)
+
+    img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 @dataclass(slots=True)
@@ -24,6 +62,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     """
 
     model: str = "black-forest-labs/flux-schnell"
+    quality: str = "auto"  # For gpt-image models: low, medium, high, auto
+    aspect_ratio: str | None = None  # For gpt-image models: 1:1, 3:2, 2:3, 16:9, 9:16, etc.
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
 
     def __post_init__(self) -> None:
@@ -56,6 +96,10 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         m = self.model.lower()
         return ("bytedance/seedream-4" in m) or ("seedream-4" in m)
 
+    def _is_gpt_image(self) -> bool:
+        m = self.model.lower()
+        return "openai/gpt-image" in m or "gpt-image-1" in m
+
     async def generate(  # type: ignore[override]
         self,
         prompt: str,
@@ -69,9 +113,43 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         Generate, edit, or outpaint an image.
         - When image_input is provided, pass files/URLs to models that expect an `image_input` array (e.g., google/nano-banana).
         - When both image_input and mask are provided, use for outpainting with flux-fill-dev model.
+        - For gpt-image models, uses `input_images` parameter and scales images to 1024px.
         """
         try:
             inputs: dict[str, Any] = {"prompt": prompt}
+
+            # Handle gpt-image models specially
+            if self._is_gpt_image():
+                inputs["quality"] = self.quality
+                inputs["moderation"] = "low"
+                if self.aspect_ratio:
+                    inputs["aspect_ratio"] = self.aspect_ratio
+                if image_input:
+                    # Scale images to 1024px max dimension for gpt-image
+                    scaled_images = self._scale_images_for_gpt(image_input)
+                    prepared, cleanup = self._prepare_image_inputs(scaled_images)
+                    try:
+                        # gpt-image uses input_images parameter
+                        inputs["input_images"] = prepared
+                        if output_format:
+                            inputs["output_format"] = output_format
+                        self._log.info(
+                            "Replicate run (gpt-image) model=%s quality=%s keys=%s",
+                            self.model, self.quality, sorted(inputs.keys())
+                        )
+                        raw_output = await self._client.async_run(self.model, input=inputs)
+                    finally:
+                        self._cleanup_files(cleanup)
+                else:
+                    if output_format:
+                        inputs["output_format"] = output_format
+                    self._log.info(
+                        "Replicate run (gpt-image) model=%s quality=%s keys=%s",
+                        self.model, self.quality, sorted(inputs.keys())
+                    )
+                    raw_output = await self._client.async_run(self.model, input=inputs)
+                return await self._normalise_output(raw_output)
+
             # Prefer maximum resolution and sequential generation by default for Seedream-4
             if self._is_seedream():
                 inputs["size"] = "4K"
@@ -129,6 +207,27 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return await self._normalise_output(raw_output)
         except Exception as exc:
             raise RuntimeError(f"Replicate generation failed: {exc}") from exc
+
+    def _scale_images_for_gpt(self, images: Sequence[Any]) -> list[bytes]:
+        """Scale images to 1024px max dimension for gpt-image models."""
+        scaled = []
+        for item in images:
+            if isinstance(item, (bytes, bytearray)):
+                scaled.append(_scale_image_to_max_dimension(bytes(item), _MAX_GPT_IMAGE_DIMENSION))
+            elif isinstance(item, str) and item.startswith("data:"):
+                # Decode data URL and scale
+                import base64
+                try:
+                    _, b64_data = item.split(",", 1)
+                    img_bytes = base64.b64decode(b64_data)
+                    scaled.append(_scale_image_to_max_dimension(img_bytes, _MAX_GPT_IMAGE_DIMENSION))
+                except Exception:
+                    self._log.warning("Failed to decode data URL for scaling, using as-is")
+                    scaled.append(item)
+            else:
+                # URLs or other types - pass through (can't scale without downloading)
+                scaled.append(item)
+        return scaled
 
     async def aclose(self) -> None:
         if self._session and not self._session.closed:
@@ -221,8 +320,46 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
           sequential_image_generation='auto'), this returns all images.
         - For single-image models, the list has a single element.
         - When both image_input and mask are provided, use for outpainting with flux-fill-dev model.
+        - For gpt-image models, uses `input_images` parameter and scales images to 1024px.
         """
         inputs: dict[str, Any] = {"prompt": prompt}
+
+        # Handle gpt-image models specially
+        if self._is_gpt_image():
+            inputs["quality"] = self.quality
+            inputs["moderation"] = "low"
+            if self.aspect_ratio:
+                inputs["aspect_ratio"] = self.aspect_ratio
+            if image_input:
+                # Scale images to 1024px max dimension for gpt-image
+                scaled_images = self._scale_images_for_gpt(image_input)
+                prepared, cleanup = self._prepare_image_inputs(scaled_images)
+                try:
+                    # gpt-image uses input_images parameter
+                    inputs["input_images"] = prepared
+                    if output_format:
+                        inputs["output_format"] = output_format
+                    self._log.info(
+                        "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
+                        self.model, self.quality, sorted(inputs.keys())
+                    )
+                    raw_output = await self._client.async_run(self.model, input=inputs)
+                finally:
+                    self._cleanup_files(cleanup)
+            else:
+                if output_format:
+                    inputs["output_format"] = output_format
+                self._log.info(
+                    "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
+                    self.model, self.quality, sorted(inputs.keys())
+                )
+                raw_output = await self._client.async_run(self.model, input=inputs)
+
+            results = await self._collect_all(raw_output)
+            if not results:
+                await self._normalise_output(raw_output)
+            return results
+
         if self._is_seedream():
             inputs["size"] = "4K"
             inputs["sequential_image_generation"] = "auto"
