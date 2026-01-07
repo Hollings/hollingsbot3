@@ -847,25 +847,40 @@ def get_messages_since_bot_left(channel_id: int, bot_name: str) -> int:
         return cur.fetchone()[0]
 
 
-def decrement_temp_bot_replies(webhook_id: int) -> int:
-    """Decrement replies_remaining for a temp bot and return the new value."""
+def decrement_temp_bot_replies(webhook_id: int) -> tuple[int, bool]:
+    """Atomically decrement replies_remaining and return (new_value, should_cleanup).
+
+    Uses BEGIN IMMEDIATE for write lock and RETURNING clause for atomicity.
+    Returns:
+        tuple: (remaining_replies, should_cleanup)
+        - remaining_replies: The new value after decrement (-1 if bot not found)
+        - should_cleanup: True if bot should be cleaned up (remaining <= 0)
+    """
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
-        conn.execute(
-            """
-            UPDATE temp_bots
-            SET replies_remaining = replies_remaining - 1
-            WHERE webhook_id = ?
-            """,
-            (webhook_id,),
-        )
-        cur = conn.execute(
-            "SELECT replies_remaining FROM temp_bots WHERE webhook_id = ?",
-            (webhook_id,),
-        )
-        row = cur.fetchone()
-        conn.commit()
-        return int(row[0]) if row else 0
+        # BEGIN IMMEDIATE acquires write lock immediately, preventing concurrent modifications
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                """
+                UPDATE temp_bots
+                SET replies_remaining = replies_remaining - 1
+                WHERE webhook_id = ? AND is_active = 1
+                RETURNING replies_remaining
+                """,
+                (webhook_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+
+            if row is None:
+                return (-1, False)  # Bot not found or inactive
+
+            remaining = int(row[0])
+            return (remaining, remaining <= 0)
+        except Exception:
+            conn.rollback()
+            raise
 
 
 # ------------------------- LLM API logging -------------------------

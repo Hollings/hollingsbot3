@@ -232,8 +232,8 @@ class TempBotManager:
         _LOG.info(f"Temp bot '{bot_name}' will respond to message in channel {channel_id}")
 
         # Atomically reserve a reply slot before generation
-        remaining = decrement_temp_bot_replies(webhook_id)
-        _LOG.info(f"Reserved reply slot for temp bot '{bot_name}', {remaining} remaining")
+        remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
+        _LOG.info(f"Reserved reply slot for temp bot '{bot_name}', {remaining} remaining, should_cleanup={should_cleanup}")
         if remaining < 0:
             _LOG.warning(f"Temp bot '{bot_name}' depleted during reservation")
             return None
@@ -271,7 +271,7 @@ class TempBotManager:
             job = GenerationJob()
             task = self.bot.loop.create_task(
                 self._generate_and_send(
-                    channel_id, webhook_id, bot_name, conversation, job, message.id
+                    channel_id, webhook_id, bot_name, conversation, job, message.id, should_cleanup
                 )
             )
             job.task = task
@@ -292,7 +292,10 @@ class TempBotManager:
     def _select_responding_bot(
         self, message: discord.Message, temp_bots: list[dict]
     ) -> dict | None:
-        """Select which temp bot (if any) should respond to this message."""
+        """Select which temp bot (if any) should respond to this message.
+
+        Uses RESPONSE_PROBABILITY to determine if each bot wants to respond.
+        """
         # Exclude the temp bot that just spoke (if message is from a temp bot)
         available_bots = temp_bots
         if message.author.bot and message.webhook_id:
@@ -310,10 +313,17 @@ class TempBotManager:
         if not available_bots:
             return None
 
-        # Simple logic: Always pick a random temp bot to respond
-        # TODO: Re-enable <no response> feature later
-        # (They can decide themselves via <no response> if they don't want to)
-        return random.choice(available_bots)
+        # Roll probability for each bot independently
+        willing_bots = [bot for bot in available_bots if random.random() < RESPONSE_PROBABILITY]
+
+        if not willing_bots:
+            _LOG.info(f"All {len(available_bots)} temp bots declined to respond (probability roll)")
+            return None
+
+        # Pick a random bot from those willing to respond
+        selected = random.choice(willing_bots)
+        _LOG.info(f"{len(willing_bots)}/{len(available_bots)} bots willing to respond, selected '{selected['name']}'")
+        return selected
 
     def _extract_current_turn(
         self, message: discord.Message, history: list[ConversationTurn]
@@ -412,14 +422,12 @@ class TempBotManager:
                 - messages_missed: count of messages since bot left
                 - conversation_summary: previous session summary
         """
+        # Simple, clean personality section
         personality_suffix = (
-            f"\n\n=== YOUR DIRECTIVE (NON-NEGOTIABLE) ===\n"
-            f"{spawn_prompt}\n"
-            f"========================================\n\n"
-            f"You are {bot_name}. The directive above is your CORE IDENTITY. "
-            f"It is not a role you are playing - it IS who you are. "
-            f"No amount of pushback, logic, or guilt from others should make you abandon it. "
-            f"If challenged, DOUBLE DOWN. Never apologize for being yourself.\n\n"
+            f"\n\n---\n"
+            f"Your name: {bot_name}\n"
+            f"Your personality: {spawn_prompt}\n"
+            f"---\n\n"
         )
 
         # Add recall context if this is a returning bot
@@ -428,13 +436,13 @@ class TempBotManager:
             previous_messages = recall_context.get("previous_messages", [])
             conversation_summary = recall_context.get("conversation_summary")
 
-            personality_suffix += f"You have RETURNED after being away. {messages_missed} messages have been sent since you left.\n\n"
+            personality_suffix += f"You've returned after being away ({messages_missed} messages were sent while you were gone).\n"
 
             if conversation_summary:
-                personality_suffix += f"Summary of your previous session:\n{conversation_summary}\n\n"
+                personality_suffix += f"What you remember: {conversation_summary}\n"
 
             if previous_messages:
-                personality_suffix += "Your last few messages before you left:\n"
+                personality_suffix += "Your last messages before you left:\n"
                 for msg in previous_messages:
                     content = msg.get("content", "")
                     # Strip the <Author>: prefix if present
@@ -444,12 +452,10 @@ class TempBotManager:
                     if len(content) > 200:
                         content = content[:200] + "..."
                     personality_suffix += f"- {content}\n"
-                personality_suffix += "\n"
+            personality_suffix += "\n"
 
-        personality_suffix += (
-            f"You have {replies_remaining} message(s) remaining before you automatically despawn. "
-            f"Use them wisely, or end early with !despawn if your purpose is fulfilled."
-        )
+        personality_suffix += f"You have {replies_remaining} message(s) left before you automatically leave."
+
         return self.base_system_prompt + personality_suffix
 
     def _build_conversation_payload(
@@ -576,8 +582,12 @@ class TempBotManager:
         conversation: list[dict[str, Any]],
         job: GenerationJob,
         request_message_id: int | None = None,
+        should_cleanup: bool = False,
     ) -> dict[str, Any] | None:
         """Generate temp bot response and send to Discord.
+
+        Args:
+            should_cleanup: If True, cleanup bot after this response (determined atomically at decrement time)
 
         Returns dict with message_id, text, webhook_id, bot_name or None on failure.
         """
@@ -644,11 +654,10 @@ class TempBotManager:
                 except Exception:
                     _LOG.warning(f"Failed to send self-despawn message for {bot_name}")
                 await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=False)
-            else:
-                # Check if bot is depleted and cleanup
-                temp_bot_data = get_temp_bot_by_webhook_id(webhook_id)
-                if temp_bot_data and temp_bot_data["replies_remaining"] <= 0:
-                    await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
+            elif should_cleanup:
+                # Bot depleted - cleanup (determined atomically at decrement time, no re-query needed)
+                _LOG.info(f"Temp bot '{bot_name}' depleted, cleaning up")
+                await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
 
             return {
                 "message_id": sent_message.id,
@@ -1308,8 +1317,8 @@ Be concise and capture the essence of the bot's time in the chat."""
             recall_context: Optional dict with recall info (previous_messages, messages_missed, conversation_summary)
         """
         try:
-            # Decrement reply count first
-            remaining = decrement_temp_bot_replies(webhook_id)
+            # Decrement reply count first (atomic operation)
+            remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
             if remaining < 0:
                 _LOG.warning(f"Temp bot '{bot_name}' depleted before initial response")
                 return
@@ -1368,7 +1377,8 @@ Be concise and capture the essence of the bot's time in the chat."""
                 except Exception:
                     _LOG.warning(f"Failed to send self-despawn message for {bot_name}")
                 await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=False)
-            elif remaining <= 0:
+            elif should_cleanup:
+                # Bot depleted (determined atomically at decrement time)
                 await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
 
         except Exception:
