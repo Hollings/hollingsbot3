@@ -185,14 +185,21 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 
         # Copy scripts if they exist
         if scripts_src.exists():
+            # Copy shell scripts
             for script in scripts_src.glob("*.sh"):
                 dest = wendy_dir / script.name
                 if not dest.exists() or dest.stat().st_mtime < script.stat().st_mtime:
                     import shutil
                     shutil.copy2(script, dest)
                     dest.chmod(0o755)  # Make executable
+            # Copy Python scripts
+            for script in scripts_src.glob("*.py"):
+                dest = wendy_dir / script.name
+                if not dest.exists() or dest.stat().st_mtime < script.stat().st_mtime:
+                    import shutil
+                    shutil.copy2(script, dest)
 
-        # Also copy check_messages.py
+        # Also copy check_messages.py from parent scripts dir
         check_messages_src = Path("/app/scripts/check_messages.py")
         if check_messages_src.exists():
             check_messages_dest = wendy_dir / "check_messages.py"
@@ -206,6 +213,23 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         # Create Wendy's personal folder (she can read/write here)
         (wendy_dir / "wendys_folder").mkdir(exist_ok=True)
 
+        # Create uploads directory for Discord attachments
+        (wendy_dir / "uploads").mkdir(exist_ok=True)
+
+    def _get_wendys_notes(self) -> str:
+        """Load Wendy's self-editable notes from her personal CLAUDE.md."""
+        notes_path = Path("/data/wendy/wendys_folder/CLAUDE.md")
+        if not notes_path.exists():
+            return ""
+        try:
+            content = notes_path.read_text().strip()
+            if content:
+                return f"\n\n---\nYOUR PERSONAL NOTES (from wendys_folder/CLAUDE.md - you can edit this!):\n{content}\n---"
+            return ""
+        except Exception as e:
+            _LOG.warning("Failed to read Wendy's notes: %s", e)
+            return ""
+
     def _get_tool_instructions(self, channel_id: int) -> str:
         """Get instructions for Wendy's shell tools."""
         return f"""
@@ -213,68 +237,151 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 ---
 REAL-TIME CHANNEL TOOLS (Channel ID: {channel_id})
 
-NOTE: The conversation history above already contains the full chat log. These tools are for real-time interaction only.
+CRITICAL: You are running in HEADLESS MODE. Your final output is NOT sent to Discord.
+You MUST use ./send_message.sh to respond - this is the ONLY way users will see your messages!
 
-1. CHECK FOR NEW MESSAGES (use before responding):
-   ./check_messages.sh {channel_id}
-   Shows the last 10 messages. Use this to see if anyone sent new messages while you were thinking.
+RESPONSE EXPECTATIONS:
+- You should ALMOST ALWAYS respond. Users expect you to participate in conversation.
+- If you don't call ./send_message.sh, users see NOTHING - it looks like you ignored them.
+- Only skip responding if users EXPLICITLY say they don't want your input (e.g., "wendy stop", "shut up", "go away").
+- In ambiguous situations, neutral chats, or when unsure: RESPOND. Err on the side of engaging.
+- Even a brief acknowledgment ("gotcha!", "nice", "haha") is better than silence.
 
-2. SEND A MESSAGE:
+1. SEND A MESSAGE (REQUIRED to respond):
    ./send_message.sh {channel_id} "your message here"
-   Sends a message to Discord immediately. Users will NOT see your final output - only messages sent via this script.
+   ./send_message.sh {channel_id} "your message here" "/data/wendy/uploads/file.png"  # with attachment
+   This is the ONLY way to send messages to users. Your final output goes nowhere.
+   IMPORTANT: File attachments MUST be saved to /data/wendy/uploads/ (NOT /tmp/) to work!
+
+2. CHECK FOR NEW MESSAGES (optional, use before responding):
+   ./check_messages.sh {channel_id}
+   Shows the last 10 messages to see if anyone sent new messages while you were thinking.
 
 WORKFLOW:
-- Check for new messages before responding (someone may have added context while you were thinking)
-- Use send_message.sh to respond - your final output is NOT sent to Discord
-- You can send multiple messages if needed
+1. Read/process the user's request
+2. Do any work needed (read files, search, etc.)
+3. ALWAYS call ./send_message.sh {channel_id} "your response" to reply (unless explicitly told not to)
+4. You can send multiple messages if needed
 
 IMAGES:
-When users upload images, they are saved to /data/wendy/images/ and referenced in the conversation as [Image: /path/to/file.jpg].
-- For RECENT images (in the current message or last few messages), use the Read tool to view them
-- Older images in the conversation history can be viewed on request if needed
-- Each image has a unique filename with timestamp, e.g. img_0_1767638760763.jpg
+When users upload images, they are saved to /data/wendy/images/ and referenced as [Image: /path/to/file.jpg].
+- You CANNOT see images without using the Read tool on the file path. The [Image: ...] tag is just a reference.
+- If someone asks about an image or you see an [Image: ...] tag, you MUST call Read on that path first.
+- Do NOT describe or comment on images you haven't actually Read - you will hallucinate.
+- Each image has a unique filename with timestamp
 
 PERSONAL FOLDER:
-You have a personal folder at /data/wendy/wendys_folder/ where you can save notes, remember things, or store any files you want. This is your private workspace that persists between conversations.
+You have a personal folder at /data/wendy/wendys_folder/ where you can save notes or files. This persists between conversations.
+
+SELF-CUSTOMIZATION:
+You can edit /data/wendy/wendys_folder/CLAUDE.md to customize your own behavior. Anything you write there becomes part of your system instructions on the next message. Use this to remember things, set personal preferences, or adjust how you behave. Changes take effect immediately - no restart needed.
+
+MESSAGE HISTORY DATABASE:
+You have full read access to the message history at /data/hollingsbot.db. Use query_db.py to search messages, check past conversations, or find old content. Don't wait to be asked - if someone asks about history or past messages, just query it!
+
+Usage:
+  python3 ./query_db.py "SELECT * FROM message_history WHERE content LIKE '%keyword%' LIMIT 20"
+  python3 ./query_db.py --schema    # Show all tables
+
+Key tables:
+- message_history: Full raw messages (message_id, channel_id, author_nickname, content, timestamp, reactions, attachment_urls)
+  - message_id is the Discord message ID - you can make jump links: https://discord.com/channels/{{guild_id}}/{{channel_id}}/{{message_id}}
+- cached_messages: Recent messages used for LLM context (lighter schema)
+- message_groups: Conversation summaries at different time levels
 """
 
-    def _parse_cli_output(self, output: str) -> str:
-        """Parse JSON output from Claude CLI."""
+    def _parse_stream_json(self, output: str, channel_id: int | None = None) -> str:
+        """Parse stream-json output from Claude CLI and save debug log.
+
+        Stream-json format is one JSON object per line with types:
+        - system: init info
+        - assistant: model messages, tool uses, thinking
+        - result: final result with usage stats
+        """
+        events = []
+        result_text = ""
+
+        for line in output.strip().split("\n"):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+                events.append(event)
+
+                # Extract result text from the result event
+                if event.get("type") == "result":
+                    result_text = event.get("result", "")
+
+            except json.JSONDecodeError as e:
+                _LOG.warning("Failed to parse stream-json line: %s", e)
+                continue
+
+        # Save debug log to file
+        self._save_debug_log(events, channel_id)
+
+        return result_text
+
+    def _save_debug_log(self, events: List[Dict], channel_id: int | None) -> None:
+        """Save CLI events to debug log file."""
         try:
-            data = json.loads(output)
+            debug_dir = Path("/data/wendy/debug_logs")
+            debug_dir.mkdir(parents=True, exist_ok=True)
 
-            # Handle different output structures
-            if "result" in data:
-                return str(data["result"])
+            timestamp = int(time.time() * 1000)
+            channel_str = str(channel_id) if channel_id else "unknown"
+            log_path = debug_dir / f"{channel_str}_{timestamp}.json"
 
-            # Stream output format
-            if "output" in data and isinstance(data["output"], list):
-                texts = []
-                for item in data["output"]:
-                    if isinstance(item, dict) and item.get("type") == "text":
-                        texts.append(item.get("text", ""))
-                return "\n".join(texts)
+            # Extract key info for easier debugging
+            debug_data = {
+                "timestamp": timestamp,
+                "channel_id": channel_id,
+                "events": events,
+                "summary": self._summarize_events(events),
+            }
 
-            # Message format
-            if "message" in data:
-                msg = data["message"]
-                if isinstance(msg, dict) and "content" in msg:
-                    content = msg["content"]
-                    if isinstance(content, list):
-                        texts = []
-                        for block in content:
-                            if isinstance(block, dict) and block.get("type") == "text":
-                                texts.append(block.get("text", ""))
-                        return "\n".join(texts)
-                    return str(content)
+            log_path.write_text(json.dumps(debug_data, indent=2))
+            _LOG.info("Saved CLI debug log to %s", log_path)
 
-            # Fallback
-            _LOG.warning("Unexpected CLI output format: %s", list(data.keys()))
-            return str(data)
+            # Keep only last 20 debug logs
+            logs = sorted(debug_dir.glob("*.json"), key=lambda p: p.stat().st_mtime)
+            for old_log in logs[:-20]:
+                old_log.unlink()
 
-        except json.JSONDecodeError:
-            # If not JSON, return raw output
-            return output.strip()
+        except Exception as e:
+            _LOG.error("Failed to save debug log: %s", e)
+
+    def _summarize_events(self, events: List[Dict]) -> Dict:
+        """Extract summary info from events for quick debugging."""
+        summary = {
+            "tool_uses": [],
+            "assistant_messages": [],
+            "total_cost_usd": None,
+            "num_turns": None,
+        }
+
+        for event in events:
+            event_type = event.get("type")
+
+            if event_type == "assistant":
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_use":
+                            summary["tool_uses"].append({
+                                "tool": block.get("name"),
+                                "input_preview": str(block.get("input", ""))[:200],
+                            })
+                        elif block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text:
+                                summary["assistant_messages"].append(text[:500])
+
+            elif event_type == "result":
+                summary["total_cost_usd"] = event.get("total_cost_usd")
+                summary["num_turns"] = event.get("num_turns")
+
+        return summary
 
     async def generate(
         self,
@@ -304,6 +411,9 @@ You have a personal folder at /data/wendy/wendys_folder/ where you can save note
         # Format conversation
         system_prompt, user_prompt = self._format_conversation(conversation)
 
+        # Append Wendy's self-editable notes to system prompt
+        system_prompt += self._get_wendys_notes()
+
         # Add tool instructions if channel_id is provided
         if channel_id:
             user_prompt += self._get_tool_instructions(channel_id)
@@ -313,7 +423,8 @@ You have a personal folder at /data/wendy/wendys_folder/ where you can save note
             self.cli_path,
             "-p",  # Print mode (non-interactive)
             "--output-format",
-            "json",
+            "stream-json",
+            "--verbose",  # Required for stream-json in print mode
             "--model",
             self.model,
         ]
@@ -325,12 +436,12 @@ You have a personal folder at /data/wendy/wendys_folder/ where you can save note
 
         # Enable useful Claude Code tools with sandboxed permissions
         # - Read: for reading files (unrestricted)
-        # - Write/Edit: ONLY to her personal folder
-        # - Bash: for running check_messages.sh and send_message.sh
+        # - Write/Edit: ONLY to her personal folder and uploads
+        # - Bash: for running check_messages.sh, send_message.sh, and curl
         # - WebSearch/WebFetch: for web access
         cmd.extend([
             "--allowedTools",
-            "Read,WebSearch,WebFetch,Bash,Edit(//data/wendy/wendys_folder/**),Write(//data/wendy/wendys_folder/**)",
+            "Read,WebSearch,WebFetch,Bash,Edit(//data/wendy/wendys_folder/**),Write(//data/wendy/wendys_folder/**),Write(//data/wendy/uploads/**)",
             "--disallowedTools",
             "Edit(//data/wendy/*.sh),Edit(//data/wendy/*.py),Edit(//app/**),Write(//app/**)",
         ])
@@ -379,7 +490,7 @@ You have a personal folder at /data/wendy/wendys_folder/ where you can save note
                 )
 
             output = stdout.decode("utf-8")
-            result = self._parse_cli_output(output)
+            result = self._parse_stream_json(output, channel_id)
             _LOG.info("ClaudeCLI: response_len=%d", len(result))
             return result
 

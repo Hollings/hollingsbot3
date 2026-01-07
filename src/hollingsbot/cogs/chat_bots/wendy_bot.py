@@ -47,8 +47,9 @@ class WendyBot:
         # Configuration
         self.text_timeout = int(os.getenv("TEXT_TIMEOUT", "180"))
         self.max_turns_sent = int(os.getenv("LLM_MAX_TURNS_SENT", "8"))
-        self.default_provider = os.getenv("DEFAULT_LLM_PROVIDER", "openai").lower()
-        self.default_model = os.getenv("DEFAULT_LLM_MODEL", "gpt-4o")
+        # Wendy always uses Claude CLI (subscription billing)
+        self.default_provider = "claude-cli"
+        self.default_model = "sonnet"
 
         # Channel whitelist
         whitelist_str = os.getenv("LLM_WHITELIST_CHANNELS", "")
@@ -58,15 +59,10 @@ class WendyBot:
                 with suppress(ValueError):
                     self.whitelist_channels.add(int(cid_str.strip()))
 
-        # Model preferences and system prompts (per user)
+        # User system prompts (per user) - model preferences removed, always use claude-cli
         self.state_file = Path("generated/llm_chat_new_state.json")
-        self.model_preferences: dict[str, dict[str, dict[str, str]]] = {}
         self.user_system_prompts: dict[str, dict[str, str]] = {}
         self._load_state()
-
-        # Available models
-        self._model_lookup: set[tuple[str, str]] = set()
-        self._load_available_models()
 
         # System prompt (base + tools)
         self.base_system_prompt = self._load_base_system_prompt()
@@ -84,7 +80,7 @@ class WendyBot:
         # Register commands
         self._register_commands()
 
-        _LOG.info("WendyBot initialized (provider=%s, model=%s)", self.default_provider, self.default_model)
+        _LOG.info("WendyBot initialized (using claude-cli/sonnet for subscription billing)")
 
     # ==================== Debug Log Storage ====================
 
@@ -156,22 +152,6 @@ class WendyBot:
         """Retrieve debug log for a message ID."""
         return self._response_logs.get(message_id)
 
-    # ==================== Available Models ====================
-
-    def _load_available_models(self) -> None:
-        """Load available models from JSON file."""
-        try:
-            models_file = Path("src/hollingsbot/available_models.json")
-            with models_file.open("r") as f:
-                data = json.load(f)
-            for provider, models in data.items():
-                provider_lower = provider.lower()
-                for model_id in models:
-                    self._model_lookup.add((provider_lower, model_id))
-            _LOG.info("Loaded %d available models", len(self._model_lookup))
-        except Exception:
-            _LOG.exception("Failed to load available models")
-
     def _load_base_system_prompt(self) -> str:
         """Load base system prompt from settings."""
         try:
@@ -211,24 +191,22 @@ class WendyBot:
     # ==================== State Management ====================
 
     def _load_state(self) -> None:
-        """Load model preferences and system prompts from state file."""
+        """Load user system prompts from state file."""
         if not self.state_file.exists():
             return
         try:
             with self.state_file.open("r") as f:
                 state = json.load(f)
-            self.model_preferences = state.get("model_preferences", {})
             self.user_system_prompts = state.get("user_system_prompts", {})
             _LOG.info("Loaded state from %s", self.state_file)
         except Exception:
             _LOG.exception("Failed to load state from %s", self.state_file)
 
     def _save_state(self) -> None:
-        """Save model preferences and system prompts to state file."""
+        """Save user system prompts to state file."""
         try:
             self.state_file.parent.mkdir(parents=True, exist_ok=True)
             state = {
-                "model_preferences": self.model_preferences,
                 "user_system_prompts": self.user_system_prompts,
             }
             with self.state_file.open("w") as f:
@@ -1196,36 +1174,10 @@ class WendyBot:
 
     # ==================== Model Preferences ====================
 
-    def _is_valid_model(self, provider: str, model: str) -> bool:
-        """Check if provider/model combination is available."""
-        key = (provider.lower(), model)
-        return key in self._model_lookup
-
-    def _get_default_model(self) -> tuple[str, str]:
-        """Return the default model (tapering disabled)."""
-        return (self.default_provider, self.default_model)
-
     def _get_model_for_user(self, guild_id: int | None, user_id: int) -> tuple[str, str]:
-        """Get user's preferred model or return default."""
-        gid = str(guild_id or 0)
-        uid = str(user_id)
-        entry = self.model_preferences.get(gid, {}).get(uid)
-        if isinstance(entry, dict):
-            provider = entry.get("provider")
-            model = entry.get("model")
-            if isinstance(provider, str) and isinstance(model, str) and self._is_valid_model(provider, model):
-                return provider.lower(), model
-
-        # No user preference - use default
-        return self._get_default_model()
-
-    def _set_model_for_user(self, guild_id: int | None, user_id: int, provider: str, model: str) -> None:
-        """Save user's model preference."""
-        gid = str(guild_id or 0)
-        uid = str(user_id)
-        guild_entry = self.model_preferences.setdefault(gid, {})
-        guild_entry[uid] = {"provider": provider.lower(), "model": model}
-        self._save_state()
+        """Get model for user - always returns claude-cli/sonnet."""
+        # Wendy always uses Claude CLI for subscription billing
+        return (self.default_provider, self.default_model)
 
     def _get_user_system_prompt(self, guild_id: int | None, user_id: int) -> str | None:
         """Get user's custom system prompt."""
@@ -1259,23 +1211,9 @@ class WendyBot:
         pass
 
     async def handle_model_command(self, ctx: commands.Context, provider: str | None = None, model: str | None = None) -> None:
-        """Handle !model command to set user's preferred model."""
-        if provider is None or model is None:
-            # Show current model
-            current_provider, current_model = self._get_model_for_user(
-                getattr(ctx.guild, "id", None), ctx.author.id
-            )
-            await ctx.send(f"Current model: {current_provider}/{current_model}")
-            return
-
-        # Validate model
-        if not self._is_valid_model(provider, model):
-            await ctx.send(f"Invalid model: {provider}/{model}")
-            return
-
-        # Set model
-        self._set_model_for_user(getattr(ctx.guild, "id", None), ctx.author.id, provider, model)
-        await ctx.send(f"Model set to: {provider}/{model}")
+        """Handle !model command - shows current model (Wendy always uses claude-cli)."""
+        # Wendy always uses claude-cli/sonnet for subscription billing
+        await ctx.send(f"Current model: {self.default_provider}/{self.default_model} (fixed)")
 
     async def handle_system_command(self, ctx: commands.Context, *, prompt: str | None = None) -> None:
         """Handle !system command to set custom system prompt."""
