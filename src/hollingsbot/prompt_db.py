@@ -883,6 +883,37 @@ def decrement_temp_bot_replies(webhook_id: int) -> tuple[int, bool]:
             raise
 
 
+def increment_temp_bot_replies(webhook_id: int) -> int:
+    """Atomically increment replies_remaining (refund a cancelled reply).
+
+    Returns:
+        The new value after increment, or -1 if bot not found.
+    """
+    init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            cur = conn.execute(
+                """
+                UPDATE temp_bots
+                SET replies_remaining = replies_remaining + 1
+                WHERE webhook_id = ? AND is_active = 1
+                RETURNING replies_remaining
+                """,
+                (webhook_id,),
+            )
+            row = cur.fetchone()
+            conn.commit()
+
+            if row is None:
+                return -1  # Bot not found or inactive
+
+            return int(row[0])
+        except Exception:
+            conn.rollback()
+            raise
+
+
 # ------------------------- LLM API logging -------------------------
 
 def log_llm_api_call(

@@ -255,6 +255,36 @@ def images_from_history(
     return []
 
 
+async def save_attachments_for_wendy(message: discord.Message) -> list[str]:
+    """Save all attachments from a message to Wendy's attachments folder.
+
+    Saves any file type with format: msg_{message_id}_{index}_{filename}
+    Returns list of saved file paths.
+    """
+    from pathlib import Path
+
+    if not message.attachments:
+        return []
+
+    attachments_dir = Path("/data/wendy/attachments")
+    attachments_dir.mkdir(parents=True, exist_ok=True)
+
+    saved_paths = []
+    for i, attachment in enumerate(message.attachments):
+        try:
+            data = await attachment.read()
+            # Preserve original filename but prefix with message_id for uniqueness
+            safe_filename = attachment.filename.replace("/", "_").replace("\\", "_")
+            file_path = attachments_dir / f"msg_{message.id}_{i}_{safe_filename}"
+            file_path.write_bytes(data)
+            saved_paths.append(str(file_path))
+            _LOG.info("Saved attachment for Wendy: %s (%d bytes)", file_path, len(data))
+        except Exception as e:
+            _LOG.exception("Failed to save attachment %s for message %d: %s", attachment.filename, message.id, e)
+
+    return saved_paths
+
+
 async def collect_image_attachments(message: discord.Message) -> list[ImageAttachment]:
     """Collect all image attachments from a message."""
     images: list[ImageAttachment] = []

@@ -5,11 +5,16 @@ import json
 import logging
 import os
 import re
+from pathlib import Path
 
 import discord
 from discord.ext import commands
 
 _LOG = logging.getLogger(__name__)
+
+# Wendy debug files
+MESSAGE_LOG_FILE = Path("/data/wendy/message_log.jsonl")
+STREAM_LOG_FILE = Path("/data/wendy/stream.jsonl")
 
 
 class DebugCommands(commands.Cog):
@@ -108,7 +113,15 @@ class DebugCommands(commands.Cog):
         if not message_id:
             return
 
-        # Get the ChatCoordinator to access WendyBot
+        # Try Wendy debug first (checks message_log.jsonl)
+        try:
+            if await self._handle_wendy_debug(message, message_id):
+                return  # Handled as Wendy message
+        except Exception as exc:
+            _LOG.exception("Wendy debug lookup failed: %s", exc)
+            # Fall through to try other bots
+
+        # Get the ChatCoordinator to access other bots
         chat_coordinator = self.bot.get_cog("ChatCoordinator")
         if not chat_coordinator:
             await message.channel.send("ChatCoordinator not loaded")
@@ -245,6 +258,219 @@ class DebugCommands(commands.Cog):
         )
 
         return debug_file, io_file
+
+    # ==================== Wendy Debug Methods ====================
+
+    def _lookup_wendy_message(self, discord_msg_id: int) -> dict | None:
+        """Look up a Wendy message in the message log by Discord message ID."""
+        if not MESSAGE_LOG_FILE.exists():
+            return None
+
+        try:
+            with open(MESSAGE_LOG_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if entry.get("discord_msg_id") == discord_msg_id:
+                            return entry
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            _LOG.error("Failed to lookup Wendy message: %s", e)
+
+        return None
+
+    def _find_previous_wendy_message(self, channel_id: int, before_ts: int) -> dict | None:
+        """Find the previous Wendy message in the same channel before a timestamp."""
+        if not MESSAGE_LOG_FILE.exists():
+            return None
+
+        previous = None
+        try:
+            with open(MESSAGE_LOG_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        if (entry.get("channel_id") == channel_id and
+                            entry.get("outbox_ts", 0) < before_ts):
+                            previous = entry
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            _LOG.error("Failed to find previous Wendy message: %s", e)
+
+        return previous
+
+    def _slice_stream_events(self, start_ts: int | None, end_ts: int) -> list[dict]:
+        """Get stream events between two timestamps (in nanoseconds).
+
+        Args:
+            start_ts: Start timestamp (exclusive), or None for beginning
+            end_ts: End timestamp (inclusive)
+
+        Returns:
+            List of stream events in that range
+        """
+        if not STREAM_LOG_FILE.exists():
+            return []
+
+        events = []
+        try:
+            # Convert nanosecond timestamps to milliseconds for comparison
+            start_ms = (start_ts // 1_000_000) if start_ts else 0
+            end_ms = end_ts // 1_000_000
+
+            with open(STREAM_LOG_FILE, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        event_ts = entry.get("ts", 0)  # Already in milliseconds
+
+                        if start_ms < event_ts <= end_ms:
+                            events.append(entry)
+                    except json.JSONDecodeError:
+                        continue
+        except Exception as e:
+            _LOG.error("Failed to slice stream events: %s", e)
+
+        return events
+
+    def _format_wendy_debug(self, events: list[dict], msg_info: dict) -> discord.File:
+        """Format Wendy stream events into a debug file."""
+        lines = [
+            "=== WENDY DEBUG LOG ===\n",
+            f"Discord Message ID: {msg_info.get('discord_msg_id')}",
+            f"Channel ID: {msg_info.get('channel_id')}",
+            f"Outbox Timestamp: {msg_info.get('outbox_ts')}",
+            f"Content Preview: {msg_info.get('content_preview', '')[:200]}",
+            f"\nTotal Events: {len(events)}",
+            "\n" + "=" * 50 + "\n",
+        ]
+
+        # Summarize events by type
+        tool_uses = []
+        assistant_texts = []
+        tool_results = []
+
+        for entry in events:
+            event = entry.get("event", {})
+            event_type = event.get("type")
+
+            if event_type == "assistant":
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                for block in content:
+                    if isinstance(block, dict):
+                        if block.get("type") == "tool_use":
+                            tool_uses.append({
+                                "ts": entry.get("ts"),
+                                "tool": block.get("name"),
+                                "input": block.get("input"),
+                            })
+                        elif block.get("type") == "text":
+                            text = block.get("text", "")
+                            if text.strip():
+                                assistant_texts.append({
+                                    "ts": entry.get("ts"),
+                                    "text": text,
+                                })
+
+            elif event_type == "user":
+                # Tool results come back as user messages
+                msg = event.get("message", {})
+                content = msg.get("content", [])
+                for block in content:
+                    if isinstance(block, dict) and block.get("type") == "tool_result":
+                        tool_results.append({
+                            "ts": entry.get("ts"),
+                            "tool_use_id": block.get("tool_use_id"),
+                            "content": str(block.get("content", ""))[:500],
+                        })
+
+        # Format tool uses
+        if tool_uses:
+            lines.append("\n=== TOOL USES ===\n")
+            for i, tu in enumerate(tool_uses, 1):
+                lines.append(f"\n--- Tool {i}: {tu['tool']} ---")
+                lines.append(f"Timestamp: {tu['ts']}")
+                input_str = json.dumps(tu['input'], indent=2, ensure_ascii=False)
+                # Truncate very long inputs
+                if len(input_str) > 2000:
+                    input_str = input_str[:2000] + "\n... [truncated]"
+                lines.append(f"Input:\n{input_str}")
+
+        # Format tool results
+        if tool_results:
+            lines.append("\n\n=== TOOL RESULTS ===\n")
+            for i, tr in enumerate(tool_results, 1):
+                lines.append(f"\n--- Result {i} ---")
+                lines.append(f"Timestamp: {tr['ts']}")
+                lines.append(f"Tool Use ID: {tr['tool_use_id']}")
+                lines.append(f"Content: {tr['content']}")
+
+        # Format assistant text outputs
+        if assistant_texts:
+            lines.append("\n\n=== ASSISTANT THOUGHTS ===\n")
+            for i, at in enumerate(assistant_texts, 1):
+                lines.append(f"\n--- Thought {i} (ts={at['ts']}) ---")
+                lines.append(at['text'])
+
+        # Raw events at the end
+        lines.append("\n\n" + "=" * 50)
+        lines.append("=== RAW EVENTS (JSON) ===\n")
+        for entry in events:
+            lines.append(json.dumps(entry, ensure_ascii=False))
+
+        content = "\n".join(lines)
+        return discord.File(
+            io.BytesIO(content.encode("utf-8")),
+            filename="wendy_debug.txt",
+        )
+
+    async def _handle_wendy_debug(self, message: discord.Message, target_msg_id: int) -> bool:
+        """Handle debug lookup for a Wendy message. Returns True if handled."""
+        # Look up the message in Wendy's log
+        msg_info = self._lookup_wendy_message(target_msg_id)
+        if not msg_info:
+            return False  # Not a Wendy message
+
+        _LOG.info("Found Wendy message in log: %s", msg_info)
+
+        # Find the previous message's timestamp
+        prev_msg = self._find_previous_wendy_message(
+            msg_info["channel_id"],
+            msg_info["outbox_ts"]
+        )
+        start_ts = prev_msg["outbox_ts"] if prev_msg else None
+
+        _LOG.info("Slicing stream events from %s to %s", start_ts, msg_info["outbox_ts"])
+
+        # Slice stream events
+        events = self._slice_stream_events(start_ts, msg_info["outbox_ts"])
+
+        if not events:
+            await message.channel.send(
+                f"Found Wendy message {target_msg_id} in log, but no stream events in that time range.\n"
+                f"This might be an older message from before stream logging was enabled."
+            )
+            return True
+
+        # Format and send
+        debug_file = self._format_wendy_debug(events, msg_info)
+        await message.channel.send(
+            f"Wendy debug log for message {target_msg_id} ({len(events)} events):",
+            file=debug_file,
+        )
+        return True
 
 
 async def setup(bot: commands.Bot) -> None:

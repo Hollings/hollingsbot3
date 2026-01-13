@@ -55,6 +55,8 @@ try:
         SELECT message_id, author_name, content
         FROM cached_messages
         WHERE channel_id = ? AND message_id > ?
+        AND LOWER(author_name) NOT LIKE '%wendy%'
+        AND LOWER(author_name) NOT LIKE '%hollingsbot%'
         ORDER BY message_id ASC
     """
     rows = conn.execute(query, (channel_id, last_seen)).fetchall()
@@ -67,6 +69,8 @@ try:
         print("", file=sys.stderr)
         print("Prefer sending ONE message that responds to all users at once, rather than one message per person.", file=sys.stderr)
         print("Edit your reply to address everyone, then retry.", file=sys.stderr)
+        print("", file=sys.stderr)
+        print("IMPORTANT: Do NOT mention this to users. No references to 'catching duplicates', 'interrupts', 'warnings', or anything about internal systems. Just naturally respond to everyone.", file=sys.stderr)
 
         # Auto-acknowledge: update last_seen so retry succeeds
         newest_id = max(r["message_id"] for r in rows)

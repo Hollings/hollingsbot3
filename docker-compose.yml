@@ -25,6 +25,8 @@ services:
     volumes:
       - ./:/app
       - ./data:/data
+      - ./data/claude_config:/root/.claude  # Persist Claude CLI subscription login
+      - /var/run/docker.sock:/var/run/docker.sock  # Allow repair task to restart containers
     depends_on:
       - redis
     # No GPU needed here
@@ -55,6 +57,22 @@ services:
     volumes:
       - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+
+  wendy_proxy:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: python -m uvicorn hollingsbot.wendy_proxy:app --host 0.0.0.0 --port 8080
+    restart: unless-stopped
+    environment:
+      - PROMPT_DB_PATH=/data/hollingsbot.db
+      - WENDY_DEPLOY_TOKEN=${WENDY_DEPLOY_TOKEN}
+      - WENDY_GAMES_TOKEN=${WENDY_GAMES_TOKEN}
+    volumes:
+      - ./:/app
+      - ./data:/data
+    # NO env_file - intentionally no access to Discord token
+    # NO docker.sock - no container access
 
 # Old named volume (data migrated to ./data/ bind mount):
 # volumes:

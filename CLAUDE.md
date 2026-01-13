@@ -202,3 +202,68 @@ Key configuration (see `.env` file):
 - **Bot Restart Interval**: The bot auto-restarts every 6 hours by default (`BOT_RESTART_INTERVAL` in seconds)
 - **Conversation History**: LLM chat history is in-memory only and cleared on bot restart
 - **Model Availability**: Check `src/hollingsbot/available_models.json` for valid LLM models (loaded dynamically by `llm_chat.py`)
+
+## Wendy Deployment System
+
+Wendy can deploy static websites and multiplayer game servers to `wendy.monster` using a unified deployment script.
+
+### Architecture
+
+```
+Wendy (Claude CLI in celery_text)
+      |
+      | runs ./scripts/wendy/deploy.sh <project-path> [target-url]
+      v
+wendy_proxy (this repo) ────────────────────────────────────────────┐
+      |                                                              |
+      | POST /api/deploy_site                POST /api/deploy_game   |
+      | (adds WENDY_DEPLOY_TOKEN)            (adds WENDY_GAMES_TOKEN)|
+      v                                                              v
+wendy-sites (Orange Pi:8910)              wendy-games manager (Orange Pi:8920)
+      |                                                              |
+      v                                                              v
+https://wendy.monster/<name>/             Docker: wendy-game-<name>
+                                                   |
+                                                   v
+                                          https://wendy.monster/game/<name>/
+                                          wss://wendy.monster/game/<name>/ws
+```
+
+### Unified Deploy Script
+
+Location: `scripts/wendy/deploy.sh`
+
+**Auto-detection:**
+- Has `server.ts` → Game server deployment
+- Has `index.html` → Static site deployment
+
+**Usage:**
+```bash
+deploy.sh <project-path> [target-url]
+
+# Examples:
+deploy.sh landing              # site -> wendy.monster/landing/
+deploy.sh landing my-site      # site -> wendy.monster/my-site/
+deploy.sh snake-game           # game -> wendy.monster/game/snake-game/
+```
+
+### Environment Variables
+
+In `.env`:
+- `WENDY_DEPLOY_TOKEN` - Token for wendy-sites service
+- `WENDY_GAMES_TOKEN` - Token for wendy-games service
+
+In `docker-compose.yml`, wendy_proxy receives both tokens:
+```yaml
+wendy_proxy:
+  environment:
+    - WENDY_DEPLOY_TOKEN=${WENDY_DEPLOY_TOKEN}
+    - WENDY_GAMES_TOKEN=${WENDY_GAMES_TOKEN}
+```
+
+### Related Files
+
+- `scripts/wendy/deploy.sh` - Unified deployment script
+- `src/hollingsbot/wendy_proxy.py` - FastAPI proxy with `/api/deploy_site` and `/api/deploy_game`
+- `config/system_prompt.txt` - Wendy's instructions (includes deployment docs)
+- `data/wendy/wendys_folder/` - Wendy's workspace for projects

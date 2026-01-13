@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Awaitable, Callable, Mapping
 
 import discord
+import emoji
 from discord.ext import commands
 
 from hollingsbot.caption import add_caption
@@ -352,6 +353,44 @@ class ImageGenCog(commands.Cog):
         except discord.HTTPException:
             _log.debug("Could not %s reaction %s on %s", "remove" if remove else "add", emoji, msg.id)
 
+    async def _get_thematic_emoji(self, prompt: str) -> str:
+        """
+        Get a thematic emoji for an image generation prompt using Claude Haiku.
+
+        Args:
+            prompt: The image generation prompt
+
+        Returns:
+            A single emoji string, or THINKING as fallback
+        """
+        try:
+            generator = get_text_generator("anthropic", "claude-haiku-4-5")
+            response = await asyncio.wait_for(
+                generator.generate(
+                    f"Return exactly one emoji shortcode that fits this image prompt. Use Discord format like :fire: or :art:. Just the shortcode, nothing else.\n\nPrompt: {prompt}",
+                    temperature=0.7,
+                ),
+                timeout=3.0,
+            )
+            shortcode = response.strip()
+            _log.info("Haiku returned shortcode: %r for prompt: %s", shortcode, prompt[:50])
+            # Ensure it's in :name: format
+            if not shortcode.startswith(":"):
+                shortcode = f":{shortcode}"
+            if not shortcode.endswith(":"):
+                shortcode = f"{shortcode}:"
+            _log.info("Normalized shortcode: %r", shortcode)
+            # Convert shortcode to unicode emoji
+            unicode_emoji = emoji.emojize(shortcode, language="alias")
+            _log.info("After emojize: %r (changed=%s)", unicode_emoji, unicode_emoji != shortcode)
+            # Check if conversion succeeded (emojize returns input unchanged if not found)
+            if unicode_emoji != shortcode and len(unicode_emoji) <= 8:
+                return unicode_emoji
+            _log.info("Emoji conversion failed, falling back to THINKING")
+        except Exception as exc:
+            _log.warning("Failed to get thematic emoji: %s", exc)
+        return THINKING
+
     async def _send_error_message(
         self,
         message: discord.Message,
@@ -641,6 +680,7 @@ class ImageGenCog(commands.Cog):
         message: discord.Message,
         all_edit_images: list[bytes],
         needs_generated_prompt: bool,
+        working_emoji: str = THINKING,
     ) -> tuple[list[str], list[bytes], bytes] | None:
         """
         Prepare images and prompt for outpaint mode.
@@ -649,6 +689,7 @@ class ImageGenCog(commands.Cog):
             message: Discord message (for error reporting)
             all_edit_images: Collected images
             needs_generated_prompt: Whether to generate prompt with LLM
+            working_emoji: Emoji to remove on error
 
         Returns:
             Tuple of (prompts, prepared_images, mask) or None on error
@@ -667,7 +708,7 @@ class ImageGenCog(commands.Cog):
             return prompts, [scaled_image], mask
 
         except Exception as exc:
-            await self._react(message, THINKING, remove=True)
+            await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             _log.exception("Failed to prepare outpaint images: %s", exc)
             await self._send_error_message(message, f"Failed to prepare outpaint images: {exc}")
@@ -889,7 +930,9 @@ class ImageGenCog(commands.Cog):
             raw_prompt: User's prompt text
             spec: Generator specification
         """
-        await self._react(message, THINKING)
+        # Get thematic emoji for the prompt (runs in parallel with parsing)
+        working_emoji = await self._get_thematic_emoji(raw_prompt)
+        await self._react(message, working_emoji)
 
         # Parse seed and clean prompt
         raw_prompt, seed = self._parse_seed_from_prompt(raw_prompt)
@@ -904,7 +947,7 @@ class ImageGenCog(commands.Cog):
 
         # Validate prompt
         if not raw_prompt and not is_outpaint:
-            await self._react(message, THINKING, remove=True)
+            await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             await message.channel.send("Prompt may not be empty.")
             return
@@ -926,7 +969,7 @@ class ImageGenCog(commands.Cog):
 
         # Validate images for edit mode
         if spec.mode == "edit" and not all_edit_images:
-            await self._react(message, THINKING, remove=True)
+            await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             await self._send_error_message(
                 message,
@@ -936,7 +979,7 @@ class ImageGenCog(commands.Cog):
 
         # Validate images for outpaint mode
         if is_outpaint and not all_edit_images:
-            await self._react(message, THINKING, remove=True)
+            await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             await self._send_error_message(
                 message,
@@ -947,7 +990,7 @@ class ImageGenCog(commands.Cog):
         # Prepare outpaint if needed
         outpaint_mask: bytes | None = None
         if do_outpaint and all_edit_images:
-            result = await self._prepare_outpaint(message, all_edit_images, needs_generated_prompt)
+            result = await self._prepare_outpaint(message, all_edit_images, needs_generated_prompt, working_emoji)
             if result is None:
                 return  # Error already handled
             outpaint_prompts, all_edit_images, outpaint_mask = result
@@ -959,7 +1002,7 @@ class ImageGenCog(commands.Cog):
         can_afford, error_msg = self._cost_tracker.can_afford(message.author.id, cost)
 
         if not can_afford:
-            await self._react(message, THINKING, remove=True)
+            await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             await self._send_error_message(message, error_msg)
             return
@@ -1010,7 +1053,7 @@ class ImageGenCog(commands.Cog):
                 _log.exception("Failed to deduct cost for user %s: %s", message.author.id, exc)
                 # Don't fail the generation - user already received their image
 
-        await self._react(message, THINKING, remove=True)
+        await self._react(message, working_emoji, remove=True)
         await self._react(message, SUCCESS if overall_success else FAILURE)
 
     @commands.Cog.listener()

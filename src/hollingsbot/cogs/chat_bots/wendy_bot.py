@@ -754,7 +754,7 @@ class WendyBot:
             import traceback
             error_traceback = traceback.format_exc()
             _LOG.error(
-                "❌ Generation FAILED for channel %s (provider=%s model=%s): %s",
+                "Generation FAILED for channel %s (provider=%s model=%s): %s",
                 channel.id,
                 provider,
                 model,
@@ -774,7 +774,18 @@ class WendyBot:
                 tool_debug,
             )
 
-            # Don't send error to Discord (triggers message loop)
+            # Check for OAuth expiration and notify channel
+            error_str = str(exc).lower()
+            if "oauth" in error_str and "expired" in error_str:
+                try:
+                    await channel.send(
+                        "my claude cli token expired - someone needs to run "
+                        "`docker compose exec -it celery_text claude login` to fix me"
+                    )
+                except Exception:
+                    _LOG.exception("Failed to send OAuth expiration notice")
+
+            # Don't send other errors to Discord (triggers message loop)
             return None
         finally:
             if self._active_generations.get(channel.id) is job:
@@ -842,16 +853,6 @@ class WendyBot:
         for i, turn in enumerate(conversation):
             text_preview = turn.get('text', '')[:100].replace('\n', '\\n')
             _LOG.info(f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}")
-
-        # Check for role alternation issues
-        alternation_issues = 0
-        for i in range(1, len(conversation)):
-            if conversation[i]['role'] == conversation[i-1]['role'] and conversation[i]['role'] != 'system':
-                alternation_issues += 1
-                _LOG.warning(f"⚠️  Role alternation issue: turns {i-1} and {i} both have role={conversation[i]['role']}")
-
-        if alternation_issues > 0:
-            _LOG.warning(f"⚠️  Found {alternation_issues} role alternation issues - this may cause empty responses!")
 
         async_result = generate_llm_chat_response.apply_async(
             (provider, model, conversation),
@@ -1252,6 +1253,49 @@ class WendyBot:
         """Handle !cancel command to cancel active generation."""
         await self._cancel_generation(ctx.channel.id)
         await ctx.send("Generation cancelled")
+
+    async def handle_context_command(self, ctx: commands.Context) -> None:
+        """Handle !context command to show session stats for this channel."""
+        from hollingsbot.text_generators.claude_cli import ClaudeCliTextGenerator
+
+        channel_id = ctx.channel.id
+
+        # Get session stats from Claude CLI
+        cli = ClaudeCliTextGenerator()
+        stats = cli.get_session_stats(channel_id)
+
+        if not stats:
+            await ctx.send("No active session for this channel.")
+            return
+
+        # Format stats
+        from datetime import datetime
+        created_at = datetime.fromtimestamp(stats.get("created_at", 0))
+        last_used = stats.get("last_used_at")
+        last_used_str = datetime.fromtimestamp(last_used).strftime("%H:%M:%S") if last_used else "never"
+
+        msg = f"""**Session Stats**
+Session: `{stats.get('session_id', 'unknown')[:8]}...`
+Created: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
+Last used: {last_used_str}
+Messages: {stats.get('message_count', 0)}
+
+**Token Usage (cumulative)**
+Input: {stats.get('total_input_tokens', 0):,}
+Output: {stats.get('total_output_tokens', 0):,}
+Cache read: {stats.get('total_cache_read_tokens', 0):,}
+Cache create: {stats.get('total_cache_create_tokens', 0):,}
+"""
+        await ctx.send(msg)
+
+    async def handle_reset_session_command(self, ctx: commands.Context) -> None:
+        """Handle !reset command to reset the channel's session."""
+        from hollingsbot.text_generators.claude_cli import ClaudeCliTextGenerator
+
+        channel_id = ctx.channel.id
+        cli = ClaudeCliTextGenerator()
+        new_session_id = cli.reset_channel_session(channel_id)
+        await ctx.send(f"Session reset. New session: `{new_session_id[:8]}...`")
 
 
 # Suppress import errors

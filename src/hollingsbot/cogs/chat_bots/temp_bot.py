@@ -21,6 +21,7 @@ from hollingsbot.prompt_db import (
     DB_PATH,
     create_temp_bot,
     decrement_temp_bot_replies,
+    increment_temp_bot_replies,
     delete_temp_bot,
     get_depleted_temp_bots,
     get_temp_bot_by_name,
@@ -40,6 +41,9 @@ MAX_REPLY_COUNT = 20
 MAX_PROMPT_LENGTH = 500
 CLEANUP_INTERVAL_SECONDS = 60
 RESPONSE_PROBABILITY = 0.5  # 50% chance temp bot responds
+MAX_TEMP_BOTS_PER_CHANNEL = 3  # Maximum concurrent temp bots per channel
+MAX_CANCELLATIONS_BEFORE_FORCE = 2  # After this many cancellations, force the response through
+MIN_GENERATION_TIME_BEFORE_CANCEL = 2.0  # Don't cancel if generation started less than this many seconds ago
 
 # Name generation - occult, abstract names
 _ADJECTIVES = [
@@ -62,9 +66,11 @@ def generate_bot_name() -> str:
 class GenerationJob:
     """Tracks active temp bot generation state."""
 
-    def __init__(self):
+    def __init__(self, webhook_id: int | None = None):
         self.task: asyncio.Task | None = None
         self.result: Any = None
+        self.webhook_id: int | None = webhook_id  # For refunding on cancellation
+        self.start_time: float = time.monotonic()  # When generation started
 
 
 class TempBotManager:
@@ -85,6 +91,9 @@ class TempBotManager:
 
         # Track webhook_ids with active generations (to prevent cleanup during generation)
         self._generating_webhooks: set[int] = set()
+
+        # Track cancellation counts per channel (reset on successful post)
+        self._cancellation_counts: dict[int, int] = {}
 
         # Debug log storage (message_id -> log data) - shared with WendyBot
         from pathlib import Path
@@ -264,11 +273,19 @@ class TempBotManager:
                 translated_history, current_turn, temp_bot_system_prompt
             )
 
-            # Cancel any existing generation in this channel
-            await self._cancel_generation(channel_id)
+            # Cancel any existing generation in this channel (may be skipped if limits hit)
+            was_cancelled = await self._cancel_generation(channel_id)
+
+            # If there's still an active generation that wasn't cancelled, wait for it
+            if not was_cancelled and channel_id in self._active_generations:
+                _LOG.info("Existing generation in channel %s was not cancelled, skipping new generation", channel_id)
+                # Refund since we reserved but won't generate
+                increment_temp_bot_replies(webhook_id)
+                self._generating_webhooks.discard(webhook_id)
+                return None
 
             # Generate and send response (wrapped in task for cancellation support)
-            job = GenerationJob()
+            job = GenerationJob(webhook_id=webhook_id)
             task = self.bot.loop.create_task(
                 self._generate_and_send(
                     channel_id, webhook_id, bot_name, conversation, job, message.id, should_cleanup
@@ -317,8 +334,9 @@ class TempBotManager:
         willing_bots = [bot for bot in available_bots if random.random() < RESPONSE_PROBABILITY]
 
         if not willing_bots:
-            _LOG.info(f"All {len(available_bots)} temp bots declined to respond (probability roll)")
-            return None
+            # At least one temp bot must respond - force pick one
+            _LOG.info(f"All {len(available_bots)} temp bots declined probability roll, forcing one to respond")
+            willing_bots = [random.choice(available_bots)]
 
         # Pick a random bot from those willing to respond
         selected = random.choice(willing_bots)
@@ -622,6 +640,9 @@ class TempBotManager:
             sent_message = await webhook.send(response_text, username=bot_name, wait=True)
             _LOG.info(f"Temp bot '{bot_name}' sent message successfully")
 
+            # Reset cancellation count on successful post
+            self._cancellation_counts.pop(channel_id, None)
+
             # Store debug log for the response
             self._store_response_log(
                 sent_message.id,
@@ -688,33 +709,73 @@ class TempBotManager:
             if self._active_generations.get(channel_id) is job:
                 self._active_generations.pop(channel_id, None)
 
-    async def _cancel_generation(self, channel_id: int) -> None:
+    async def _cancel_generation(self, channel_id: int) -> bool:
         """Cancel any active temp bot generation in the channel.
 
         This cancels both the local asyncio task and the remote Celery task.
         Note: Anthropic API calls already in flight will complete server-side
         and consume tokens, but we won't wait for or use the response.
+
+        Returns:
+            True if generation was cancelled, False if cancellation was skipped
+            (due to hitting cancellation limit or minimum generation time).
         """
         job = self._active_generations.get(channel_id)
         if not job:
-            return
+            return False
 
-        if job.task and not job.task.done():
-            # Cancel the local asyncio task first
-            job.task.cancel()
+        if not job.task or job.task.done():
+            return False
 
-            # Revoke the Celery task immediately (don't wait for local task)
-            # terminate=True sends SIGTERM to worker, stopping the API call ASAP
-            if job.result:
-                job.result.revoke(terminate=True)
-                _LOG.info("Revoked temp bot Celery task for channel %s (terminate=True)", channel_id)
+        # Check if we've hit the cancellation limit - if so, let it finish
+        cancellation_count = self._cancellation_counts.get(channel_id, 0)
+        if cancellation_count >= MAX_CANCELLATIONS_BEFORE_FORCE:
+            _LOG.info(
+                "Channel %s has %d cancellations, forcing response through (limit: %d)",
+                channel_id, cancellation_count, MAX_CANCELLATIONS_BEFORE_FORCE
+            )
+            return False
 
-            # Now wait for local task cleanup
-            with suppress(asyncio.CancelledError):
-                await asyncio.wait_for(job.task, timeout=0.5)
+        # Check if generation just started - give it time to complete
+        elapsed = time.monotonic() - job.start_time
+        if elapsed < MIN_GENERATION_TIME_BEFORE_CANCEL:
+            _LOG.info(
+                "Channel %s generation only %.1fs old, skipping cancel (min: %.1fs)",
+                channel_id, elapsed, MIN_GENERATION_TIME_BEFORE_CANCEL
+            )
+            return False
 
-            self._active_generations.pop(channel_id, None)
-            _LOG.info("Cancelled active temp bot generation in channel %s", channel_id)
+        # Proceed with cancellation
+        # Cancel the local asyncio task first
+        job.task.cancel()
+
+        # Revoke the Celery task immediately (don't wait for local task)
+        # terminate=True sends SIGTERM to worker, stopping the API call ASAP
+        if job.result:
+            job.result.revoke(terminate=True)
+            _LOG.info("Revoked temp bot Celery task for channel %s (terminate=True)", channel_id)
+
+        # Now wait for local task cleanup
+        with suppress(asyncio.CancelledError):
+            await asyncio.wait_for(job.task, timeout=0.5)
+
+        # Refund the reply count since the message wasn't sent
+        if job.webhook_id:
+            new_count = increment_temp_bot_replies(job.webhook_id)
+            _LOG.info(
+                "Refunded reply for cancelled generation (webhook %s), now has %d replies",
+                job.webhook_id, new_count
+            )
+
+        # Increment cancellation count for this channel
+        self._cancellation_counts[channel_id] = cancellation_count + 1
+
+        self._active_generations.pop(channel_id, None)
+        _LOG.info(
+            "Cancelled active temp bot generation in channel %s (cancellation #%d)",
+            channel_id, self._cancellation_counts[channel_id]
+        )
+        return True
 
     async def _wait_for_typing_to_clear(self, channel_id: int) -> None:
         """Wait for human typing to stop before sending response.
@@ -1195,6 +1256,16 @@ Be concise and capture the essence of the bot's time in the chat."""
             await ctx.send(f"Initial prompt must not exceed {MAX_PROMPT_LENGTH} characters.")
             return
 
+        # Check temp bot limit for this channel
+        existing_bots = get_temp_bots_for_channel(ctx.channel.id)
+        if len(existing_bots) >= MAX_TEMP_BOTS_PER_CHANNEL:
+            bot_names = ", ".join(f"**{b['name']}**" for b in existing_bots)
+            await ctx.send(
+                f"This channel already has {MAX_TEMP_BOTS_PER_CHANNEL} temp bots active: {bot_names}\n"
+                f"Use `!despawn` to remove some before spawning more."
+            )
+            return
+
         # Check if the prompt matches an existing bot name - if so, recall them instead
         existing_bot = get_temp_bot_by_name(initial_prompt.strip(), channel_id=ctx.channel.id)
         if existing_bot and not existing_bot.get("is_active"):
@@ -1204,9 +1275,6 @@ Be concise and capture the essence of the bot's time in the chat."""
 
         # Generate bot name and avatar prompt together
         bot_name, avatar_prompt = await self._generate_bot_identity(initial_prompt)
-
-        # Check if there are already temp bots active in this channel
-        existing_bots = get_temp_bots_for_channel(ctx.channel.id)
 
         # Temp bots should only see messages from their spawn point forward
         spawn_message_id = ctx.message.id

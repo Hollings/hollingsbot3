@@ -23,6 +23,7 @@ celery_app.conf.task_routes = {
     "tasks.generate_text":  {"queue": "text"},
     "tasks.generate_image": {"queue": "image"},
     "tasks.generate_llm_chat_response": {"queue": "text"},
+    "tasks.repair_wendy": {"queue": "text"},
 }
 
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
@@ -427,3 +428,104 @@ def generate_llm_chat_response(
         "debug": debug_info,
         "conversation": conversation,
     }
+
+
+@celery_app.task(
+    name="tasks.repair_wendy",
+    queue="text",
+    bind=True,
+)
+def repair_wendy(self, channel_id: int) -> dict:
+    """Run Claude Code to debug and repair Wendy when she's not responding.
+
+    This task runs a fresh Claude CLI session with a debugging prompt that:
+    1. Investigates why Wendy isn't responding
+    2. Checks logs, session files, and error messages
+    3. Attempts to fix the issue
+    4. Sends a summary to the channel via send_message.sh
+    """
+    import subprocess
+    import shutil
+
+    logger.info("repair_wendy START for channel %d", channel_id)
+    start = time.monotonic()
+
+    # Find claude CLI
+    cli_path = shutil.which("claude")
+    if not cli_path:
+        return {"success": False, "error": "Claude CLI not found"}
+
+    repair_prompt = f'''EMERGENCY REPAIR MODE - Channel {channel_id}
+
+CRITICAL: You are debugging why Wendy (the Discord bot) is not responding. This is NOT for adding features or minor issues - only for fixing crashes and critical failures.
+
+INVESTIGATION STEPS:
+1. Check recent celery_text logs for errors:
+   - Look for ClaudeCliError, session errors, API errors
+   - Check if tasks are being received but failing
+
+2. Check Wendy's session state:
+   - Read /data/wendy/session_state.json
+   - If session exists, try to identify corruption issues
+
+3. Check recent debug logs:
+   - List /data/wendy/debug_logs/ for recent activity
+   - Read the most recent ones to see what happened
+
+4. Common fixes:
+   - If session is corrupted: Delete the session entry from session_state.json
+   - If CLI is failing: Check error messages in logs
+   - If rate limited: Note this in summary
+
+5. If you edited Python code in /app/, restart the affected container:
+   docker compose restart celery_text   # For Wendy/text generation issues
+   docker compose restart bot           # For Discord bot issues
+
+6. After investigating and fixing, send a SHORT summary to the channel:
+   ./send_message.sh {channel_id} "your summary here"
+
+IMPORTANT:
+- Do NOT add new features
+- Do NOT refactor code
+- Do NOT fix minor issues like double-posting
+- ONLY fix critical crashes that prevent Wendy from responding
+- Keep your fix minimal and targeted
+- Always send a summary message when done
+- If you edit code, you MUST restart the relevant container
+
+START by checking the docker logs and session state.'''
+
+    try:
+        # Run claude CLI with the repair prompt (fresh session, no resume)
+        result = subprocess.run(
+            [
+                cli_path,
+                "-p",  # Print mode
+                "--model", "opus",
+                "--allowedTools", "Read,Bash,Edit,Write",
+            ],
+            input=repair_prompt,
+            capture_output=True,
+            text=True,
+            timeout=300,  # 5 minute timeout
+            cwd="/data/wendy",
+        )
+
+        duration = time.monotonic() - start
+        logger.info("repair_wendy FINISH in %.2fs | returncode=%d", duration, result.returncode)
+
+        return {
+            "success": result.returncode == 0,
+            "stdout": result.stdout[-2000:] if result.stdout else "",
+            "stderr": result.stderr[-1000:] if result.stderr else "",
+            "duration": duration,
+        }
+
+    except subprocess.TimeoutExpired:
+        duration = time.monotonic() - start
+        logger.error("repair_wendy TIMEOUT after %.2fs", duration)
+        return {"success": False, "error": "Repair timed out after 5 minutes"}
+    except Exception as exc:
+        duration = time.monotonic() - start
+        logger.exception("repair_wendy FAILED after %.2fs", duration)
+        return {"success": False, "error": str(exc)}

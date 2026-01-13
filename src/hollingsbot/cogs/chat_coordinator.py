@@ -314,20 +314,48 @@ class ChatCoordinator(commands.Cog):
 
     async def _try_bot_responses(self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]) -> None:
         """Try to get a response from bots (can be cancelled)."""
-        import random
-        # Shuffle bot list for fairness
-        bots = list(self.bots)
-        random.shuffle(bots)
+        # Wendy always gets triggered first - she's the main character
+        # Other bots run after, with only one responding
+        wendy = None
+        other_bots = []
 
-        # Try each bot until one responds
-        for bot_instance in bots:
+        for bot_instance in self.bots:
+            if bot_instance.__class__.__name__ == "WendyBot":
+                wendy = bot_instance
+            else:
+                other_bots.append(bot_instance)
+
+        # Always trigger Wendy (she checks messages herself via check_messages.sh)
+        if wendy and hasattr(wendy, "receive_message"):
+            try:
+                _LOG.info("Triggering WendyBot...")
+                response_data = await wendy.receive_message(message, snapshot)
+                if response_data:
+                    await self._add_response_to_history(
+                        channel_id,
+                        response_data["message_id"],
+                        response_data["text"],
+                        response_data.get("webhook_id"),
+                        response_data["bot_name"],
+                    )
+                    _LOG.info("WendyBot responded")
+            except asyncio.CancelledError:
+                _LOG.info("WendyBot generation cancelled")
+                raise
+            except Exception:
+                _LOG.exception("Error calling WendyBot")
+
+        # Then try other bots (temp bots, etc.) - stop after first response
+        import random
+        random.shuffle(other_bots)
+
+        for bot_instance in other_bots:
             try:
                 if hasattr(bot_instance, "receive_message"):
                     _LOG.info(f"Trying {bot_instance.__class__.__name__}...")
                     response_data = await bot_instance.receive_message(message, snapshot)
 
                     if response_data:
-                        # Bot responded - add to history
                         await self._add_response_to_history(
                             channel_id,
                             response_data["message_id"],
@@ -336,13 +364,12 @@ class ChatCoordinator(commands.Cog):
                             response_data["bot_name"],
                         )
                         _LOG.info(f"{bot_instance.__class__.__name__} responded, stopping")
-                        break  # Stop after first response
+                        break
                     else:
                         _LOG.info(f"{bot_instance.__class__.__name__} declined to respond")
             except asyncio.CancelledError:
-                # Generation was cancelled (new message arrived), this is expected
                 _LOG.info(f"{bot_instance.__class__.__name__} generation cancelled")
-                raise  # Propagate to allow cleanup
+                raise
             except Exception:
                 _LOG.exception(f"Error calling {bot_instance.__class__.__name__}")
 
@@ -376,9 +403,13 @@ class ChatCoordinator(commands.Cog):
         if history_metadata:
             history_text += f"\n\n{history_metadata}"
 
-        # Collect images
+        # Collect images for LLM context
         current_images = await chat_utils.collect_image_attachments(message)
         merged_images = reply_images + current_images
+
+        # Save all attachments (any file type) for Wendy to access via check_messages.sh
+        if message.attachments:
+            await chat_utils.save_attachments_for_wendy(message)
 
         return ConversationTurn(
             role=role,

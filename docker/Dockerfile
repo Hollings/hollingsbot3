@@ -27,6 +27,10 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && npm install -g @anthropic-ai/claude-code \
     && rm -rf /var/lib/apt/lists/*
 
+# Git for version control (separate layer to preserve cache)
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 # Create non-root user for Claude CLI (it refuses --dangerously-skip-permissions as root)
 RUN useradd -m -s /bin/bash claude \
     && mkdir -p /home/claude/.claude \

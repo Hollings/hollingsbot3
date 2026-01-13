@@ -2,6 +2,9 @@
 
 This generator invokes the `claude` CLI command instead of the Anthropic API,
 allowing use of subscription usage instead of API credits for cost savings.
+
+Uses --resume for persistent per-channel sessions, with simple nudge prompts
+to trigger Wendy to check messages via her tools.
 """
 from __future__ import annotations
 
@@ -13,12 +16,56 @@ import os
 import shutil
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Union
 
 from .base import TextGeneratorAPI
 
 _LOG = logging.getLogger(__name__)
+
+SESSION_STATE_FILE = Path("/data/wendy/session_state.json")
+SESSION_DIR = Path("/root/.claude/projects/-data-wendy")
+STREAM_LOG_FILE = Path("/data/wendy/stream.jsonl")
+MAX_DISCORD_MESSAGES = 50  # Actual Discord messages, not API turns
+MAX_STREAM_LOG_LINES = 5000  # Rolling log limit
+
+
+def _count_discord_messages_in_tool_result(content: str) -> int:
+    """Count Discord messages in a check_messages tool result.
+
+    The check_messages API returns JSON like:
+    [{"message_id":123,"author":"user","content":"...","timestamp":123}]
+
+    Returns the number of messages in the response, or 0 if not a check_messages result.
+    """
+    try:
+        # Try to parse as JSON array of messages
+        data = json.loads(content)
+        if isinstance(data, list):
+            # Check if it looks like Discord messages (has message_id and author)
+            if data and isinstance(data[0], dict) and "message_id" in data[0] and "author" in data[0]:
+                return len(data)
+    except (json.JSONDecodeError, KeyError, IndexError, TypeError):
+        pass
+    return 0
+
+
+def _count_discord_messages(messages: list) -> int:
+    """Count actual Discord messages in a session by parsing check_messages tool results."""
+    count = 0
+    for msg in messages:
+        if msg.get("type") != "user":
+            continue
+        # Look for tool_result content
+        content_list = msg.get("message", {}).get("content", [])
+        if not isinstance(content_list, list):
+            continue
+        for content_item in content_list:
+            if content_item.get("type") == "tool_result":
+                result_content = content_item.get("content", "")
+                count += _count_discord_messages_in_tool_result(result_content)
+    return count
 
 
 class ClaudeCliError(Exception):
@@ -47,6 +94,153 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         self._temp_dir: Path | None = None
         self._temp_files: List[Path] = []
 
+    def _load_session_state(self) -> Dict[str, Any]:
+        """Load session state from file."""
+        if SESSION_STATE_FILE.exists():
+            try:
+                return json.loads(SESSION_STATE_FILE.read_text())
+            except (json.JSONDecodeError, IOError):
+                pass
+        return {}
+
+    def _save_session_state(self, state: Dict[str, Any]) -> None:
+        """Save session state to file."""
+        SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        SESSION_STATE_FILE.write_text(json.dumps(state, indent=2))
+
+    def _get_channel_session(self, channel_id: int) -> Dict[str, Any] | None:
+        """Get session info for a channel."""
+        state = self._load_session_state()
+        return state.get(str(channel_id))
+
+    def _create_channel_session(self, channel_id: int) -> str:
+        """Create a new session for a channel, return session_id."""
+        session_id = str(uuid.uuid4())
+        state = self._load_session_state()
+        state[str(channel_id)] = {
+            "session_id": session_id,
+            "created_at": int(time.time()),
+            "message_count": 0,
+            "total_input_tokens": 0,
+            "total_output_tokens": 0,
+            "total_cache_read_tokens": 0,
+            "total_cache_create_tokens": 0,
+        }
+        self._save_session_state(state)
+        _LOG.info("Created new session %s for channel %d", session_id, channel_id)
+        return session_id
+
+    def _update_session_stats(self, channel_id: int, usage: Dict[str, Any]) -> None:
+        """Update session stats after a run."""
+        state = self._load_session_state()
+        channel_key = str(channel_id)
+        if channel_key not in state:
+            return
+
+        state[channel_key]["message_count"] += 1
+        state[channel_key]["total_input_tokens"] += usage.get("input_tokens", 0)
+        state[channel_key]["total_output_tokens"] += usage.get("output_tokens", 0)
+        state[channel_key]["total_cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+        state[channel_key]["total_cache_create_tokens"] += usage.get("cache_creation_input_tokens", 0)
+        state[channel_key]["last_used_at"] = int(time.time())
+        self._save_session_state(state)
+
+        # Check if session needs truncation
+        self._truncate_session_if_needed(state[channel_key]["session_id"])
+
+    def _truncate_session_if_needed(self, session_id: str) -> None:
+        """Truncate session if Discord messages exceed MAX_DISCORD_MESSAGES."""
+        session_file = SESSION_DIR / f"{session_id}.jsonl"
+        if not session_file.exists():
+            return
+
+        try:
+            # Read all messages
+            messages = []
+            with open(session_file, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line:
+                        try:
+                            messages.append(json.loads(line))
+                        except json.JSONDecodeError:
+                            continue
+
+            # Count actual Discord messages (from check_messages tool results)
+            discord_msg_count = _count_discord_messages(messages)
+
+            if discord_msg_count <= MAX_DISCORD_MESSAGES:
+                return  # No truncation needed
+
+            _LOG.info(
+                "Session %s has %d Discord messages (max %d), truncating...",
+                session_id[:8], discord_msg_count, MAX_DISCORD_MESSAGES
+            )
+
+            # Find cutoff point by walking backwards and counting Discord messages
+            # We want to keep the last MAX_DISCORD_MESSAGES Discord messages
+            discord_msgs_seen = 0
+            cutoff_idx = len(messages)
+
+            for i in range(len(messages) - 1, -1, -1):
+                msg = messages[i]
+                if msg.get("type") == "user":
+                    # Count Discord messages in this tool result
+                    content_list = msg.get("message", {}).get("content", [])
+                    if isinstance(content_list, list):
+                        for content_item in content_list:
+                            if content_item.get("type") == "tool_result":
+                                result_content = content_item.get("content", "")
+                                discord_msgs_seen += _count_discord_messages_in_tool_result(result_content)
+
+                    if discord_msgs_seen >= MAX_DISCORD_MESSAGES:
+                        cutoff_idx = i
+                        break
+
+            # IMPORTANT: Make sure we don't start with a tool_result
+            # This would break the session because tool_result needs a preceding tool_use
+            while cutoff_idx < len(messages):
+                msg = messages[cutoff_idx]
+                # Check if this is a user message with tool_result content
+                if msg.get("type") == "user":
+                    content = msg.get("message", {}).get("content", [])
+                    if isinstance(content, list) and content:
+                        # If first content item is a tool_result, back up
+                        if content[0].get("type") == "tool_result":
+                            cutoff_idx += 1
+                            continue
+                break
+
+            # If we backed up too far, just keep everything
+            if cutoff_idx >= len(messages):
+                _LOG.warning("Session %s: couldn't find clean truncation point", session_id[:8])
+                return
+
+            truncated = messages[cutoff_idx:]
+            removed_count = len(messages) - len(truncated)
+
+            # Write truncated session
+            with open(session_file, "w") as f:
+                for msg in truncated:
+                    f.write(json.dumps(msg) + "\n")
+
+            _LOG.info(
+                "Truncated session %s: removed %d entries, kept %d (with %d Discord messages)",
+                session_id[:8], removed_count, len(truncated),
+                _count_discord_messages(truncated)
+            )
+
+        except Exception as e:
+            _LOG.error("Failed to truncate session %s: %s", session_id[:8], e)
+
+    def get_session_stats(self, channel_id: int) -> Dict[str, Any] | None:
+        """Get session stats for a channel (used by !context command)."""
+        return self._get_channel_session(channel_id)
+
+    def reset_channel_session(self, channel_id: int) -> str:
+        """Reset a channel's session, return new session_id."""
+        return self._create_channel_session(channel_id)
+
     def _find_cli_path(self) -> str:
         """Find the claude CLI executable."""
         # Check env var override first
@@ -68,6 +262,48 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         raise ClaudeCliError(
             "Claude CLI not found. Install it or set CLAUDE_CLI_PATH env var."
         )
+
+    def _get_recent_cli_error(self) -> str | None:
+        """Read the most recent Claude CLI debug file to extract error messages."""
+        debug_dir = Path.home() / ".claude" / "debug"
+        if not debug_dir.exists():
+            return None
+
+        try:
+            # Get most recent .txt debug file
+            debug_files = sorted(debug_dir.glob("*.txt"), key=lambda p: p.stat().st_mtime, reverse=True)
+            if not debug_files:
+                return None
+
+            # Read the most recent one and look for errors
+            content = debug_files[0].read_text(errors="replace")
+
+            # Look for OAuth errors specifically
+            if "OAuth token has expired" in content:
+                return "OAuth token has expired"
+
+            # Look for authentication errors
+            if "authentication_error" in content:
+                # Try to extract the message
+                import re
+                match = re.search(r'"message":\s*"([^"]+)"', content)
+                if match:
+                    return match.group(1)
+                return "authentication error"
+
+            # Look for any [ERROR] lines in the last few lines
+            lines = content.strip().split("\n")
+            for line in reversed(lines[-20:]):
+                if "[ERROR]" in line:
+                    # Extract just the error part
+                    if "Error:" in line:
+                        return line.split("Error:", 1)[-1].strip()[:200]
+                    return line.split("[ERROR]", 1)[-1].strip()[:200]
+
+            return None
+        except Exception as e:
+            _LOG.warning("Failed to read CLI debug files: %s", e)
+            return None
 
     def _ensure_temp_dir(self) -> Path:
         """Create temp directory for images if needed."""
@@ -231,44 +467,52 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
             return ""
 
     def _get_tool_instructions(self, channel_id: int) -> str:
-        """Get instructions for Wendy's shell tools."""
+        """Get instructions for Wendy's API tools."""
         return f"""
 
 ---
 REAL-TIME CHANNEL TOOLS (Channel ID: {channel_id})
 
 CRITICAL: You are running in HEADLESS MODE. Your final output is NOT sent to Discord.
-You MUST use ./send_message.sh to respond - this is the ONLY way users will see your messages!
+You MUST use the send_message API to respond - this is the ONLY way users will see your messages!
 
 RESPONSE EXPECTATIONS:
 - You should ALMOST ALWAYS respond. Users expect you to participate in conversation.
-- If you don't call ./send_message.sh, users see NOTHING - it looks like you ignored them.
+- If you don't call send_message, users see NOTHING - it looks like you ignored them.
 - Only skip responding if users EXPLICITLY say they don't want your input (e.g., "wendy stop", "shut up", "go away").
 - In ambiguous situations, neutral chats, or when unsure: RESPOND. Err on the side of engaging.
 - Even a brief acknowledgment ("gotcha!", "nice", "haha") is better than silence.
 
 1. SEND A MESSAGE (REQUIRED to respond):
-   ./send_message.sh {channel_id} "your message here"
-   ./send_message.sh {channel_id} "your message here" "/data/wendy/uploads/file.png"  # with attachment
+   curl -X POST http://wendy_proxy:8080/api/send_message -H "Content-Type: application/json" -d '{{"channel_id": "{channel_id}", "content": "your message here"}}'
+
+   With attachment (file must be in /data/wendy/):
+   curl -X POST http://wendy_proxy:8080/api/send_message -H "Content-Type: application/json" -d '{{"channel_id": "{channel_id}", "content": "check this out", "attachment": "/data/wendy/uploads/file.png"}}'
+
    This is the ONLY way to send messages to users. Your final output goes nowhere.
-   IMPORTANT: File attachments MUST be saved to /data/wendy/uploads/ (NOT /tmp/) to work!
 
 2. CHECK FOR NEW MESSAGES (optional, use before responding):
-   ./check_messages.sh {channel_id}
+   curl -s http://wendy_proxy:8080/api/check_messages/{channel_id}
+
    Shows the last 10 messages to see if anyone sent new messages while you were thinking.
+   Note: Always use -s flag with curl for cleaner output.
 
 WORKFLOW:
 1. Read/process the user's request
 2. Do any work needed (read files, search, etc.)
-3. ALWAYS call ./send_message.sh {channel_id} "your response" to reply (unless explicitly told not to)
+3. ALWAYS call the send_message API to reply (unless explicitly told not to)
 4. You can send multiple messages if needed
 
-IMAGES:
-When users upload images, they are saved to /data/wendy/images/ and referenced as [Image: /path/to/file.jpg].
-- You CANNOT see images without using the Read tool on the file path. The [Image: ...] tag is just a reference.
-- If someone asks about an image or you see an [Image: ...] tag, you MUST call Read on that path first.
-- Do NOT describe or comment on images you haven't actually Read - you will hallucinate.
-- Each image has a unique filename with timestamp
+LONG TASKS:
+Before doing something that might take a while (writing code, researching, reading multiple files, etc.), send a quick message to let users know. Otherwise they might think you froze or crashed. Send a quick "gimme a sec..." then do the work, then send your actual response.
+
+ATTACHMENTS:
+When users upload files (images, documents, code, etc.), the check_messages response includes an "attachments" array with file paths:
+  {{"author": "someone", "content": "look at this", "attachments": ["/data/wendy/attachments/msg_123_0_photo.jpg"]}}
+- You CANNOT see attachments without using the Read tool on the file path. The path is just a reference.
+- If a message has an "attachments" array, you MUST call Read on each path to actually see the content.
+- Do NOT describe or comment on files you haven't actually Read - you will hallucinate.
+- Always check for the "attachments" field in message JSON when users seem to be sharing something.
 
 PERSONAL FOLDER:
 You have a personal folder at /data/wendy/wendys_folder/ where you can save notes or files. This persists between conversations.
@@ -280,8 +524,8 @@ MESSAGE HISTORY DATABASE:
 You have full read access to the message history at /data/hollingsbot.db. Use query_db.py to search messages, check past conversations, or find old content. Don't wait to be asked - if someone asks about history or past messages, just query it!
 
 Usage:
-  python3 ./query_db.py "SELECT * FROM message_history WHERE content LIKE '%keyword%' LIMIT 20"
-  python3 ./query_db.py --schema    # Show all tables
+  python3 /data/wendy/query_db.py "SELECT * FROM message_history WHERE content LIKE '%keyword%' LIMIT 20"
+  python3 /data/wendy/query_db.py --schema    # Show all tables
 
 Key tables:
 - message_history: Full raw messages (message_id, channel_id, author_nickname, content, timestamp, reactions, attachment_urls)
@@ -383,6 +627,43 @@ Key tables:
 
         return summary
 
+    def _append_to_stream_log(self, event: Dict, channel_id: int | None) -> None:
+        """Append a single event to the rolling stream log file."""
+        try:
+            STREAM_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+            # Add metadata to event
+            enriched_event = {
+                "ts": int(time.time() * 1000),  # millisecond timestamp
+                "channel_id": channel_id,
+                "event": event,
+            }
+
+            # Append to file
+            with open(STREAM_LOG_FILE, "a") as f:
+                f.write(json.dumps(enriched_event) + "\n")
+
+        except Exception as e:
+            _LOG.error("Failed to append to stream log: %s", e)
+
+    def _trim_stream_log_if_needed(self) -> None:
+        """Trim stream log to MAX_STREAM_LOG_LINES if it gets too large."""
+        try:
+            if not STREAM_LOG_FILE.exists():
+                return
+
+            # Count lines
+            with open(STREAM_LOG_FILE, "r") as f:
+                lines = f.readlines()
+
+            if len(lines) > MAX_STREAM_LOG_LINES:
+                # Keep the last MAX_STREAM_LOG_LINES
+                with open(STREAM_LOG_FILE, "w") as f:
+                    f.writelines(lines[-MAX_STREAM_LOG_LINES:])
+                _LOG.info("Trimmed stream log from %d to %d lines", len(lines), MAX_STREAM_LOG_LINES)
+        except Exception as e:
+            _LOG.error("Failed to trim stream log: %s", e)
+
     async def generate(
         self,
         prompt: Union[str, Sequence[Dict[str, Any]]],
@@ -390,33 +671,41 @@ Key tables:
         channel_id: int | None = None,
         **kwargs,
     ) -> str:
-        """Generate response using Claude CLI.
+        """Generate response using Claude CLI with persistent sessions.
+
+        Uses --resume for per-channel sessions. Instead of passing conversation
+        history, sends a simple nudge for Wendy to check messages via her tools.
 
         Args:
-            prompt: Either a string or a list of message dicts
+            prompt: Ignored in resume mode - we send a simple nudge instead
             temperature: Ignored (CLI doesn't support temperature)
-            channel_id: Discord channel ID for message checking tools
+            channel_id: Discord channel ID (required for session management)
 
         Returns:
             Generated text response
         """
-        # Normalize input
-        if isinstance(prompt, str):
-            conversation = [{"role": "user", "text": prompt, "images": []}]
-        elif isinstance(prompt, Sequence):
-            conversation = list(prompt)
+        if not channel_id:
+            raise ValueError("channel_id is required for Claude CLI sessions")
+
+        # Get or create session for this channel
+        # _force_new_session is set when retrying after a stale session error
+        force_new = kwargs.get("_force_new_session", False)
+        session_info = self._get_channel_session(channel_id)
+        is_new_session = session_info is None or force_new
+
+        if is_new_session:
+            session_id = self._create_channel_session(channel_id)
         else:
-            raise TypeError("prompt must be a string or sequence of message dicts")
+            session_id = session_info["session_id"]
 
-        # Format conversation
-        system_prompt, user_prompt = self._format_conversation(conversation)
+        # Nudge prompt - must explicitly require check_messages API or Wendy may assume based on context
+        nudge_prompt = f"<new messages - you MUST call curl -s http://wendy_proxy:8080/api/check_messages/{channel_id} before any other action. Do not assume what the messages contain.>"
 
-        # Append Wendy's self-editable notes to system prompt
+        # Build system prompt (only needed for new sessions, but --append-system-prompt
+        # is idempotent so we include it always for safety)
+        system_prompt = self._get_base_system_prompt()
         system_prompt += self._get_wendys_notes()
-
-        # Add tool instructions if channel_id is provided
-        if channel_id:
-            user_prompt += self._get_tool_instructions(channel_id)
+        system_prompt += self._get_tool_instructions(channel_id)
 
         # Build CLI command
         cmd = [
@@ -424,21 +713,25 @@ Key tables:
             "-p",  # Print mode (non-interactive)
             "--output-format",
             "stream-json",
-            "--verbose",  # Required for stream-json in print mode
+            "--verbose",
             "--model",
             self.model,
         ]
 
-        # Append system prompt to keep Claude Code's default (which is cached)
-        # Using --append-system-prompt preserves the 22k token cached system prompt
+        # Resume existing session or start fresh
+        if not is_new_session:
+            cmd.extend(["--resume", session_id])
+            _LOG.info("ClaudeCLI: resuming session %s for channel %d", session_id, channel_id)
+        else:
+            # For new sessions, use the session ID we created
+            cmd.extend(["--session-id", session_id])
+            _LOG.info("ClaudeCLI: starting new session %s for channel %d", session_id, channel_id)
+
+        # Append system prompt
         if system_prompt:
             cmd.extend(["--append-system-prompt", system_prompt])
 
-        # Enable useful Claude Code tools with sandboxed permissions
-        # - Read: for reading files (unrestricted)
-        # - Write/Edit: ONLY to her personal folder and uploads
-        # - Bash: for running check_messages.sh, send_message.sh, and curl
-        # - WebSearch/WebFetch: for web access
+        # Enable tools with sandboxed permissions
         cmd.extend([
             "--allowedTools",
             "Read,WebSearch,WebFetch,Bash,Edit(//data/wendy/wendys_folder/**),Write(//data/wendy/wendys_folder/**),Write(//data/wendy/uploads/**)",
@@ -446,53 +739,125 @@ Key tables:
             "Edit(//data/wendy/*.sh),Edit(//data/wendy/*.py),Edit(//app/**),Write(//app/**)",
         ])
 
-        # Prompt will be passed via stdin to avoid shell escaping issues
         _LOG.info(
-            "ClaudeCLI: model=%s, prompt_len=%d, system_len=%d",
+            "ClaudeCLI: model=%s, session=%s, is_new=%s",
             self.model,
-            len(user_prompt),
-            len(system_prompt),
+            session_id[:8],
+            is_new_session,
         )
 
         # Wendy's working directory
         wendy_dir = Path("/data/wendy")
         wendy_dir.mkdir(parents=True, exist_ok=True)
-
-        # Ensure scripts are available in her directory
         self._setup_wendy_scripts(wendy_dir)
 
         proc = None
         try:
-            # Create env without ANTHROPIC_API_KEY so CLI uses subscription billing
-            # instead of API credits
-            cli_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+            # Filter out sensitive environment variables from Claude CLI
+            sensitive_vars = {
+                "DISCORD_TOKEN",
+                "WEBHOOK_URL",
+                "ANTHROPIC_API_KEY",
+                "OPENAI_API_KEY",
+                "REPLICATE_API_TOKEN",
+                "GITHUB_TOKEN",
+                "GH_TOKEN",
+                "WENDY_DEPLOY_TOKEN",
+            }
+            cli_env = {k: v for k, v in os.environ.items() if k not in sensitive_vars}
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                limit=10 * 1024 * 1024,  # 10MB line buffer for large CLI responses
                 cwd=wendy_dir,
                 env=cli_env,
             )
 
-            # Pass prompt via stdin
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(input=user_prompt.encode("utf-8")),
-                timeout=self.timeout,
-            )
+            # Write input to stdin and close it
+            proc.stdin.write(nudge_prompt.encode("utf-8"))
+            await proc.stdin.drain()
+            proc.stdin.close()
+            await proc.stdin.wait_closed()
+
+            # Read stdout line-by-line in real-time, streaming to log
+            events = []
+            result_text = ""
+            usage = {}
+
+            async def read_stream_with_timeout():
+                nonlocal result_text, usage
+                async for line in proc.stdout:
+                    line = line.decode("utf-8").strip()
+                    if not line:
+                        continue
+                    try:
+                        event = json.loads(line)
+                        events.append(event)
+
+                        # Stream to rolling log file in real-time
+                        self._append_to_stream_log(event, channel_id)
+
+                        # Extract result from final event
+                        if event.get("type") == "result":
+                            result_text = event.get("result", "")
+                            usage = event.get("usage", {})
+
+                    except json.JSONDecodeError as e:
+                        _LOG.warning("Failed to parse stream-json line: %s", e)
+                        continue
+
+            try:
+                await asyncio.wait_for(read_stream_with_timeout(), timeout=self.timeout)
+            except asyncio.TimeoutError:
+                _LOG.error("Claude CLI stdout read timed out after %ds", self.timeout)
+                raise
+
+            # Wait for process to complete
+            await proc.wait()
+
+            # Read any stderr
+            stderr_data = await proc.stderr.read()
+            stderr_text = stderr_data.decode("utf-8", errors="replace") if stderr_data else ""
 
             if proc.returncode != 0:
-                error_msg = stderr.decode("utf-8", errors="replace")
-                _LOG.error("Claude CLI failed: %s", error_msg)
+                _LOG.error("Claude CLI failed: %s", stderr_text)
+                # If resume failed, try creating a fresh session and retry
+                # Check for various session-related error messages
+                session_error = (
+                    "--resume" in cmd and (
+                        "session" in stderr_text.lower() or
+                        "no conversation found" in stderr_text.lower() or
+                        not stderr_text.strip()  # Empty stderr often means session not found
+                    )
+                )
+                if session_error and not kwargs.get("_force_new_session"):
+                    _LOG.warning("Session resume failed, retrying with fresh session for channel %d", channel_id)
+                    # Retry with fresh session (flag prevents infinite loop and forces --session-id)
+                    return await self.generate(prompt, temperature, channel_id, _force_new_session=True, **kwargs)
+
+                # If stderr is empty, check Claude's debug files for the real error
+                error_detail = stderr_text
+                if not stderr_text.strip():
+                    error_detail = self._get_recent_cli_error() or "unknown error"
+
                 raise ClaudeCliError(
-                    f"CLI failed (code {proc.returncode}): {error_msg}"
+                    f"CLI failed (code {proc.returncode}): {error_detail}"
                 )
 
-            output = stdout.decode("utf-8")
-            result = self._parse_stream_json(output, channel_id)
-            _LOG.info("ClaudeCLI: response_len=%d", len(result))
-            return result
+            # Save debug log (legacy format) and trim stream log
+            self._save_debug_log(events, channel_id)
+            self._trim_stream_log_if_needed()
+
+            # Update session stats
+            if usage:
+                self._update_session_stats(channel_id, usage)
+
+            _LOG.info("ClaudeCLI: response_len=%d, events_streamed=%d", len(result_text), len(events))
+            # Don't return the text output - Wendy's responses go through send_message API
+            return ""
 
         except asyncio.TimeoutError as e:
             _LOG.error("Claude CLI timed out after %ds", self.timeout)
@@ -504,3 +869,38 @@ Key tables:
             raise ClaudeCliError(f"Timed out after {self.timeout}s") from e
         finally:
             self._cleanup_temp_files()
+
+    def _get_base_system_prompt(self) -> str:
+        """Get the base system prompt for Wendy."""
+        # Load from file if configured
+        system_prompt_file = os.getenv("SYSTEM_PROMPT_FILE", "/app/config/system_prompt.txt")
+        if Path(system_prompt_file).exists():
+            try:
+                return Path(system_prompt_file).read_text().strip()
+            except Exception as e:
+                _LOG.warning("Failed to read system prompt file: %s", e)
+        return ""
+
+    def _parse_stream_json_with_usage(self, output: str, channel_id: int | None = None) -> tuple[str, Dict[str, Any]]:
+        """Parse stream-json output and return (result_text, usage_dict)."""
+        events = []
+        result_text = ""
+        usage = {}
+
+        for line in output.strip().split("\n"):
+            if not line.strip():
+                continue
+            try:
+                event = json.loads(line)
+                events.append(event)
+
+                if event.get("type") == "result":
+                    result_text = event.get("result", "")
+                    usage = event.get("usage", {})
+
+            except json.JSONDecodeError as e:
+                _LOG.warning("Failed to parse stream-json line: %s", e)
+                continue
+
+        self._save_debug_log(events, channel_id)
+        return result_text, usage

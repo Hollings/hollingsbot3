@@ -70,6 +70,52 @@ class General(commands.Cog):
         await wendy.handle_model_command(ctx, provider, model_name)
 
     @commands.command()
+    async def context(self, ctx: commands.Context) -> None:
+        """Show Wendy's session stats for this channel.
+
+        Displays token usage, message count, and session info.
+        """
+        coordinator = self.bot.get_cog("ChatCoordinator")
+        if not coordinator:
+            await ctx.send("ChatCoordinator not loaded")
+            return
+
+        wendy = None
+        for bot_instance in coordinator.bots:
+            if bot_instance.__class__.__name__ == "WendyBot":
+                wendy = bot_instance
+                break
+
+        if not wendy:
+            await ctx.send("WendyBot not found")
+            return
+
+        await wendy.handle_context_command(ctx)
+
+    @commands.command()
+    async def wreset(self, ctx: commands.Context) -> None:
+        """Reset Wendy's session for this channel.
+
+        Starts a fresh conversation session, clearing accumulated context.
+        """
+        coordinator = self.bot.get_cog("ChatCoordinator")
+        if not coordinator:
+            await ctx.send("ChatCoordinator not loaded")
+            return
+
+        wendy = None
+        for bot_instance in coordinator.bots:
+            if bot_instance.__class__.__name__ == "WendyBot":
+                wendy = bot_instance
+                break
+
+        if not wendy:
+            await ctx.send("WendyBot not found")
+            return
+
+        await wendy.handle_reset_session_command(ctx)
+
+    @commands.command()
     async def tokens(self, ctx: commands.Context) -> None:
         """Show token leaderboard."""
         from hollingsbot.prompt_db import get_token_leaderboard, get_user_token_balance
@@ -93,6 +139,34 @@ class General(commands.Cog):
 
         import discord
         await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
+
+    @commands.command()
+    async def repair(self, ctx: commands.Context) -> None:
+        """Emergency repair for when Wendy stops responding.
+
+        Runs Claude Code to investigate and fix critical issues.
+        Only for crashes/failures - not for minor bugs.
+        """
+        from hollingsbot.tasks import repair_wendy
+
+        await ctx.send("Starting emergency repair... (this may take a few minutes)")
+        _log.info("Repair command invoked by %s for channel %d", ctx.author, ctx.channel.id)
+
+        try:
+            # Run the repair task
+            result = repair_wendy.delay(ctx.channel.id)
+            # Wait for result with timeout
+            task_result = result.get(timeout=360)  # 6 min timeout
+
+            if task_result.get("success"):
+                await ctx.send("Repair completed. Check Wendy's message for details.")
+            else:
+                error = task_result.get("error", "Unknown error")
+                await ctx.send(f"Repair failed: {error}")
+
+        except Exception as e:
+            _log.exception("Repair command failed")
+            await ctx.send(f"Repair failed: {e}")
 
     @commands.command(name="help")
     async def help_cmd(self, ctx: commands.Context) -> None:

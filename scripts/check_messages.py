@@ -14,10 +14,55 @@ from pathlib import Path
 
 # Default database path
 DB_PATH = os.getenv("PROMPT_DB_PATH", "/data/hollingsbot.db")
+STATE_FILE = Path("/data/wendy/message_check_state.json")
+
+
+def get_last_seen(channel_id: int) -> int | None:
+    """Get the last seen message_id for a channel."""
+    if not STATE_FILE.exists():
+        return None
+    try:
+        state = json.loads(STATE_FILE.read_text())
+        return state.get("last_seen", {}).get(str(channel_id))
+    except (json.JSONDecodeError, IOError):
+        return None
+
+
+def update_last_seen(channel_id: int, message_id: int) -> None:
+    """Update the last seen message_id for a channel."""
+    state = {}
+    if STATE_FILE.exists():
+        try:
+            state = json.loads(STATE_FILE.read_text())
+        except (json.JSONDecodeError, IOError):
+            state = {}
+
+    if "last_seen" not in state:
+        state["last_seen"] = {}
+
+    state["last_seen"][str(channel_id)] = message_id
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    STATE_FILE.write_text(json.dumps(state, indent=2))
+
+
+def find_attachments_for_message(message_id: int) -> list[str]:
+    """Find attachment files for a message ID.
+
+    Looks in /data/wendy/attachments/ for files named: msg_{id}_{idx}_{filename}
+    """
+    attachments_dir = Path("/data/wendy/attachments")
+    if not attachments_dir.exists():
+        return []
+
+    matching = []
+    for att_file in attachments_dir.glob(f"msg_{message_id}_*"):
+        matching.append(str(att_file))
+
+    return sorted(matching)
 
 
 def get_recent_messages(channel_id: int, since_id: int | None = None, limit: int = 10) -> list[dict]:
-    """Fetch recent messages from the cached_messages table."""
+    """Fetch recent messages from the cached_messages table, with local image paths."""
     db_path = Path(DB_PATH)
     if not db_path.exists():
         return []
@@ -27,21 +72,29 @@ def get_recent_messages(channel_id: int, since_id: int | None = None, limit: int
 
     try:
         if since_id:
-            # Get messages newer than since_id
+            # Get messages newer than since_id (excluding Wendy's own messages and commands)
             query = """
-                SELECT message_id, channel_id, author_name, content, timestamp
+                SELECT message_id, channel_id, author_name, content, timestamp, has_images
                 FROM cached_messages
                 WHERE channel_id = ? AND message_id > ?
+                AND LOWER(author_name) NOT LIKE '%wendy%'
+                AND LOWER(author_name) NOT LIKE '%hollingsbot%'
+                AND content NOT LIKE '!spawn%'
+                AND content NOT LIKE '-%'
                 ORDER BY message_id DESC
                 LIMIT ?
             """
             rows = conn.execute(query, (channel_id, since_id, limit)).fetchall()
         else:
-            # Get last N messages
+            # Get last N messages (excluding Wendy's own messages and commands)
             query = """
-                SELECT message_id, channel_id, author_name, content, timestamp
+                SELECT message_id, channel_id, author_name, content, timestamp, has_images
                 FROM cached_messages
                 WHERE channel_id = ?
+                AND LOWER(author_name) NOT LIKE '%wendy%'
+                AND LOWER(author_name) NOT LIKE '%hollingsbot%'
+                AND content NOT LIKE '!spawn%'
+                AND content NOT LIKE '-%'
                 ORDER BY message_id DESC
                 LIMIT ?
             """
@@ -49,12 +102,17 @@ def get_recent_messages(channel_id: int, since_id: int | None = None, limit: int
 
         messages = []
         for row in rows:
-            messages.append({
+            msg = {
                 "message_id": row["message_id"],
                 "author": row["author_name"],
-                "content": row["content"][:500],  # Truncate long messages
+                "content": row["content"],
                 "timestamp": row["timestamp"],
-            })
+            }
+            # Find local attachment files for this message
+            attachments = find_attachments_for_message(row["message_id"])
+            if attachments:
+                msg["attachments"] = attachments
+            messages.append(msg)
 
         # Return in chronological order (oldest first)
         return list(reversed(messages))
@@ -68,11 +126,22 @@ def main():
     parser.add_argument("channel_id", type=int, help="Discord channel ID")
     parser.add_argument("--since", type=int, help="Only messages after this message ID")
     parser.add_argument("--limit", type=int, default=10, help="Max messages to return")
+    parser.add_argument("--all", action="store_true", help="Get all recent messages ignoring last_seen")
 
     args = parser.parse_args()
 
-    messages = get_recent_messages(args.channel_id, args.since, args.limit)
+    # Use stored last_seen if no --since provided (unless --all flag)
+    since_id = args.since
+    if since_id is None and not args.all:
+        since_id = get_last_seen(args.channel_id)
+
+    messages = get_recent_messages(args.channel_id, since_id, args.limit)
     print(json.dumps(messages, indent=2))
+
+    # Update last_seen with the newest message_id
+    if messages:
+        newest_id = max(m["message_id"] for m in messages)
+        update_last_seen(args.channel_id, newest_id)
 
 
 if __name__ == "__main__":
