@@ -129,7 +129,7 @@ def bytes_list_to_data_urls(images: list[bytes]) -> list[str]:
     return [bytes_to_data_url(img) for img in images]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class GeneratorSpec:
     """Configuration for a specific image generator."""
 
@@ -140,6 +140,7 @@ class GeneratorSpec:
     quality: str = "medium"  # For OpenAI: "low", "medium", "high"
     aspect_ratio: str | None = None  # For OpenAI: "1:1", "3:2", "2:3", etc.
     default_prompt: str | None = None  # Default prompt if user provides none
+    model_options: dict | None = None  # Extra model-specific options (go_fast, safety_tolerance, etc.)
 
 
 # ============================================================================
@@ -231,11 +232,17 @@ class ImageGenCog(commands.Cog):
 
         # Build prefix map, excluding non-prefix keys
         self._prefix_map = {}
+        known_keys = {"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"}
         for key, spec in raw_cfg.items():
             if key in ("daily_free_budget", "default_price_per_image"):
                 continue
             if isinstance(spec, dict):
-                self._prefix_map[key.strip()] = GeneratorSpec(**spec)
+                # Separate known GeneratorSpec fields from extra model options
+                spec_kwargs = {k: v for k, v in spec.items() if k in known_keys}
+                extra_opts = {k: v for k, v in spec.items() if k not in known_keys}
+                if extra_opts:
+                    spec_kwargs["model_options"] = extra_opts
+                self._prefix_map[key.strip()] = GeneratorSpec(**spec_kwargs)
 
         # Update cost tracker with new budget
         if hasattr(self, "_cost_tracker"):
@@ -289,6 +296,7 @@ class ImageGenCog(commands.Cog):
         output_format: str | None = None,
         quality: str = "medium",
         aspect_ratio: str | None = None,
+        model_options: dict | None = None,
         poll_interval: float = _DEFAULT_CELERY_POLL_INTERVAL,
     ) -> str | list[str]:
         """
@@ -305,6 +313,7 @@ class ImageGenCog(commands.Cog):
             output_format: Desired output format
             quality: Quality level for OpenAI ('low', 'medium', 'high')
             aspect_ratio: Aspect ratio for OpenAI ('1:1', '3:2', '2:3', etc.)
+            model_options: Extra model-specific options
             poll_interval: Seconds between result checks
 
         Returns:
@@ -322,6 +331,7 @@ class ImageGenCog(commands.Cog):
                 "output_format": output_format,
                 "quality": quality,
                 "aspect_ratio": aspect_ratio,
+                "model_options": model_options,
             },
             queue="image",
         )
@@ -513,30 +523,27 @@ class ImageGenCog(commands.Cog):
             prompt: The image generation prompt
 
         Returns:
-            Aspect ratio string: "1:1", "2:3", or "3:2" (defaults to "3:2" on error)
+            Aspect ratio string (defaults to "3:2" on error)
         """
-        valid_ratios = {"1:1", "2:3", "3:2"}
+        valid_ratios = {"1:1", "2:3", "3:2", "16:9", "9:16"}
         default_ratio = "3:2"
 
         try:
-            generator = get_text_generator("anthropic", "claude-opus-4-5")
+            generator = get_text_generator("anthropic", "claude-haiku-4-5")
 
             messages = [
                 {
                     "role": "user",
                     "content": (
-                        f"You are helping select the optimal aspect ratio for an AI image generation. "
-                        f"Consider the following factors:\n\n"
-                        f"- Subject size and orientation (tall subjects like people/buildings suit portrait, wide scenes suit landscape)\n"
-                        f"- Artistic intent and composition (centered subjects may suit square, dynamic scenes may need width)\n"
-                        f"- Context and environment (landscapes, horizons, and vistas suit wide; portraits and vertical subjects suit tall)\n"
-                        f"- Visual balance and framing\n\n"
-                        f"Available aspect ratios:\n"
-                        f"- 1:1 = square (balanced, centered compositions, profile pictures, symmetrical subjects)\n"
-                        f"- 2:3 = portrait/tall (people, buildings, standing figures, vertical subjects)\n"
-                        f"- 3:2 = landscape/wide (scenery, groups, action scenes, horizontal subjects)\n\n"
-                        f"Image prompt: {prompt}\n\n"
-                        f"Reply with one sentence explaining your reasoning, then the aspect ratio (1:1, 2:3, or 3:2)."
+                        f"Select the optimal aspect ratio for this AI image generation prompt.\n\n"
+                        f"Available ratios:\n"
+                        f"- 1:1 = square (centered compositions, profile pics, symmetrical)\n"
+                        f"- 2:3 = portrait/tall (people, buildings, standing figures)\n"
+                        f"- 3:2 = landscape/wide (scenery, groups, horizontal subjects)\n"
+                        f"- 16:9 = ultrawide cinematic (panoramas, epic vistas)\n"
+                        f"- 9:16 = vertical/phone (TikTok, tall narrow scenes)\n\n"
+                        f"Prompt: {prompt}\n\n"
+                        f"Reply with ONLY the ratio. Nothing else."
                     ),
                 }
             ]
@@ -777,6 +784,7 @@ class ImageGenCog(commands.Cog):
                     output_format="png" if use_png_format else None,
                     quality=spec.quality,
                     aspect_ratio=aspect_ratio,
+                    model_options=spec.model_options,
                 )
 
                 # Convert result to bytes
@@ -1015,10 +1023,15 @@ class ImageGenCog(commands.Cog):
             spec.model,
         )
 
-        # For gpt-image models (non-edit), get dynamic aspect ratio from Claude
+        # For models that support aspect ratio (non-edit), get dynamic aspect ratio from Claude
         aspect_ratio_override: str | None = None
-        is_gpt_image = "gpt-image" in spec.model.lower()
-        if is_gpt_image and not (do_edit or do_outpaint):
+        model_lower = spec.model.lower()
+        supports_dynamic_aspect = (
+            "gpt-image" in model_lower or
+            "black-forest-labs/" in model_lower or
+            "flux" in model_lower
+        )
+        if supports_dynamic_aspect and not (do_edit or do_outpaint):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
             aspect_ratio_override = await self._get_aspect_ratio_for_prompt(prompts[0])
 

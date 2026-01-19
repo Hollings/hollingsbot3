@@ -64,6 +64,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     model: str = "black-forest-labs/flux-schnell"
     quality: str = "auto"  # For gpt-image models: low, medium, high, auto
     aspect_ratio: str | None = None  # For gpt-image models: 1:1, 3:2, 2:3, 16:9, 9:16, etc.
+    model_options: dict | None = None  # Extra model-specific options (go_fast, safety_tolerance, etc.)
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
 
     def __post_init__(self) -> None:
@@ -117,6 +118,10 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         """
         try:
             inputs: dict[str, Any] = {"prompt": prompt}
+
+            # Apply model-specific options from config
+            if self.model_options:
+                inputs.update(self.model_options)
 
             # Handle gpt-image models specially
             if self._is_gpt_image():
@@ -192,13 +197,16 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 finally:
                     self._cleanup_files(cleanup)
             else:
-                if self._supports_disable_safety():
+                if self._supports_disable_safety() and "disable_safety_checker" not in inputs:
                     inputs["disable_safety_checker"] = True
                 # For Seedream default to up to 4 images when sequential generation is auto
                 if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
                     inputs["max_images"] = 4
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
+                # Pass aspect_ratio for models that support it (FLUX, etc.)
+                if self.aspect_ratio and "aspect_ratio" not in inputs:
+                    inputs["aspect_ratio"] = self.aspect_ratio
                 self._log.info(
                     "Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys())
                 )
@@ -324,6 +332,10 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         """
         inputs: dict[str, Any] = {"prompt": prompt}
 
+        # Apply model-specific options from config
+        if self.model_options:
+            inputs.update(self.model_options)
+
         # Handle gpt-image models specially
         if self._is_gpt_image():
             inputs["quality"] = self.quality
@@ -399,12 +411,15 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             finally:
                 self._cleanup_files(cleanup)
         else:
-            if self._supports_disable_safety():
+            if self._supports_disable_safety() and "disable_safety_checker" not in inputs:
                 inputs["disable_safety_checker"] = True
             if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
                 inputs.setdefault("max_images", 4)
             if seed is not None and self._supports_seed():
                 inputs["seed"] = seed
+            # Pass aspect_ratio for models that support it (FLUX, etc.)
+            if self.aspect_ratio and "aspect_ratio" not in inputs:
+                inputs["aspect_ratio"] = self.aspect_ratio
             self._log.info(
                 "Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys())
             )

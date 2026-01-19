@@ -5,9 +5,9 @@ WORKDIR /app
 # Make src importable everywhere (bot, celery)
 ENV PYTHONPATH=/app/src:/app
 
-# System deps for CairoSVG rendering + basic fonts
+# System deps for CairoSVG rendering, OCR, and basic fonts
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libcairo2 libpangocairo-1.0-0 fonts-dejavu-core \
+    libcairo2 libpangocairo-1.0-0 fonts-dejavu-core tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Install Docker CLI and Compose plugin so the bot can control Docker when the socket is mounted

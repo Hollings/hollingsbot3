@@ -64,10 +64,11 @@ async def main():
         if enable_starboard not in {"0", "false", "False"}:
             await _ensure_loaded("hollingsbot.cogs.starboard")
         await _ensure_loaded("hollingsbot.cogs.chat_coordinator")
-        await _ensure_loaded("hollingsbot.cogs.wendy_outbox")
+        # await _ensure_loaded("hollingsbot.cogs.wendy_outbox")  # Moved to wendy-bot service
         await _ensure_loaded("hollingsbot.cogs.temp_bot_commands")
         await _ensure_loaded("hollingsbot.cogs.debug_commands")
         await _ensure_loaded("hollingsbot.cogs.feature_requests")
+        await _ensure_loaded("hollingsbot.cogs.best_bot_posts")
         logger.info("starting bot")
         await bot.start(token)
 

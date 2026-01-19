@@ -1,0 +1,10 @@
+generated/
+data/
+*.db
+*.db-journal
+__pycache__/
+*.pyc
+.git/
+.env
+*.tar.gz
+*.zip

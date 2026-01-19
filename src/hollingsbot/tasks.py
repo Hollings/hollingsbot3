@@ -51,6 +51,7 @@ def generate_image(  # noqa: C901
     output_format: str | None = None,
     quality: str = "medium",
     aspect_ratio: str | None = None,
+    model_options: dict | None = None,  # Extra model-specific options
     # Existing kwarg
     timeout: float = float(os.getenv("IMAGE_TIMEOUT", "30.0")),
 ) -> str | list[str]:
@@ -73,7 +74,7 @@ def generate_image(  # noqa: C901
     )
     update_status(prompt_id, "started")
 
-    generator = get_image_generator(api, model, quality=quality, aspect_ratio=aspect_ratio)
+    generator = get_image_generator(api, model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options)
     gen_sig = signature(generator.generate)
     gen_many = getattr(generator, "generate_many", None)
     gen_many_sig = signature(gen_many) if callable(gen_many) else None

@@ -8,8 +8,9 @@
   },
   "$": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
-    "quality": "low",
+    "model": "black-forest-labs/flux-2-klein-9b-base",
+    "go_fast": true,
+    "disable_safety_checker": true,
     "price_per_image": 0.02
   },
   "$$": {
@@ -19,9 +20,10 @@
   },
   "$$$": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
-    "quality": "high",
-    "price_per_image": 0.15
+    "model": "black-forest-labs/flux-2-max",
+    "safety_tolerance": 5,
+    "resolution": "2 MP",
+    "price_per_image": 0.08
   },
   "$$$$": {
     "api": "replicate",

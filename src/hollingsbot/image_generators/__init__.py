@@ -24,6 +24,7 @@ def get_image_generator(
     *,
     quality: str = "auto",
     aspect_ratio: str | None = None,
+    model_options: dict | None = None,
 ) -> ImageGeneratorAPI:
     """Return an appropriate image generator instance for the given API.
 
@@ -32,12 +33,13 @@ def get_image_generator(
         model: Model identifier
         quality: Quality level for gpt-image models ('low', 'medium', 'high', 'auto')
         aspect_ratio: Aspect ratio for gpt-image models ('1:1', '3:2', '2:3', etc.)
+        model_options: Extra model-specific options (go_fast, safety_tolerance, etc.)
 
     Returns:
         ImageGeneratorAPI instance
     """
     if api == "replicate":
-        return ReplicateImageGenerator(model=model, quality=quality, aspect_ratio=aspect_ratio)
+        return ReplicateImageGenerator(model=model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options)
     if api in ("svg", "openai-svg"):
         return SvgGPTImageGenerator(model)
     raise ValueError(f"Unknown API: {api}")
