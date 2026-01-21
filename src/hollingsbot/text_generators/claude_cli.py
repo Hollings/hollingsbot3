@@ -514,6 +514,17 @@ When users upload files (images, documents, code, etc.), the check_messages resp
 - Do NOT describe or comment on files you haven't actually Read - you will hallucinate.
 - Always check for the "attachments" field in message JSON when users seem to be sharing something.
 
+SENDING FILES TO DISCORD:
+To upload/share a file with users, you MUST:
+1. First WRITE the file to /data/wendy/uploads/ using the Write tool (this is the ONLY directory you can upload from)
+2. Then use send_message API with the "attachment" field pointing to that file
+
+Example workflow to share a GIF:
+  1. Write the file: Use Write tool to save to /data/wendy/uploads/my_image.gif
+  2. Send it: curl -X POST ... -d '{{"channel_id": "...", "attachment": "/data/wendy/uploads/my_image.gif"}}'
+
+IMPORTANT: You can ONLY write to /data/wendy/wendys_folder/** and /data/wendy/uploads/**. Any other path will fail.
+
 PERSONAL FOLDER:
 You have a personal folder at /data/wendy/wendys_folder/ where you can save notes or files. This persists between conversations.
 
@@ -734,9 +745,9 @@ Key tables:
         # Enable tools with sandboxed permissions
         cmd.extend([
             "--allowedTools",
-            "Read,WebSearch,WebFetch,Bash,Edit(//data/wendy/wendys_folder/**),Write(//data/wendy/wendys_folder/**),Write(//data/wendy/uploads/**)",
+            "Read,WebSearch,WebFetch,Bash,Edit(/data/wendy/wendys_folder/**),Write(/data/wendy/wendys_folder/**),Write(/data/wendy/uploads/**)",
             "--disallowedTools",
-            "Edit(//data/wendy/*.sh),Edit(//data/wendy/*.py),Edit(//app/**),Write(//app/**)",
+            "Edit(/data/wendy/*.sh),Edit(/data/wendy/*.py),Edit(/app/**),Write(/app/**)",
         ])
 
         _LOG.info(

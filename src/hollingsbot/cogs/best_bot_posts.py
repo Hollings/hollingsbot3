@@ -102,8 +102,6 @@ def _get_random_pair():
     total = len(all_posts)
 
     # Define percentile thresholds
-    FRESH_PERCENTILE = 0.10      # Bottom 10% by matches
-    ESTABLISHED_PERCENTILE = 0.25  # Top 25% by matches
     HIGH_RATING_PERCENTILE = 0.20  # Top 20% by rating
     LOW_RATING_PERCENTILE = 0.20   # Bottom 20% by rating
 
@@ -113,9 +111,6 @@ def _get_random_pair():
 
     # Fresh = unrated posts (0 matches)
     fresh_posts = unrated_posts
-
-    # Established = rated posts with 3+ matches (experienced)
-    established_posts = [p for p in rated_posts if p['total_matches'] >= 3]
 
     # High/Low pools only from rated posts (skip unrated)
     if rated_posts:
@@ -130,13 +125,11 @@ def _get_random_pair():
     # Build strategies only for pools that have enough posts
     strategies = []
     if len(fresh_posts) >= 2:
-        strategies.append(('fresh_vs_fresh', 30))
-    if fresh_posts and len(established_posts) >= 1:
-        strategies.append(('fresh_vs_established', 30))
+        strategies.append(('fresh_vs_fresh', 40))
     if len(high_posts) >= 2:
-        strategies.append(('high_vs_high', 20))
+        strategies.append(('high_vs_high', 30))
     if len(low_posts) >= 2:
-        strategies.append(('low_vs_low', 20))
+        strategies.append(('low_vs_low', 30))
 
     # Fallback if no strategies available
     if not strategies:
@@ -157,16 +150,8 @@ def _get_random_pair():
     def pick_two(pool):
         return random.sample(list(pool), 2)
 
-    def pick_one_each(pool_a, pool_b):
-        a = random.choice(list(pool_a))
-        pool_b_filtered = [p for p in pool_b if p['id'] != a['id']]
-        b = random.choice(pool_b_filtered)
-        return [a, b]
-
     if chosen_strategy == 'fresh_vs_fresh':
         return pick_two(fresh_posts)
-    elif chosen_strategy == 'fresh_vs_established':
-        return pick_one_each(fresh_posts, established_posts)
     elif chosen_strategy == 'high_vs_high':
         return pick_two(high_posts)
     elif chosen_strategy == 'low_vs_low':

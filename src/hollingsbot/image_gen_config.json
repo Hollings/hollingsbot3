@@ -8,9 +8,8 @@
   },
   "$": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-2-klein-9b-base",
-    "go_fast": true,
-    "disable_safety_checker": true,
+    "model": "openai/gpt-image-1.5",
+    "quality": "low",
     "price_per_image": 0.02
   },
   "$$": {

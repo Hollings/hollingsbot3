@@ -22,6 +22,7 @@ from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
 from hollingsbot.cogs.typing_tracker import TypingTracker
 from hollingsbot.utils.discord_utils import get_display_name
+from hollingsbot.prompt_db import add_message_to_history
 
 # Summarization imports
 from hollingsbot.summarization import (
@@ -289,6 +290,24 @@ class ChatCoordinator(commands.Cog):
                         f"content_preview={turn.content[:80]}..."
                     )
 
+                    # Save to message_history table for archival
+                    try:
+                        add_message_to_history(
+                            message_id=message.id,
+                            channel_id=channel_id,
+                            timestamp=message.created_at.isoformat(),
+                            author_id=message.author.id,
+                            content=turn.content,
+                            guild_id=message.guild.id if message.guild else None,
+                            author_nickname=turn.author_name,
+                            is_bot=message.author.bot,
+                            is_webhook=message.webhook_id is not None,
+                            attachment_urls=[att.url for att in message.attachments],
+                            reply_to_id=message.reference.message_id if message.reference else None,
+                        )
+                    except Exception as e:
+                        _LOG.exception(f"Failed to save message {message.id} to history: {e}")
+
                     # Cache message for summarization and trigger background summarization
                     if self.summary_enabled and self.summary_cache:
                         self._cache_message_for_summary(turn, channel_id)
@@ -457,6 +476,24 @@ class ChatCoordinator(commands.Cog):
                     f"Added bot response to history: bot={bot_name}, "
                     f"message_id={message_id}, text={text[:80]}..."
                 )
+
+                # Save to message_history table for archival
+                try:
+                    channel = self.bot.get_channel(channel_id)
+                    guild_id = channel.guild.id if channel and channel.guild else None
+                    add_message_to_history(
+                        message_id=message_id,
+                        channel_id=channel_id,
+                        timestamp=discord.utils.snowflake_time(message_id).isoformat(),
+                        author_id=self.bot.user.id if not webhook_id else webhook_id,
+                        content=text,
+                        guild_id=guild_id,
+                        author_nickname=bot_name,
+                        is_bot=True,
+                        is_webhook=webhook_id is not None,
+                    )
+                except Exception as e:
+                    _LOG.exception(f"Failed to save bot response {message_id} to history: {e}")
 
                 # Cache for summarization and trigger background summarization
                 if self.summary_enabled and self.summary_cache:
@@ -652,21 +689,21 @@ async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(coordinator)
 
     # Import and register bots
-    from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot
+    # from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot  # Moved to wendy-bot service
     from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
     from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
     from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
 
     # Initialize bots with typing tracker
-    wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)
+    # wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)  # Moved to wendy-bot service
     temp_bot_manager = TempBotManager(bot, coordinator, coordinator.typing_tracker)
     grok = GrokBot(bot, coordinator, coordinator.typing_tracker)
     llama = LlamaBot(bot, coordinator, coordinator.typing_tracker)
     gemini = GeminiBot(bot, coordinator, coordinator.typing_tracker)
 
     # Register with coordinator
-    coordinator.register_bot(wendy)
+    # coordinator.register_bot(wendy)  # Moved to wendy-bot service
     coordinator.register_bot(temp_bot_manager)
     coordinator.register_bot(grok)
     coordinator.register_bot(llama)
