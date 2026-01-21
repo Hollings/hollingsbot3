@@ -514,7 +514,7 @@ class BestBotPosts(commands.Cog):
             _LOG.warning(f"Image not found: {e}")
             return
 
-        msg_text = f"**A: {post_a['name']}** ({post_a['rating']})\n**B: {post_b['name']}** ({post_b['rating']})"
+        msg_text = f"**A: {post_a['name']}** (||`{post_a['rating']:4d}`||)\n**B: {post_b['name']}** (||`{post_b['rating']:4d}`||)"
         msg = await channel.send(content=msg_text, file=discord.File(fp=img_buf, filename="matchup.png"))
         await msg.add_reaction("\U0001f170")
         await msg.add_reaction("\U0001f171")
