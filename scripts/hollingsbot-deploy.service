@@ -1,0 +1,9 @@
+[Unit]
+Description=Hollingsbot auto-deploy check
+After=network.target docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/jhol/hollingsbot3
+ExecStart=/home/jhol/hollingsbot3/scripts/auto_deploy.sh
+User=jhol
