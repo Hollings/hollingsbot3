@@ -63,6 +63,7 @@ async def main():
         enable_starboard = os.getenv("ENABLE_STARBOARD", "0")
         if enable_starboard not in {"0", "false", "False"}:
             await _ensure_loaded("hollingsbot.cogs.starboard")
+        await _ensure_loaded("hollingsbot.cogs.auto_pin")
         await _ensure_loaded("hollingsbot.cogs.chat_coordinator")
         # await _ensure_loaded("hollingsbot.cogs.wendy_outbox")  # Moved to wendy-bot service
         await _ensure_loaded("hollingsbot.cogs.temp_bot_commands")
