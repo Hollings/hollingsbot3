@@ -70,17 +70,19 @@ class AutoPin(commands.Cog):
             return None
 
     async def _count_pin_reactions(self, message: discord.Message) -> int:
-        """Count the number of 📌 reactions on a message.
+        """Count the number of 📌 reactions on a message from non-bot users.
 
         Args:
             message: The message to check
 
         Returns:
-            Number of 📌 reactions
+            Number of 📌 reactions from non-bot users
         """
         for reaction in message.reactions:
             if str(reaction.emoji) == PIN_EMOJI:
-                return reaction.count
+                # Get users who reacted and filter out bots
+                users = [user async for user in reaction.users() if not user.bot]
+                return len(users)
         return 0
 
     async def _pin_message(self, message: discord.Message) -> bool:
