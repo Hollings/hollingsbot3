@@ -147,15 +147,27 @@ def _get_random_pair():
             break
 
     # Select pair based on strategy
-    def pick_two(pool):
+    def pick_two_random(pool):
         return random.sample(list(pool), 2)
 
+    def pick_two_closest(pool):
+        """Pick two posts with minimal rating difference."""
+        pool_list = list(pool)
+        # Pick first post randomly
+        first = random.choice(pool_list)
+        # Find closest match by rating
+        remaining = [p for p in pool_list if p['id'] != first['id']]
+        if not remaining:
+            return [first]
+        closest = min(remaining, key=lambda p: abs(p['rating'] - first['rating']))
+        return [first, closest]
+
     if chosen_strategy == 'fresh_vs_fresh':
-        return pick_two(fresh_posts)
+        return pick_two_random(fresh_posts)
     elif chosen_strategy == 'high_vs_high':
-        return pick_two(high_posts)
+        return pick_two_closest(high_posts)
     elif chosen_strategy == 'low_vs_low':
-        return pick_two(low_posts)
+        return pick_two_closest(low_posts)
 
     return random.sample(list(all_posts), 2)
 
