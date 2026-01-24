@@ -102,8 +102,8 @@ def _get_random_pair():
     total = len(all_posts)
 
     # Define percentile thresholds
-    HIGH_RATING_PERCENTILE = 0.20  # Top 20% by rating
-    LOW_RATING_PERCENTILE = 0.20   # Bottom 20% by rating
+    HIGH_RATING_PERCENTILE = 0.49  # Top 49% by rating
+    LOW_RATING_PERCENTILE = 0.49   # Bottom 49% by rating
 
     # Separate rated (1+ matches) from unrated posts
     rated_posts = [p for p in all_posts if p['total_matches'] > 0]
