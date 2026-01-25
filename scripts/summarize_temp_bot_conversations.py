@@ -106,7 +106,7 @@ def format_conversation_for_summary(messages: list[dict], bot_name: str) -> str:
 
         # Strip the <Author>: prefix if present
         if content.startswith(f"<{author}>:"):
-            content = content[len(f"<{author}>:"):].strip()
+            content = content[len(f"<{author}>:") :].strip()
 
         # Truncate long messages
         if len(content) > 500:
@@ -140,9 +140,7 @@ Be concise and capture the essence of the bot's time in the chat."""
     response = client.messages.create(
         model="claude-haiku-4-5",
         max_tokens=300,
-        messages=[
-            {"role": "user", "content": prompt}
-        ],
+        messages=[{"role": "user", "content": prompt}],
     )
 
     return response.content[0].text.strip()
@@ -189,13 +187,15 @@ def main():
             if not row:
                 print(f"Bot with ID {args.bot_id} not found")
                 return
-            bots = [{
-                "id": row[0],
-                "channel_id": row[1],
-                "name": row[2],
-                "spawn_prompt": row[3],
-                "created_at": row[4],
-            }]
+            bots = [
+                {
+                    "id": row[0],
+                    "channel_id": row[1],
+                    "name": row[2],
+                    "spawn_prompt": row[3],
+                    "created_at": row[4],
+                }
+            ]
         else:
             bots = get_temp_bots_needing_summary(conn, limit=args.limit)
 
@@ -217,7 +217,7 @@ def main():
             # Get conversation messages
             messages = get_conversation_messages(conn, channel_id, bot_name)
             if not messages:
-                print(f"  No messages found, skipping")
+                print("  No messages found, skipping")
                 skipped += 1
                 continue
 
@@ -226,7 +226,7 @@ def main():
             # Format conversation
             conversation = format_conversation_for_summary(messages, bot_name)
             if len(conversation) < 50:
-                print(f"  Conversation too short, skipping")
+                print("  Conversation too short, skipping")
                 skipped += 1
                 continue
 
@@ -241,9 +241,9 @@ def main():
 
                 if not args.dry_run:
                     save_summary(conn, bot_id, summary)
-                    print(f"  Saved!")
+                    print("  Saved!")
                 else:
-                    print(f"  [DRY RUN] Would save summary")
+                    print("  [DRY RUN] Would save summary")
 
                 summarized += 1
 

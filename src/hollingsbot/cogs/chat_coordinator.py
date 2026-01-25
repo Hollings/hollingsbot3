@@ -1,36 +1,30 @@
 """Chat coordinator - maintains history and broadcasts events to bots."""
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
-import re
 import time
 from collections import deque
-from pathlib import Path
-from typing import Callable, Deque
+from collections.abc import Callable
 
 import discord
 from discord.ext import commands
 
-try:
-    import cairosvg  # type: ignore
-except Exception:
-    cairosvg = None  # type: ignore
-
 from hollingsbot.cogs import chat_utils
-from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
+from hollingsbot.cogs.conversation import ConversationTurn
 from hollingsbot.cogs.typing_tracker import TypingTracker
-from hollingsbot.utils.discord_utils import get_display_name
 
 # Summarization imports
 from hollingsbot.summarization import (
-    SummaryCache,
     CachedMessage,
     Summarizer,
+    SummaryCache,
     SummaryWorker,
 )
 from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
+from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -61,7 +55,7 @@ class ChatCoordinator(commands.Cog):
 
         # History management
         history_limit = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
-        self.channel_histories: dict[int, Deque[ConversationTurn]] = {}
+        self.channel_histories: dict[int, deque[ConversationTurn]] = {}
         self.history_limit = history_limit
         self._history_locks: dict[int, asyncio.Lock] = {}
         self._warmed_channels: set[int] = set()
@@ -122,10 +116,8 @@ class ChatCoordinator(commands.Cog):
         if old_task and not old_task.done():
             _LOG.info(f"Cancelling previous message processing in channel {channel_id}")
             old_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
                 await asyncio.wait_for(old_task, timeout=0.1)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
 
         # Ask each bot to cancel its generation for this channel
         for bot_instance in self.bots:
@@ -137,7 +129,7 @@ class ChatCoordinator(commands.Cog):
 
     # ==================== History Management ====================
 
-    def _history_for_channel(self, channel_id: int) -> Deque[ConversationTurn]:
+    def _history_for_channel(self, channel_id: int) -> deque[ConversationTurn]:
         """Get or create history deque for a channel."""
         if channel_id not in self.channel_histories:
             self.channel_histories[channel_id] = deque(maxlen=self.history_limit)
@@ -236,9 +228,7 @@ class ChatCoordinator(commands.Cog):
     # ==================== Message Processing ====================
 
     @commands.Cog.listener()
-    async def on_typing(
-        self, channel: discord.abc.Messageable, user: discord.User | discord.Member, when
-    ) -> None:
+    async def on_typing(self, channel: discord.abc.Messageable, user: discord.User | discord.Member, when) -> None:
         """Handle typing events and forward to the typing tracker."""
         await self.typing_tracker.on_typing(channel, user, when)
 
@@ -278,15 +268,14 @@ class ChatCoordinator(commands.Cog):
                 history = self._history_for_channel(channel_id)
 
                 # Check if this message is already in history (avoid duplicates)
-                already_in_history = any(
-                    t.message_id == message.id for t in history if t.message_id is not None
-                )
+                already_in_history = any(t.message_id == message.id for t in history if t.message_id is not None)
 
                 if not already_in_history:
                     history.append(turn)
+                    content_preview = (turn.content or "")[:80]
                     _LOG.info(
                         f"Added to history: role={turn.role}, author_name='{turn.author_name}', "
-                        f"content_preview={turn.content[:80]}..."
+                        f"content_preview={content_preview}..."
                     )
 
                     # Cache message for summarization and trigger background summarization
@@ -312,7 +301,9 @@ class ChatCoordinator(commands.Cog):
                 if self._active_message_tasks.get(channel_id) is task:
                     self._active_message_tasks.pop(channel_id, None)
 
-    async def _try_bot_responses(self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]) -> None:
+    async def _try_bot_responses(
+        self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]
+    ) -> None:
         """Try to get a response from bots (can be cancelled)."""
         # Wendy always gets triggered first - she's the main character
         # Other bots run after, with only one responding
@@ -347,6 +338,7 @@ class ChatCoordinator(commands.Cog):
 
         # Then try other bots (temp bots, etc.) - stop after first response
         import random
+
         random.shuffle(other_bots)
 
         for bot_instance in other_bots:
@@ -381,14 +373,12 @@ class ChatCoordinator(commands.Cog):
         display = get_display_name(message.author)
 
         # Build reply hint and collect reply images
-        hint, reply_images = await chat_utils.build_reply_hint(
-            message, self.bot, self.channel_histories
-        )
+        hint, reply_images = await chat_utils.build_reply_hint(message, self.bot, self.channel_histories)
 
         base_text = chat_utils.clean_mentions(message, self.bot).strip()
 
         # Collect text attachments (full content + placeholders)
-        text_blocks, placeholders = await chat_utils.collect_text_attachments_full(message)
+        _text_blocks, placeholders = await chat_utils.collect_text_attachments_full(message)
 
         # Build message text
         prefixed = chat_utils.build_user_message_text(display, hint, base_text)
@@ -437,9 +427,7 @@ class ChatCoordinator(commands.Cog):
             history = self._history_for_channel(channel_id)
 
             # Check if already in history
-            already_in_history = any(
-                t.message_id == message_id for t in history if t.message_id is not None
-            )
+            already_in_history = any(t.message_id == message_id for t in history if t.message_id is not None)
 
             if not already_in_history:
                 # Store as "user" - each bot will translate to their own perspective
@@ -453,9 +441,9 @@ class ChatCoordinator(commands.Cog):
                     webhook_id=webhook_id,
                 )
                 history.append(turn)
+                text_preview = (text or "")[:80]
                 _LOG.info(
-                    f"Added bot response to history: bot={bot_name}, "
-                    f"message_id={message_id}, text={text[:80]}..."
+                    f"Added bot response to history: bot={bot_name}, message_id={message_id}, text={text_preview}..."
                 )
 
                 # Cache for summarization and trigger background summarization
@@ -478,6 +466,7 @@ class ChatCoordinator(commands.Cog):
         webhook_name = None
         if webhook_id:
             from hollingsbot.prompt_db import get_temp_bot_by_webhook_id
+
             temp_bot = get_temp_bot_by_webhook_id(webhook_id)
             if temp_bot:
                 try:
@@ -521,49 +510,6 @@ class ChatCoordinator(commands.Cog):
                 sent.append(msg)
 
         return sent
-
-    # ==================== SVG Extraction ====================
-
-    async def _extract_and_convert_svgs(self, text: str) -> list[discord.File]:
-        """Extract SVG code from text and convert to PNG files."""
-        svg_files: list[discord.File] = []
-
-        if not cairosvg:
-            return svg_files
-
-        # Pattern for SVG code blocks: ```svg\n...\n```
-        pattern = r'```svg\s*\n(.*?)\n```'
-        matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        for idx, svg_code in enumerate(matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"diagram_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert SVG to PNG")
-
-        # Also check for raw SVG tags
-        raw_pattern = r'<svg[\s\S]*?</svg>'
-        raw_matches = re.findall(raw_pattern, text, re.IGNORECASE)
-
-        for idx, svg_code in enumerate(raw_matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"svg_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert raw SVG to PNG")
-
-        return svg_files
-
-    def _clean_svgs_from_text(self, text: str) -> str:
-        """Remove SVG code blocks and raw SVG tags from text."""
-        # Remove SVG code blocks
-        text = re.sub(r'```svg\s*\n.*?\n```', '', text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove raw SVG tags
-        text = re.sub(r'<svg[\s\S]*?</svg>', '', text, flags=re.IGNORECASE)
-        return text.strip()
 
     # ==================== Summarization ====================
 
@@ -647,16 +593,15 @@ class ChatCoordinator(commands.Cog):
 
 async def setup(bot: commands.Bot) -> None:
     """Setup function for loading the cog."""
-    import os
     coordinator = ChatCoordinator(bot)
     await bot.add_cog(coordinator)
 
     # Import and register bots
     # from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot  # Moved to wendy-bot service
-    from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
+    from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
     from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
-    from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
+    from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
 
     # Initialize bots with typing tracker
     # wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)  # Moved to wendy-bot service

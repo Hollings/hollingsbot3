@@ -6,7 +6,6 @@ import logging
 import os
 import shutil
 from pathlib import Path
-from typing import Optional
 
 import discord
 from discord.ext import commands
@@ -92,7 +91,7 @@ class Admin(commands.Cog):
 
         return success
 
-    async def _try_docker_compose_restart(self, compose_file: Optional[Path]) -> bool:
+    async def _try_docker_compose_restart(self, compose_file: Path | None) -> bool:
         """
         Attempt to restart containers using Docker Compose.
 
@@ -124,8 +123,8 @@ class Admin(commands.Cog):
     async def _execute_compose_restart(
         self,
         docker_bin: str,
-        subcommand: Optional[str],
-        compose_file: Optional[Path],
+        subcommand: str | None,
+        compose_file: Path | None,
     ) -> bool:
         """
         Execute a Docker Compose restart command.
@@ -189,13 +188,12 @@ class Admin(commands.Cog):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
+            _stdout, stderr = await proc.communicate()
             exit_code = proc.returncode or 0
 
             if exit_code != 0:
                 _LOG.warning(
-                    f"Shell command failed with exit code {exit_code}. "
-                    f"stderr: {stderr.decode(errors='ignore')[:200]}"
+                    f"Shell command failed with exit code {exit_code}. stderr: {stderr.decode(errors='ignore')[:200]}"
                 )
 
             return exit_code == 0
@@ -207,7 +205,7 @@ class Admin(commands.Cog):
     async def _run_subprocess(
         self,
         cmd: list[str],
-        cwd: Optional[Path] = None,
+        cwd: Path | None = None,
     ) -> bool:
         """
         Execute a subprocess command asynchronously.
@@ -226,7 +224,7 @@ class Admin(commands.Cog):
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
             )
-            stdout, stderr = await proc.communicate()
+            _stdout, stderr = await proc.communicate()
             exit_code = proc.returncode or 0
 
             if exit_code != 0:
@@ -241,7 +239,7 @@ class Admin(commands.Cog):
             _LOG.error(f"Failed to execute subprocess {cmd}: {e}")
             return False
 
-    def _find_compose_file(self) -> Optional[Path]:
+    def _find_compose_file(self) -> Path | None:
         """
         Search for a Docker Compose file in the project directory tree.
 
@@ -292,7 +290,7 @@ class Admin(commands.Cog):
 
         return candidates
 
-    def _check_compose_files(self, directory: Path) -> Optional[Path]:
+    def _check_compose_files(self, directory: Path) -> Path | None:
         """
         Check if any standard compose file exists in the given directory.
 
@@ -333,11 +331,20 @@ class Admin(commands.Cog):
             await ctx.send("❌ This command is restricted to admins.")
             return
 
+        # Validate amount - prevent extreme values
+        if not (-10000 <= amount <= 10000):
+            await ctx.send("❌ Amount must be between -$10,000 and $10,000.")
+            return
+
         try:
             self._cost_tracker.grant_credits(user.id, amount)
             action = "granted" if amount >= 0 else "deducted"
-            await ctx.send(f"✅ Successfully {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} {user.mention}.")
-            _LOG.info(f"Admin {ctx.author.id} {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} user {user.id}")
+            await ctx.send(
+                f"✅ Successfully {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} {user.mention}."
+            )
+            _LOG.info(
+                f"Admin {ctx.author.id} {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} user {user.id}"
+            )
         except Exception as exc:
             _LOG.exception(f"Failed to grant credits: {exc}")
             await ctx.send(f"❌ Failed to grant credits: {exc}")
@@ -371,8 +378,8 @@ class Admin(commands.Cog):
 
             lines = [
                 f"**Balance for {user.mention}:**",
-                f"",
-                f"**Current status:**",
+                "",
+                "**Current status:**",
                 f"  - Free budget: ${current_budget:.2f} / ${free_total:.2f}",
                 f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]
@@ -407,7 +414,7 @@ class Admin(commands.Cog):
         try:
             # Load config
             config_path = Path(__file__).resolve().parents[1] / "image_gen_config.json"
-            with open(config_path, "r", encoding="utf8") as f:
+            with open(config_path, encoding="utf8") as f:
                 config = json.load(f)
 
             # Update price
@@ -452,7 +459,7 @@ class Admin(commands.Cog):
         try:
             # Load config
             config_path = Path(__file__).resolve().parents[1] / "image_gen_config.json"
-            with open(config_path, "r", encoding="utf8") as f:
+            with open(config_path, encoding="utf8") as f:
                 config = json.load(f)
 
             old_budget = config.get("daily_free_budget", "not set")

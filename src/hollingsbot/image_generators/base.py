@@ -18,6 +18,6 @@ class ImageGeneratorAPI(ABC):
     @abstractmethod
     async def generate(self, prompt: str) -> bytes: ...
 
-    async def aclose(self) -> None:  # noqa: D401 – “Close …”
+    async def aclose(self) -> None:
         """Release any open resources (optional)."""
         return None

@@ -138,6 +138,7 @@ class General(commands.Cog):
             lines.append(f"\nYou have **{balance}** token(s).")
 
         import discord
+
         await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command()

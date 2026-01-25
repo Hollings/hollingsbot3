@@ -1,24 +1,48 @@
-# text_generators/__init__.py
-from .base import TextGeneratorAPI
-from .huggingface import HuggingFaceTextGenerator
+"""Text generation providers for LLM interactions.
+
+This package provides a unified interface for multiple LLM providers:
+- Anthropic (Claude models)
+- OpenAI (GPT models)
+- xAI (Grok)
+- Google (Gemini)
+- OpenRouter (multi-provider routing)
+- HuggingFace (local/HF models)
+
+All generators implement the TextGeneratorAPI abstract base class, providing
+a consistent `generate(prompt: str) -> str` method.
+
+Usage:
+    from hollingsbot.text_generators import get_text_generator
+
+    # Get a generator for a specific API
+    generator = get_text_generator("anthropic", "claude-sonnet-4")
+
+    # Generate text
+    response = await generator.generate("Hello, how are you?")
+
+See docs/INTEGRATIONS.md for details on each provider.
+"""
+
 from .anthropic import AnthropicTextGenerator
-from .openai_chatgpt import OpenAIChatTextGenerator
-from .grok import GrokTextGenerator
-from .openrouter import OpenRouterTextGenerator, OpenRouterCompletionsGenerator, OpenRouterLoomGenerator
-from .gemini import GeminiTextGenerator
+from .base import TextGeneratorAPI
 from .claude_cli import ClaudeCliTextGenerator
+from .gemini import GeminiTextGenerator
+from .grok import GrokTextGenerator
+from .huggingface import HuggingFaceTextGenerator
+from .openai_chatgpt import OpenAIChatTextGenerator
+from .openrouter import OpenRouterCompletionsGenerator, OpenRouterLoomGenerator, OpenRouterTextGenerator
 
 __all__ = [
-    "TextGeneratorAPI",
-    "HuggingFaceTextGenerator",
     "AnthropicTextGenerator",
-    "OpenAIChatTextGenerator",
+    "ClaudeCliTextGenerator",
+    "GeminiTextGenerator",
     "GrokTextGenerator",
-    "OpenRouterTextGenerator",
+    "HuggingFaceTextGenerator",
+    "OpenAIChatTextGenerator",
     "OpenRouterCompletionsGenerator",
     "OpenRouterLoomGenerator",
-    "GeminiTextGenerator",
-    "ClaudeCliTextGenerator",
+    "OpenRouterTextGenerator",
+    "TextGeneratorAPI",
 ]
 
 

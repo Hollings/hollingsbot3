@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
-import os
-from dataclasses import dataclass, field
 import logging
-from typing import Any, AsyncIterator, Final, Sequence, BinaryIO
+import os
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
 from tempfile import NamedTemporaryFile
+from typing import Any, BinaryIO, Final
 
 import aiohttp
 import replicate
@@ -70,14 +72,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     def __post_init__(self) -> None:
         self._log = logging.getLogger(__name__)
         if not self.api_token:
-            raise RuntimeError(
-                "REPLICATE_API_TOKEN is required. "
-                "Pass it explicitly or set the environment variable."
-            )
+            raise RuntimeError("REPLICATE_API_TOKEN is required. Pass it explicitly or set the environment variable.")
         self._client = replicate.Client(api_token=self.api_token)
         self._session: aiohttp.ClientSession | None = None
 
-    async def __aenter__(self) -> "ReplicateImageGenerator":  # type: ignore[override]
+    async def __aenter__(self) -> ReplicateImageGenerator:  # type: ignore[override]
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
@@ -140,7 +139,9 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                             inputs["output_format"] = output_format
                         self._log.info(
                             "Replicate run (gpt-image) model=%s quality=%s keys=%s",
-                            self.model, self.quality, sorted(inputs.keys())
+                            self.model,
+                            self.quality,
+                            sorted(inputs.keys()),
                         )
                         raw_output = await self._client.async_run(self.model, input=inputs)
                     finally:
@@ -150,7 +151,9 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         inputs["output_format"] = output_format
                     self._log.info(
                         "Replicate run (gpt-image) model=%s quality=%s keys=%s",
-                        self.model, self.quality, sorted(inputs.keys())
+                        self.model,
+                        self.quality,
+                        sorted(inputs.keys()),
                     )
                     raw_output = await self._client.async_run(self.model, input=inputs)
                 return await self._normalise_output(raw_output)
@@ -190,9 +193,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     # Add seed only for models that are known to support it
                     if seed is not None and self._supports_seed():
                         inputs["seed"] = seed
-                    self._log.info(
-                        "Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys())
-                    )
+                    self._log.info("Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys()))
                     raw_output = await self._client.async_run(self.model, input=inputs)
                 finally:
                     self._cleanup_files(cleanup)
@@ -207,9 +208,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 # Pass aspect_ratio for models that support it (FLUX, etc.)
                 if self.aspect_ratio and "aspect_ratio" not in inputs:
                     inputs["aspect_ratio"] = self.aspect_ratio
-                self._log.info(
-                    "Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys())
-                )
+                self._log.info("Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys()))
                 raw_output = await self._client.async_run(self.model, input=inputs)
 
             return await self._normalise_output(raw_output)
@@ -225,6 +224,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             elif isinstance(item, str) and item.startswith("data:"):
                 # Decode data URL and scale
                 import base64
+
                 try:
                     _, b64_data = item.split(",", 1)
                     img_bytes = base64.b64decode(b64_data)
@@ -244,17 +244,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     _StreamTypes: Final = (
         bytes,
         bytearray,
-        replicate.helpers.FileOutput
-        if hasattr(replicate.helpers, "FileOutput")
-        else tuple(),
+        replicate.helpers.FileOutput if hasattr(replicate.helpers, "FileOutput") else (),
     )
 
     async def _normalise_output(self, data: Any) -> bytes:
-        if (
-            isinstance(data, (list, tuple))
-            and data
-            and all(isinstance(x, (bytes, bytearray)) for x in data)
-        ):
+        if isinstance(data, (list, tuple)) and data and all(isinstance(x, (bytes, bytearray)) for x in data):
             return b"".join(data)
 
         if isinstance(data, self._StreamTypes):
@@ -353,7 +347,9 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         inputs["output_format"] = output_format
                     self._log.info(
                         "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
-                        self.model, self.quality, sorted(inputs.keys())
+                        self.model,
+                        self.quality,
+                        sorted(inputs.keys()),
                     )
                     raw_output = await self._client.async_run(self.model, input=inputs)
                 finally:
@@ -363,7 +359,9 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     inputs["output_format"] = output_format
                 self._log.info(
                     "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
-                    self.model, self.quality, sorted(inputs.keys())
+                    self.model,
+                    self.quality,
+                    sorted(inputs.keys()),
                 )
                 raw_output = await self._client.async_run(self.model, input=inputs)
 
@@ -404,9 +402,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         inputs["sequential_image_generation"] = "disabled"
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
-                self._log.info(
-                    "Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys())
-                )
+                self._log.info("Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys()))
                 raw_output = await self._client.async_run(self.model, input=inputs)
             finally:
                 self._cleanup_files(cleanup)
@@ -420,9 +416,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             # Pass aspect_ratio for models that support it (FLUX, etc.)
             if self.aspect_ratio and "aspect_ratio" not in inputs:
                 inputs["aspect_ratio"] = self.aspect_ratio
-            self._log.info(
-                "Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys())
-            )
+            self._log.info("Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys()))
             raw_output = await self._client.async_run(self.model, input=inputs)
 
         results = await self._collect_all(raw_output)
@@ -448,9 +442,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
 
     # ---- helpers for editing ----
 
-    def _prepare_image_inputs(
-        self, items: Sequence[Any]
-    ) -> tuple[list[Any], list[tuple[BinaryIO, str | None]]]:
+    def _prepare_image_inputs(self, items: Sequence[Any]) -> tuple[list[Any], list[tuple[BinaryIO, str | None]]]:
         prepared: list[Any] = []
         cleanup: list[tuple[BinaryIO, str | None]] = []
         for item in items:
@@ -486,7 +478,5 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 fh.close()
             finally:
                 if path:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(path)
-                    except OSError:
-                        pass

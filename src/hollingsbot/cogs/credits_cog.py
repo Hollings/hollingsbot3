@@ -9,11 +9,10 @@ from __future__ import annotations
 import logging
 import os
 
-import discord
 from discord.ext import commands
 
 from hollingsbot.cost_tracking import CostTracker
-from hollingsbot.prompt_db import get_user_token_balance, deduct_user_tokens
+from hollingsbot.prompt_db import deduct_user_tokens, get_user_token_balance
 
 __all__ = ["CreditsCog"]
 
@@ -61,7 +60,7 @@ class CreditsCog(commands.Cog):
 
             # Build the response message
             lines = [
-                f"**Your current status:**",
+                "**Your current status:**",
                 f"  - Free budget: ${current_budget:.2f} / ${free_total:.2f}",
                 f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]
@@ -82,7 +81,7 @@ class CreditsCog(commands.Cog):
             await ctx.send("Failed to retrieve usage information. Please try again later.")
 
     @commands.command(name="redeem")
-    async def redeem_command(self, ctx: commands.Context, amount: int = None) -> None:
+    async def redeem_command(self, ctx: commands.Context, amount: int | None = None) -> None:
         """Redeem Wendy tokens for image generation credits.
 
         Usage: !redeem <amount>
@@ -116,8 +115,7 @@ class CreditsCog(commands.Cog):
 
         if not success:
             await ctx.send(
-                f"You don't have enough tokens. You have {new_balance} tokens, "
-                f"but tried to redeem {amount}."
+                f"You don't have enough tokens. You have {new_balance} tokens, but tried to redeem {amount}."
             )
             return
 
@@ -126,12 +124,9 @@ class CreditsCog(commands.Cog):
         self._cost_tracker.grant_credits(ctx.author.id, credits_earned)
 
         await ctx.send(
-            f"Redeemed {amount} tokens for ${credits_earned:.2f} in credits!\n"
-            f"Remaining tokens: {new_balance}"
+            f"Redeemed {amount} tokens for ${credits_earned:.2f} in credits!\nRemaining tokens: {new_balance}"
         )
-        _log.info(
-            f"User {ctx.author.id} redeemed {amount} tokens for ${credits_earned:.2f} credits"
-        )
+        _log.info(f"User {ctx.author.id} redeemed {amount} tokens for ${credits_earned:.2f} credits")
 
 
 async def setup(bot: commands.Bot) -> None:

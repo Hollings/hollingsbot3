@@ -79,9 +79,7 @@ class Starboard(commands.Cog):
         self.bot = bot
         self.starboard_channel_id = _parse_channel_id(os.getenv("STARBOARD_CHANNEL_ID"))
         self.ignore_channel_ids = _parse_channel_ids(os.getenv("STARBOARD_IGNORE_CHANNELS"))
-        self.whitelist_channel_ids = _parse_channel_ids(
-            os.getenv("STARBOARD_WHITELIST_CHANNEL_IDS")
-        )
+        self.whitelist_channel_ids = _parse_channel_ids(os.getenv("STARBOARD_WHITELIST_CHANNEL_IDS"))
         self._seen_message_ids: deque[int] = deque(maxlen=SEEN_MESSAGE_CACHE_SIZE)
 
         if self.starboard_channel_id is None:
@@ -134,13 +132,9 @@ class Starboard(commands.Cog):
         """
         if channel.id in self.ignore_channel_ids:
             return False
-        if self.whitelist_channel_ids and channel.id not in self.whitelist_channel_ids:
-            return False
-        return True
+        return not (self.whitelist_channel_ids and channel.id not in self.whitelist_channel_ids)
 
-    async def _fetch_message_safely(
-        self, channel: GuildChannel, message_id: int
-    ) -> discord.Message | None:
+    async def _fetch_message_safely(self, channel: GuildChannel, message_id: int) -> discord.Message | None:
         """Safely fetch a message from a channel.
 
         Args:
@@ -167,13 +161,9 @@ class Starboard(commands.Cog):
         """
         if not message.author.bot:
             return False
-        if message.id in self._seen_message_ids:
-            return False
-        return True
+        return message.id not in self._seen_message_ids
 
-    def _validate_starboard_channel(
-        self, channel: GuildChannel | None, guild_id: int
-    ) -> bool:
+    def _validate_starboard_channel(self, channel: GuildChannel | None, guild_id: int) -> bool:
         """Validate that the starboard channel is usable.
 
         Args:
@@ -191,9 +181,7 @@ class Starboard(commands.Cog):
                 self.starboard_channel_id,
             )
             return False
-        if getattr(channel.guild, "id", None) != guild_id:
-            return False
-        return True
+        return getattr(channel.guild, "id", None) == guild_id
 
     async def _send_to_starboard(
         self, starboard_channel: Messageable, message: discord.Message
@@ -250,7 +238,7 @@ class Starboard(commands.Cog):
                 content=message.content,
                 attachment_urls=attachments_serialized,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOG.exception("Failed to record starboard entry for message %s", message.id)
 
     @commands.Cog.listener("on_raw_reaction_add")
@@ -296,9 +284,7 @@ class Starboard(commands.Cog):
 
         # Mark as seen and log
         self._seen_message_ids.append(message.id)
-        self._log_starboard_entry(
-            payload, message, starboard_channel.id, sent_message.id
-        )
+        self._log_starboard_entry(payload, message, starboard_channel.id, sent_message.id)
 
     @staticmethod
     def _get_author_display_name(author: discord.User | discord.Member) -> str:
@@ -325,7 +311,7 @@ class Starboard(commands.Cog):
         """
         if len(text) <= max_length:
             return text
-        return f"{text[:max_length - 1]}…"
+        return f"{text[: max_length - 1]}…"
 
     def _format_forward_content(self, message: discord.Message) -> str:
         """Format a message for forwarding to the starboard channel.
@@ -340,9 +326,7 @@ class Starboard(commands.Cog):
         author_name = self._get_author_display_name(message.author)
 
         if message.content:
-            preview = self._truncate_text(
-                message.content.strip(), MAX_CONTENT_PREVIEW_LENGTH
-            )
+            preview = self._truncate_text(message.content.strip(), MAX_CONTENT_PREVIEW_LENGTH)
             parts.append(f"> **{author_name}**: {preview}")
 
         for attachment in message.attachments:
@@ -386,9 +370,7 @@ class Starboard(commands.Cog):
             "height": height,
         }
 
-    def _extract_message_attachments(
-        self, message: discord.Message
-    ) -> list[dict[str, object]]:
+    def _extract_message_attachments(self, message: discord.Message) -> list[dict[str, object]]:
         """Extract all attachment metadata from a message.
 
         Args:

@@ -17,7 +17,6 @@ import argparse
 import re
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Add src to path for imports
@@ -25,20 +24,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from hollingsbot.prompt_db import DB_PATH, init_db
 
-
 # Patterns for detecting temp bot messages
-ARRIVAL_PATTERN = re.compile(
-    r'\*\[(.+?)\s+arrives\s+for\s+(\d+)\s+messages?\]\*',
-    re.IGNORECASE
-)
-DEPART_PATTERN = re.compile(
-    r'\*\[(.+?)\s+departs\]\*',
-    re.IGNORECASE
-)
-DEPLETE_PATTERN = re.compile(
-    r'\*\[(.+?)\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*',
-    re.IGNORECASE
-)
+ARRIVAL_PATTERN = re.compile(r"\*\[(.+?)\s+arrives\s+for\s+(\d+)\s+messages?\]\*", re.IGNORECASE)
+DEPART_PATTERN = re.compile(r"\*\[(.+?)\s+departs\]\*", re.IGNORECASE)
+DEPLETE_PATTERN = re.compile(r"\*\[(.+?)\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*", re.IGNORECASE)
 
 
 def find_temp_bot_events(conn: sqlite3.Connection) -> list[dict]:
@@ -58,7 +47,7 @@ def find_temp_bot_events(conn: sqlite3.Connection) -> list[dict]:
     """)
 
     for row in cur.fetchall():
-        msg_id, channel_id, guild_id, timestamp, author_id, nickname, content, is_webhook = row
+        msg_id, channel_id, _guild_id, timestamp, author_id, _nickname, content, _is_webhook = row
 
         if not content:
             continue
@@ -70,45 +59,51 @@ def find_temp_bot_events(conn: sqlite3.Connection) -> list[dict]:
             reply_count = int(arrival_match.group(2))
 
             # Extract spawn_prompt from the rest of the message (after arrival announcement)
-            remaining = content[arrival_match.end():].strip()
+            remaining = content[arrival_match.end() :].strip()
             spawn_prompt = remaining if remaining else f"(unknown - reconstructed from {bot_name})"
 
-            events.append({
-                "type": "arrival",
-                "bot_name": bot_name,
-                "reply_count": reply_count,
-                "spawn_prompt": spawn_prompt,
-                "channel_id": channel_id,
-                "message_id": msg_id,
-                "timestamp": timestamp,
-                "webhook_id": author_id,  # For webhooks, author_id is the webhook ID
-            })
+            events.append(
+                {
+                    "type": "arrival",
+                    "bot_name": bot_name,
+                    "reply_count": reply_count,
+                    "spawn_prompt": spawn_prompt,
+                    "channel_id": channel_id,
+                    "message_id": msg_id,
+                    "timestamp": timestamp,
+                    "webhook_id": author_id,  # For webhooks, author_id is the webhook ID
+                }
+            )
             continue
 
         # Check for departure
         depart_match = DEPART_PATTERN.search(content)
         if depart_match:
             bot_name = depart_match.group(1).strip()
-            events.append({
-                "type": "departure",
-                "bot_name": bot_name,
-                "channel_id": channel_id,
-                "message_id": msg_id,
-                "timestamp": timestamp,
-            })
+            events.append(
+                {
+                    "type": "departure",
+                    "bot_name": bot_name,
+                    "channel_id": channel_id,
+                    "message_id": msg_id,
+                    "timestamp": timestamp,
+                }
+            )
             continue
 
         # Check for depletion
         deplete_match = DEPLETE_PATTERN.search(content)
         if deplete_match:
             bot_name = deplete_match.group(1).strip()
-            events.append({
-                "type": "depletion",
-                "bot_name": bot_name,
-                "channel_id": channel_id,
-                "message_id": msg_id,
-                "timestamp": timestamp,
-            })
+            events.append(
+                {
+                    "type": "depletion",
+                    "bot_name": bot_name,
+                    "channel_id": channel_id,
+                    "message_id": msg_id,
+                    "timestamp": timestamp,
+                }
+            )
 
     return events
 
@@ -144,18 +139,20 @@ def reconstruct_temp_bots(events: list[dict]) -> list[dict]:
                 temp_bots.append(active_bots.pop(key))
             else:
                 # Departure without matching arrival - create partial record
-                temp_bots.append({
-                    "channel_id": event["channel_id"],
-                    "webhook_id": 0,
-                    "name": event["bot_name"],
-                    "spawn_prompt": f"(unknown - only departure found for {event['bot_name']})",
-                    "replies_remaining": 0,
-                    "spawn_message_id": None,
-                    "created_at": None,
-                    "deactivated_at": event["timestamp"],
-                    "is_active": False,
-                    "original_reply_count": None,
-                })
+                temp_bots.append(
+                    {
+                        "channel_id": event["channel_id"],
+                        "webhook_id": 0,
+                        "name": event["bot_name"],
+                        "spawn_prompt": f"(unknown - only departure found for {event['bot_name']})",
+                        "replies_remaining": 0,
+                        "spawn_message_id": None,
+                        "created_at": None,
+                        "deactivated_at": event["timestamp"],
+                        "is_active": False,
+                        "original_reply_count": None,
+                    }
+                )
 
     # Any remaining active bots (no departure found) - still add them
     for bot in active_bots.values():
@@ -170,42 +167,50 @@ def insert_historical_bots(conn: sqlite3.Connection, bots: list[dict], dry_run: 
 
     for bot in bots:
         # Check if already exists (by name + channel + approximate time)
-        cur = conn.execute("""
+        cur = conn.execute(
+            """
             SELECT id FROM temp_bots
             WHERE channel_id = ? AND LOWER(name) = LOWER(?)
               AND (created_at = ? OR spawn_message_id = ?)
-        """, (
-            bot["channel_id"],
-            bot["name"],
-            bot["created_at"],
-            bot["spawn_message_id"],
-        ))
+        """,
+            (
+                bot["channel_id"],
+                bot["name"],
+                bot["created_at"],
+                bot["spawn_message_id"],
+            ),
+        )
 
         if cur.fetchone():
             print(f"  Skipping duplicate: {bot['name']} in channel {bot['channel_id']}")
             continue
 
         if dry_run:
-            print(f"  [DRY RUN] Would insert: {bot['name']} (channel={bot['channel_id']}, prompt={bot['spawn_prompt'][:50]}...)")
+            print(
+                f"  [DRY RUN] Would insert: {bot['name']} (channel={bot['channel_id']}, prompt={bot['spawn_prompt'][:50]}...)"
+            )
             inserted += 1
             continue
 
-        conn.execute("""
+        conn.execute(
+            """
             INSERT INTO temp_bots (
                 channel_id, webhook_id, name, avatar_url, avatar_bytes,
                 spawn_prompt, replies_remaining, spawn_message_id,
                 is_active, created_at, deactivated_at
             ) VALUES (?, ?, ?, NULL, NULL, ?, ?, ?, 0, ?, ?)
-        """, (
-            bot["channel_id"],
-            bot["webhook_id"],
-            bot["name"],
-            bot["spawn_prompt"],
-            bot["replies_remaining"],
-            bot["spawn_message_id"],
-            bot["created_at"],
-            bot["deactivated_at"],
-        ))
+        """,
+            (
+                bot["channel_id"],
+                bot["webhook_id"],
+                bot["name"],
+                bot["spawn_prompt"],
+                bot["replies_remaining"],
+                bot["spawn_message_id"],
+                bot["created_at"],
+                bot["deactivated_at"],
+            ),
+        )
         inserted += 1
         print(f"  Inserted: {bot['name']} (channel={bot['channel_id']})")
 

@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
 
@@ -147,7 +146,7 @@ class NotebookManager:
             f"You have 5 memory slots (max {self.MAX_SLOT_LENGTH} chars each). These persist across restarts.",
             "",
             "Current notebook contents:",
-            ""
+            "",
         ]
 
         for i, content in enumerate(self.slots, start=1):
@@ -156,12 +155,14 @@ class NotebookManager:
             else:
                 lines.append(f"{i}. [empty]")
 
-        lines.extend([
-            "",
-            "To save: save_memory(slot=1, content=\"your text here\")",
-            "You will be asked to confirm with Y/N before the change is saved.",
-            ""
-        ])
+        lines.extend(
+            [
+                "",
+                'To save: save_memory(slot=1, content="your text here")',
+                "You will be asked to confirm with Y/N before the change is saved.",
+                "",
+            ]
+        )
 
         return "\n".join(lines)
 

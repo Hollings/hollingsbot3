@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import re
 import logging
-from typing import NamedTuple, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from . import AVAILABLE_TOOLS
+import re
+from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)
 
@@ -28,6 +25,7 @@ def get_current_context() -> dict[str, object]:
 
 class ToolCall(NamedTuple):
     """Represents a parsed tool call."""
+
     tool_name: str
     raw_args: str
     full_match: str
@@ -44,7 +42,7 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
     Handles parentheses inside quoted strings properly.
     """
     # Find all TOOL_CALL: occurrences
-    pattern = r'TOOL_CALL:\s*(\w+)\('
+    pattern = r"TOOL_CALL:\s*(\w+)\("
     matches = re.finditer(pattern, text, re.IGNORECASE)
 
     calls: list[ToolCall] = []
@@ -56,7 +54,7 @@ def parse_tool_calls(text: str) -> list[ToolCall]:
         raw_args, end_pos = _extract_args(text, start_pos)
 
         if raw_args is not None:
-            full_match = text[match.start():end_pos]
+            full_match = text[match.start() : end_pos]
             calls.append(ToolCall(tool_name, raw_args, full_match))
 
     return calls
@@ -86,20 +84,20 @@ def _extract_args(text: str, start: int) -> tuple[str | None, int]:
             if not in_quote:
                 # Only treat as quote start if preceded by =, comma, or whitespace
                 # This prevents apostrophes in words like "What's" from breaking parsing
-                if i == start or (i > 0 and text[i-1] in ('=', ',', ' ', '\t', '\n')):
+                if i == start or (i > 0 and text[i - 1] in ("=", ",", " ", "\t", "\n")):
                     in_quote = True
                     quote_char = char
             elif char == quote_char:
                 # Check if it's escaped (simple check for preceding backslash)
-                if i > 0 and text[i-1] != '\\':
+                if i > 0 and text[i - 1] != "\\":
                     in_quote = False
                     quote_char = None
 
         # Only count parentheses outside of quotes
         elif not in_quote:
-            if char == '(':
+            if char == "(":
                 paren_depth += 1
-            elif char == ')':
+            elif char == ")":
                 if paren_depth == 0:
                     # Found the closing parenthesis
                     return text[start:i], i + 1
@@ -132,14 +130,13 @@ def parse_arguments(raw_args: str) -> dict[str, str]:
 
     for part in parts:
         part = part.strip()
-        if '=' not in part:
+        if "=" not in part:
             continue
-        key, value = part.split('=', 1)
+        key, value = part.split("=", 1)
         key = key.strip()
         value = value.strip()
         # Remove outer quotes if present
-        if (value.startswith('"') and value.endswith('"')) or \
-           (value.startswith("'") and value.endswith("'")):
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
             value = value[1:-1]
         args[key] = value
 
@@ -160,20 +157,20 @@ def _split_respecting_quotes(text: str) -> list[str]:
                 quote_char = char
             elif char == quote_char:
                 # Check if escaped
-                if i > 0 and text[i-1] != '\\':
+                if i > 0 and text[i - 1] != "\\":
                     in_quote = False
                     quote_char = None
             current.append(char)
-        elif char == ',' and not in_quote:
+        elif char == "," and not in_quote:
             # Found a separator
-            parts.append(''.join(current))
+            parts.append("".join(current))
             current = []
         else:
             current.append(char)
 
     # Add final part
     if current:
-        parts.append(''.join(current))
+        parts.append("".join(current))
 
     return [p.strip() for p in parts]
 

@@ -1,23 +1,27 @@
 """Text-generation backend that calls Anthropic's Claude models."""
+
 from __future__ import annotations
 
-import asyncio
+import logging
 import os
-from typing import Dict, Sequence, Union, TypedDict, Any, List
+from collections.abc import Sequence
+from typing import Any, TypedDict, Union
 
-from anthropic import AsyncAnthropic
+from anthropic import APIConnectionError, APIError, AsyncAnthropic, RateLimitError
 
 from .base import TextGeneratorAPI
+
+_log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # A single shared client is plenty; reuse it across all requests              #
 # --------------------------------------------------------------------------- #
-_CLIENT_CACHE: Dict[str, AsyncAnthropic] = {}
+_CLIENT_CACHE: dict[str, AsyncAnthropic] = {}
 
 
 class _Message(TypedDict):
     role: str
-    content: Union[str, List[Dict[str, Any]]]
+    content: Union[str, list[dict[str, Any]]]
 
 
 class AnthropicTextGenerator(TextGeneratorAPI):
@@ -67,21 +71,14 @@ class AnthropicTextGenerator(TextGeneratorAPI):
         """
         # Normalise the prompt into a list of message dicts.
         if isinstance(prompt, str):
-            messages: List[_Message] = [{"role": "user", "content": prompt}]
+            messages: list[_Message] = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, Sequence):
             # A very light validation to help catch obvious misuse.
-            if not all(
-                isinstance(m, dict) and "role" in m and "content" in m
-                for m in prompt
-            ):
-                raise TypeError(
-                    "Each message must be a dict with 'role' and 'content' keys"
-                )
+            if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
+                raise TypeError("Each message must be a dict with 'role' and 'content' keys")
             messages = list(prompt)  # type: ignore[arg-type]
         else:
-            raise TypeError(
-                "prompt must be either a string or a sequence of message dicts"
-            )
+            raise TypeError("prompt must be either a string or a sequence of message dicts")
 
         # Extract system messages (Anthropic expects top-level `system`, not a
         # message role). Concatenate multiple system entries with blank lines.
@@ -89,7 +86,7 @@ class AnthropicTextGenerator(TextGeneratorAPI):
             if isinstance(content, str):
                 return content
             if isinstance(content, list):
-                parts: List[str] = []
+                parts: list[str] = []
                 for item in content:
                     try:
                         t = item.get("type")
@@ -103,8 +100,8 @@ class AnthropicTextGenerator(TextGeneratorAPI):
                 return "\n".join(p for p in parts if p)
             return str(content)
 
-        system_parts: List[str] = []
-        cleaned: List[Dict[str, Any]] = []
+        system_parts: list[str] = []
+        cleaned: list[dict[str, Any]] = []
         for m in messages:
             role = (m.get("role") or "").lower()
             if role == "system":
@@ -138,9 +135,9 @@ class AnthropicTextGenerator(TextGeneratorAPI):
 
         client = self._get_client()
 
-        async def _call_sdk(msgs: Sequence[Dict[str, Any]], system: str | None, temp: float) -> str:
+        async def _call_sdk(msgs: Sequence[dict[str, Any]], system: str | None, temp: float) -> str:
             max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16384"))
-            kwargs: Dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_tokens,
                 "messages": msgs,
@@ -155,9 +152,20 @@ class AnthropicTextGenerator(TextGeneratorAPI):
                         "cache_control": {"type": "ephemeral"},
                     }
                 ]
-            response = await client.messages.create(**kwargs)
+            try:
+                response = await client.messages.create(**kwargs)
+            except RateLimitError as e:
+                _log.warning("Anthropic rate limit hit for model %s: %s", self.model, e)
+                raise
+            except APIConnectionError as e:
+                _log.error("Anthropic connection error for model %s: %s", self.model, e)
+                raise
+            except APIError as e:
+                _log.error("Anthropic API error for model %s (status %s): %s", self.model, e.status_code, e.message)
+                raise
+
             # SDK returns a list of content blocks; aggregate text blocks.
-            parts: List[str] = []
+            parts: list[str] = []
             for block in getattr(response, "content", []) or []:
                 text = getattr(block, "text", None)
                 if text:

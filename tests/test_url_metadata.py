@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 
 from hollingsbot.url_metadata import (
-    extract_urls,
-    format_metadata_for_llm,
     URLMetadata,
     _parse_metadata,
+    extract_urls,
+    format_metadata_for_llm,
 )
 
 

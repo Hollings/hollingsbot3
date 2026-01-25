@@ -8,8 +8,8 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 
 from hollingsbot.image_generators import get_image_generator
+from hollingsbot.prompt_db import log_llm_api_call, update_status
 from hollingsbot.text_generators import get_text_generator
-from hollingsbot.prompt_db import update_status, log_llm_api_call
 
 logger = get_task_logger(__name__)
 
@@ -20,7 +20,7 @@ celery_app = Celery(
 )
 
 celery_app.conf.task_routes = {
-    "tasks.generate_text":  {"queue": "text"},
+    "tasks.generate_text": {"queue": "text"},
     "tasks.generate_image": {"queue": "image"},
     "tasks.generate_llm_chat_response": {"queue": "text"},
     "tasks.repair_wendy": {"queue": "text"},
@@ -37,7 +37,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     autoretry_for=(Exception,),
     retry_backoff=True,
 )
-def generate_image(  # noqa: C901
+def generate_image(
     self,
     prompt_id: int,
     api: str,
@@ -117,9 +117,7 @@ def generate_image(  # noqa: C901
         raise RuntimeError(err) from exc
     except Exception as exc:
         duration = time.monotonic() - start
-        logger.exception(
-            "generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc
-        )
+        logger.exception("generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc)
         update_status(prompt_id, f"failed: {exc}")
         raise
     finally:
@@ -141,9 +139,7 @@ def generate_image(  # noqa: C901
             paths.append(str(fp))
         update_status(prompt_id, "completed")
         duration = time.monotonic() - start
-        logger.info(
-            "generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths)
-        )
+        logger.info("generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths))
         return paths
     else:
         filename = f"{prompt_id}_{ts}.png"
@@ -186,7 +182,7 @@ def generate_text(
             text = asyncio.run(generator.generate(prompt, temperature=temperature))
         else:
             text = asyncio.run(generator.generate(prompt))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         duration = time.monotonic() - start
         logger.exception("generate_text FAILED after %.2fs | %s", duration, exc)
         raise
@@ -275,14 +271,16 @@ def _build_messages_for_generator(
                     try:
                         header, b64_data = data_url.split(",", 1)
                         media_type = header.split(";")[0].replace("data:", "")
-                        content_parts.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64_data,
-                            },
-                        })
+                        content_parts.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": b64_data,
+                                },
+                            }
+                        )
                     except Exception:
                         logger.warning("Failed to parse data URL for image %s", img.get("name"))
             if not content_parts:
@@ -346,6 +344,7 @@ def generate_llm_chat_response(
     # Serialize conversation for logging
     import json
     import traceback
+
     conversation_json = json.dumps(conversation, indent=2)
     response_text = ""
     status = "error"
@@ -353,9 +352,7 @@ def generate_llm_chat_response(
     error_traceback = None
 
     try:
-        if api_normalized in {"openai", "chatgpt", "openrouter"}:
-            payload = _build_messages_for_generator(api_normalized, conversation)
-        elif api_normalized == "anthropic":
+        if api_normalized in {"openai", "chatgpt", "openrouter"} or api_normalized == "anthropic":
             payload = _build_messages_for_generator(api_normalized, conversation)
         elif api_normalized == "claude-cli":
             # Pass conversation directly - claude_cli.py handles its own formatting
@@ -371,7 +368,7 @@ def generate_llm_chat_response(
         text = asyncio.run(generator.generate(_conversation_to_text(conversation)))
         response_text = text
         status = "success"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         duration = time.monotonic() - start
         error_message = str(exc)
         error_traceback = traceback.format_exc()
@@ -420,7 +417,7 @@ def generate_llm_chat_response(
     }
 
     # Try to get token usage from generator if available
-    token_usage = getattr(generator, 'last_token_usage', None)
+    token_usage = getattr(generator, "last_token_usage", None)
     if token_usage:
         debug_info["token_usage"] = token_usage
 
@@ -445,8 +442,8 @@ def repair_wendy(self, channel_id: int) -> dict:
     3. Attempts to fix the issue
     4. Sends a summary to the channel via send_message.sh
     """
-    import subprocess
     import shutil
+    import subprocess
 
     logger.info("repair_wendy START for channel %d", channel_id)
     start = time.monotonic()
@@ -456,7 +453,7 @@ def repair_wendy(self, channel_id: int) -> dict:
     if not cli_path:
         return {"success": False, "error": "Claude CLI not found"}
 
-    repair_prompt = f'''EMERGENCY REPAIR MODE - Channel {channel_id}
+    repair_prompt = f"""EMERGENCY REPAIR MODE - Channel {channel_id}
 
 CRITICAL: You are debugging why Wendy (the Discord bot) is not responding. This is NOT for adding features or minor issues - only for fixing crashes and critical failures.
 
@@ -494,7 +491,7 @@ IMPORTANT:
 - Always send a summary message when done
 - If you edit code, you MUST restart the relevant container
 
-START by checking the docker logs and session state.'''
+START by checking the docker logs and session state."""
 
     try:
         # Run claude CLI with the repair prompt (fresh session, no resume)
@@ -502,8 +499,10 @@ START by checking the docker logs and session state.'''
             [
                 cli_path,
                 "-p",  # Print mode
-                "--model", "opus",
-                "--allowedTools", "Read,Bash,Edit,Write",
+                "--model",
+                "opus",
+                "--allowedTools",
+                "Read,Bash,Edit,Write",
             ],
             input=repair_prompt,
             capture_output=True,

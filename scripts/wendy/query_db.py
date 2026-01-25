@@ -25,6 +25,7 @@ Examples:
     # Join with message_history for more details
     python query_db.py "SELECT h.author_nickname, h.content, h.reactions FROM message_history h WHERE h.content LIKE '%thanks%' LIMIT 10"
 """
+
 import argparse
 import json
 import sqlite3
@@ -34,17 +35,24 @@ DB_PATH = "/data/hollingsbot.db"
 
 # SQL operations to allow (read-only)
 ALLOWED_OPERATIONS = {
-    sqlite3.SQLITE_SELECT,      # SELECT statements
-    sqlite3.SQLITE_READ,        # Reading a table
-    sqlite3.SQLITE_FUNCTION,    # Using functions
-    sqlite3.SQLITE_PRAGMA,      # PRAGMA (we'll filter dangerous ones)
+    sqlite3.SQLITE_SELECT,  # SELECT statements
+    sqlite3.SQLITE_READ,  # Reading a table
+    sqlite3.SQLITE_FUNCTION,  # Using functions
+    sqlite3.SQLITE_PRAGMA,  # PRAGMA (we'll filter dangerous ones)
 }
 
 # Dangerous PRAGMAs that could modify state
 DANGEROUS_PRAGMAS = {
-    'journal_mode', 'synchronous', 'cache_size', 'page_size',
-    'auto_vacuum', 'incremental_vacuum', 'secure_delete',
-    'wal_checkpoint', 'optimize', 'shrink_memory',
+    "journal_mode",
+    "synchronous",
+    "cache_size",
+    "page_size",
+    "auto_vacuum",
+    "incremental_vacuum",
+    "secure_delete",
+    "wal_checkpoint",
+    "optimize",
+    "shrink_memory",
 }
 
 
@@ -53,9 +61,8 @@ def authorizer(action, arg1, arg2, db_name, trigger_name):
     # Allow read operations
     if action in ALLOWED_OPERATIONS:
         # Extra check for PRAGMA
-        if action == sqlite3.SQLITE_PRAGMA and arg1:
-            if arg1.lower() in DANGEROUS_PRAGMAS:
-                return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_PRAGMA and arg1 and arg1.lower() in DANGEROUS_PRAGMAS:
+            return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
     # Deny everything else (INSERT, UPDATE, DELETE, CREATE, DROP, etc.)
@@ -66,17 +73,17 @@ def execute_query(query: str, limit: int = 1000) -> dict:
     """Execute a read-only query and return results."""
     # Validate query starts with SELECT or WITH (for CTEs)
     query_upper = query.strip().upper()
-    if not (query_upper.startswith('SELECT') or query_upper.startswith('WITH')):
+    if not (query_upper.startswith("SELECT") or query_upper.startswith("WITH")):
         return {
             "error": "Only SELECT queries allowed. Query must start with SELECT or WITH.",
             "query": query[:100],
         }
 
     # Check for obviously dangerous keywords (defense in depth)
-    dangerous_keywords = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'ATTACH', 'DETACH']
+    dangerous_keywords = ["INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "ATTACH", "DETACH"]
     for keyword in dangerous_keywords:
         # Check for keyword as a standalone word (not part of column name)
-        if f' {keyword} ' in f' {query_upper} ' or query_upper.startswith(f'{keyword} '):
+        if f" {keyword} " in f" {query_upper} " or query_upper.startswith(f"{keyword} "):
             return {
                 "error": f"Query contains disallowed keyword: {keyword}",
                 "query": query[:100],
@@ -94,7 +101,7 @@ def execute_query(query: str, limit: int = 1000) -> dict:
         conn.set_authorizer(authorizer)
 
         # Add LIMIT if not present to prevent huge results
-        if 'LIMIT' not in query_upper:
+        if "LIMIT" not in query_upper:
             query = f"{query.rstrip(';')} LIMIT {limit}"
 
         cursor = conn.execute(query)
@@ -126,17 +133,15 @@ def get_schema() -> dict:
     conn.row_factory = sqlite3.Row
 
     # Get all tables
-    tables = conn.execute(
-        "SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name"
-    ).fetchall()
+    tables = conn.execute("SELECT name, sql FROM sqlite_master WHERE type='table' ORDER BY name").fetchall()
 
     schema = {}
     for table in tables:
         # Get column info
         columns = conn.execute(f"PRAGMA table_info({table['name']})").fetchall()
-        schema[table['name']] = {
-            "columns": [{"name": c['name'], "type": c['type']} for c in columns],
-            "sql": table['sql'],
+        schema[table["name"]] = {
+            "columns": [{"name": c["name"], "type": c["type"]} for c in columns],
+            "sql": table["sql"],
         }
 
     conn.close()

@@ -1,14 +1,15 @@
 # /mnt/data/svg_utils.py
 from __future__ import annotations
-import io
-import re
-import logging
-from typing import List, Tuple
+
 import html
+import io
+import logging
+import re
 
 # Try to enable SVG rendering; degrade gracefully if native Cairo is missing.
 try:
     import cairosvg  # type: ignore
+
     _SVG_RENDERING_AVAILABLE = True
 except Exception as e:  # pragma: no cover
     cairosvg = None  # type: ignore
@@ -48,7 +49,6 @@ def _ensure_svg_root_has_namespaces(svg_xml: str) -> str:
     if not m:
         return svg_xml  # no root tag found; caller handles wrapping/closing recovery
 
-    tag_full = m.group(0)
     attrs = m.group(1) or ""
 
     needs_xmlns = "xmlns=" not in attrs
@@ -66,7 +66,7 @@ def _ensure_svg_root_has_namespaces(svg_xml: str) -> str:
 
     # Insert the missing namespace attrs before the closing ">"
     new_open = f"<svg{attrs} {' '.join(extras)}>"
-    return svg_xml[:m.start()] + new_open + svg_xml[m.end():]
+    return svg_xml[: m.start()] + new_open + svg_xml[m.end() :]
 
 
 def _strip_doctype_and_scripts(svg_xml: str) -> str:
@@ -138,7 +138,7 @@ def _sanitize_svg(svg_xml: str) -> str:
     return svg_xml
 
 
-def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]:
+def _render_with_recovery(svg_xml: str) -> tuple[bool, bytes | None, str | None]:
     """
     Try to render as-is, then try a sanitized version, then give up.
     Returns (ok, png_bytes_or_none, error_message_or_none).
@@ -158,7 +158,7 @@ def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]
             try:
                 if "<svg" not in svg_xml.lower():
                     # Wrap standalone fragments in a minimal svg shell
-                    wrapped = '<svg xmlns="http://www.w3.org/2000/svg">%s</svg>' % svg_xml
+                    wrapped = f'<svg xmlns="http://www.w3.org/2000/svg">{svg_xml}</svg>'
                 else:
                     wrapped = svg_xml
                 wrapped = _sanitize_svg(wrapped)
@@ -166,7 +166,9 @@ def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]
                 return True, png, None
             except Exception as e3:
                 # Report the last error, keep earlier for logs
-                logging.getLogger(__name__).debug("SVG render failed. First error: %r; Second: %r; Third: %r", e1, e2, e3)
+                logging.getLogger(__name__).debug(
+                    "SVG render failed. First error: %r; Second: %r; Third: %r", e1, e2, e3
+                )
                 return False, None, str(e3)
 
 
@@ -176,7 +178,7 @@ def _attach_bytes(name: str, data: bytes) -> io.BytesIO:
     return buf
 
 
-def extract_render_and_strip_svgs(text: str) -> Tuple[str, List[Tuple[str, io.BytesIO]]]:
+def extract_render_and_strip_svgs(text: str) -> tuple[str, list[tuple[str, io.BytesIO]]]:
     """
     Find any SVG fragments and render each to a PNG when possible.
     Strategy:
@@ -187,7 +189,7 @@ def extract_render_and_strip_svgs(text: str) -> Tuple[str, List[Tuple[str, io.By
       cleaned_text: original text with svg fragments replaced by short notes
       svg_files: list of (filename, BytesIO) for sending as attachments (PNG if possible, otherwise raw .svg)
     """
-    svg_files: List[Tuple[str, io.BytesIO]] = []
+    svg_files: list[tuple[str, io.BytesIO]] = []
     idx = 0
 
     def _process_svg_fragment(svg_xml: str) -> str:

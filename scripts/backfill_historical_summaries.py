@@ -14,20 +14,19 @@ Run inside Docker:
 import argparse
 import asyncio
 import sqlite3
-import time
-from pathlib import Path
 
 # Add src to path for imports
 import sys
+import time
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from hollingsbot.prompt_db import DB_PATH
-from hollingsbot.text_generators import AnthropicTextGenerator
 from hollingsbot.summarization.summary_cache import (
     SUMMARIZATION_CUTOFF_TIMESTAMP,
-    SummaryCache,
-    MessageGroup,
 )
+from hollingsbot.text_generators import AnthropicTextGenerator
 
 CHUNK_SIZE = 250
 MODEL = "claude-haiku-4-5"
@@ -64,16 +63,16 @@ def get_uncovered_old_messages(conn: sqlite3.Connection, channel_id: int) -> lis
     for row in cur.fetchall():
         msg_id = row[0]
         # Check if this message is covered by any existing L3 group
-        is_covered = any(
-            start <= msg_id <= end for start, end in covered_ranges
-        )
+        is_covered = any(start <= msg_id <= end for start, end in covered_ranges)
         if not is_covered:
-            messages.append({
-                "message_id": msg_id,
-                "author_name": row[1],
-                "content": row[2],
-                "timestamp": row[3],
-            })
+            messages.append(
+                {
+                    "message_id": msg_id,
+                    "author_name": row[1],
+                    "content": row[2],
+                    "timestamp": row[3],
+                }
+            )
 
     return messages
 
@@ -82,7 +81,7 @@ def chunk_messages(messages: list[dict], size: int = CHUNK_SIZE) -> list[list[di
     """Split messages into chunks of specified size."""
     chunks = []
     for i in range(0, len(messages), size):
-        chunk = messages[i:i + size]
+        chunk = messages[i : i + size]
         if len(chunk) >= size // 2:  # Only include chunks that are at least half-full
             chunks.append(chunk)
     return chunks
@@ -97,7 +96,7 @@ def format_chunk_for_summary(messages: list[dict]) -> str:
 
         # Strip the <Author>: prefix if present
         if content.startswith(f"<{author}>:"):
-            content = content[len(f"<{author}>:"):].strip()
+            content = content[len(f"<{author}>:") :].strip()
 
         # Truncate very long messages
         if len(content) > 400:
@@ -212,7 +211,7 @@ async def main():
                 end_ts = chunk[-1]["timestamp"]
                 msg_count = len(chunk)
 
-                print(f"  Chunk {i+1}/{len(chunks)}: {msg_count} messages ({start_id} -> {end_id})")
+                print(f"  Chunk {i + 1}/{len(chunks)}: {msg_count} messages ({start_id} -> {end_id})")
 
                 # Format for summary
                 chat_text = format_chunk_for_summary(chunk)
@@ -228,12 +227,11 @@ async def main():
 
                     if not args.dry_run:
                         group_id = insert_l3_summary(
-                            conn, channel_id, start_id, end_id,
-                            summary, msg_count, start_ts, end_ts
+                            conn, channel_id, start_id, end_id, summary, msg_count, start_ts, end_ts
                         )
                         print(f"    Saved as group ID {group_id}")
                     else:
-                        print(f"    [DRY RUN] Would save summary")
+                        print("    [DRY RUN] Would save summary")
 
                     chunks_processed += 1
                     total_messages += msg_count

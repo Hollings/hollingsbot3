@@ -7,14 +7,16 @@ import functools
 import logging
 import os
 import time
-from typing import Any
 from contextlib import suppress
+from typing import TYPE_CHECKING, Any
 
 import discord
-from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
 from hollingsbot.tasks import generate_text
+
+if TYPE_CHECKING:
+    from discord.ext import commands
 
 _LOG = logging.getLogger(__name__)
 
@@ -100,9 +102,7 @@ class LlamaBot:
 
         # Generate response
         job = GenerationJob()
-        task = self.bot.loop.create_task(
-            self._generate_and_send(message, raw_text, job)
-        )
+        task = self.bot.loop.create_task(self._generate_and_send(message, raw_text, job))
         job.task = task
         self._active_generations[message.channel.id] = job
 
@@ -128,10 +128,7 @@ class LlamaBot:
             return False
 
         # Ignore empty
-        if not message.content.strip() and not message.attachments:
-            return False
-
-        return True
+        return not (not message.content.strip() and not message.attachments)
 
     async def _check_bot_mentioned(self, message: discord.Message) -> bool:
         """Check if bot was explicitly mentioned."""

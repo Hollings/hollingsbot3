@@ -1,15 +1,17 @@
 # text_generators/openai_chatgpt.py
 from __future__ import annotations
 
-from typing import Dict, Sequence, TypedDict, Union, List, Any
-import os
+import contextlib
 import logging
+import os
+from collections.abc import Sequence
+from typing import Any, TypedDict, Union
 
 from openai import AsyncOpenAI
 
 from .base import TextGeneratorAPI
 
-_CLIENT_CACHE: Dict[str, AsyncOpenAI] = {}
+_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -50,7 +52,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            parts: List[str] = []
+            parts: list[str] = []
             for item in content:
                 try:
                     t = item.get("type")
@@ -67,7 +69,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         return str(content)
 
     @staticmethod
-    def _to_responses_easy_input(messages: List[_Message]) -> tuple[str | None, List[Dict[str, Any]]]:
+    def _to_responses_easy_input(messages: list[_Message]) -> tuple[str | None, list[dict[str, Any]]]:
         """Build Responses API EasyInputMessageParam list preserving roles and content.
 
         Returns (instructions, input_messages).
@@ -76,14 +78,14 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
           (user/assistant/system/developer) and raw OpenAI-style content.
         """
         instructions: str | None = None
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
 
-        def _to_resp_content_list(content: Any, role_for_types: str) -> List[Dict[str, Any]]:
+        def _to_resp_content_list(content: Any, role_for_types: str) -> list[dict[str, Any]]:
             # Normalize to a list of {type: input_text|input_image|input_file, ...}
             if isinstance(content, str):
                 tname = "output_text" if role_for_types == "assistant" else "input_text"
                 return [{"type": tname, "text": content}]
-            items: List[Dict[str, Any]] = []
+            items: list[dict[str, Any]] = []
             if isinstance(content, list):
                 for it in content:
                     try:
@@ -136,7 +138,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                 continue
             # Convert to Responses input content list
             content_list = _to_resp_content_list(content, role)
-            msg: Dict[str, Any] = {"role": role, "content": content_list, "type": "message"}
+            msg: dict[str, Any] = {"role": role, "content": content_list, "type": "message"}
             out.append(msg)
 
         if not out:
@@ -146,7 +148,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         return instructions, out
 
     @staticmethod
-    def _to_chat_completions_messages(messages: Sequence[_Message]) -> List[Dict[str, Any]]:
+    def _to_chat_completions_messages(messages: Sequence[_Message]) -> list[dict[str, Any]]:
         """Convert internal message structures into Chat Completions payloads.
 
         Ensures any Responses-specific content types downgrade to plain `text`/
@@ -158,7 +160,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                 return content
             if not isinstance(content, list):
                 return str(content)
-            converted: List[Dict[str, Any]] = []
+            converted: list[dict[str, Any]] = []
             for item in content:
                 if not isinstance(item, dict):
                     converted.append({"type": "text", "text": str(item)})
@@ -177,7 +179,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                     converted.append({"type": "text", "text": str(item)})
             return converted or ""
 
-        out: List[Dict[str, Any]] = []
+        out: list[dict[str, Any]] = []
         for entry in messages:
             role = entry.get("role", "user")
             content = entry.get("content")
@@ -195,7 +197,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         if isinstance(content, str):
             return content
         if isinstance(content, list):
-            parts: List[str] = []
+            parts: list[str] = []
             for item in content:
                 if isinstance(item, dict):
                     t = item.get("type")
@@ -206,7 +208,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                             args = item.get("function", {}).get("arguments")
                             if isinstance(args, str):
                                 parts.append(args)
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             continue
                 else:
                     parts.append(str(item))
@@ -221,7 +223,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
     ) -> str:
         # Normalize input into a list of messages for unified handling
         if isinstance(prompt, str):
-            messages: List[_Message] = [{"role": "user", "content": prompt}]
+            messages: list[_Message] = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, Sequence):
             if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
                 raise TypeError("Each message must be a dict with 'role' and 'content' keys")
@@ -236,7 +238,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
             instructions, input_messages = self._to_responses_easy_input(messages)
             # Cap output to improve latency.
             max_tokens = int(os.getenv("TEXT_MAX_OUTPUT_TOKENS", "800"))
-            kwargs: Dict[str, Any] = {
+            kwargs: dict[str, Any] = {
                 "model": self.model,
                 "input": input_messages,
                 "max_output_tokens": max_tokens,
@@ -249,17 +251,15 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
             except Exception:
                 pass
 
-            try:
+            with contextlib.suppress(Exception):
                 _LOG.debug(
                     "OpenAI Responses: input_messages=%d (first roles: %s; first content types: %s)",
                     len(input_messages),
                     ", ".join(m.get("role", "?") for m in input_messages[:3]),
-                    ", ".join(
-                        (c.get("type", "?")) for c in (input_messages[0].get("content", []) or [])
-                    ) if input_messages else "",
+                    ", ".join((c.get("type", "?")) for c in (input_messages[0].get("content", []) or []))
+                    if input_messages
+                    else "",
                 )
-            except Exception:
-                pass
 
             # Optional per-request timeout; falls back to client default if unset
             req_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "0"))
@@ -271,7 +271,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
             # Extract text similar to our SVG generator helper
             text = getattr(resp, "output_text", None)
             if not text:
-                parts: List[str] = []
+                parts: list[str] = []
                 output = getattr(resp, "output", None)
                 if output:
                     for item in output:
@@ -299,7 +299,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                     )
                     choice = resp_chat.choices[0]
                     text = self._chat_completion_choice_to_text(choice)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     _LOG.exception(
                         "Chat Completions fallback failed (model=%s): %s",
                         self.model,
@@ -311,7 +311,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         # Fallback for non-gpt-5 models: Chat Completions with temperature
         resp = await client.chat.completions.create(
             model=self.model,
-            messages=messages,      # type: ignore[arg-type]
+            messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
         )
         choice = resp.choices[0]

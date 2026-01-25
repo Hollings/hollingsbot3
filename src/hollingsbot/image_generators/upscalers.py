@@ -1,10 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import os
-import asyncio
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 import replicate
@@ -22,11 +22,9 @@ class RealESRGANUpscaler:
     """
 
     # Use a pinned model version to avoid 404 and ensure consistent outputs
-    model: str = (
-        os.getenv(
-            "REALESRGAN_MODEL",
-            "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
-        )
+    model: str = os.getenv(
+        "REALESRGAN_MODEL",
+        "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
     )
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
     # Internal client/session are explicit fields to be compatible with slots
@@ -67,7 +65,8 @@ class RealESRGANUpscaler:
             try:
                 im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
             except Exception:
-                buf.seek(0); buf.truncate(0)
+                buf.seek(0)
+                buf.truncate(0)
                 im.save(buf, format="JPEG", quality=q)
             data = buf.getvalue()
             delta = abs(len(data) - target)
@@ -87,7 +86,7 @@ class RealESRGANUpscaler:
         self,
         image_bytes: bytes,
         *,
-        target_bytes: Optional[int] = None,
+        target_bytes: int | None = None,
         scale: int | None = None,
         face_enhance: bool = False,
     ) -> bytes:
@@ -113,22 +112,29 @@ class RealESRGANUpscaler:
         # Replicate can take a file handle for the input image under the key "image"
         # Use a small async helper to run and normalize outputs.
         async def _run(img: bytes) -> bytes:
-            from tempfile import NamedTemporaryFile
+            import tempfile
 
-            tmp = NamedTemporaryFile(prefix="esrgan_", suffix=".png", delete=False)
-            tmp.write(img)
-            tmp.flush(); tmp.close()
-            fh = open(tmp.name, "rb")
+            # Create temp file and track its path for guaranteed cleanup
+            tmp_path = None
+            fh = None
             try:
+                # Create temp file - use context manager for initial write
+                fd, tmp_path = tempfile.mkstemp(prefix="esrgan_", suffix=".png")
+                os.write(fd, img)
+                os.close(fd)
+
+                # Open for reading
+                fh = open(tmp_path, "rb")
                 out = await self._client.async_run(self.model, input={"image": fh, **inputs})  # type: ignore[union-attr]
             finally:
-                try:
-                    fh.close()
-                finally:
-                    try:
-                        os.unlink(tmp.name)
-                    except OSError:
-                        pass
+                # Always close file handle first
+                if fh is not None:
+                    with contextlib.suppress(OSError):
+                        fh.close()
+                # Then delete the temp file
+                if tmp_path is not None:
+                    with contextlib.suppress(OSError):
+                        os.unlink(tmp_path)
 
             # Normalize output: could be a URL string, bytes-like, blob with .url(), or list
             if isinstance(out, (bytes, bytearray)):
@@ -138,7 +144,7 @@ class RealESRGANUpscaler:
             # Blob-like object with .url property or method
             try:
                 if hasattr(out, "url"):
-                    u = out.url() if callable(getattr(out, "url")) else out.url  # type: ignore[misc]
+                    u = out.url() if callable(out.url) else out.url  # type: ignore[misc]
                     if isinstance(u, str) and u.startswith(("http://", "https://")):
                         return await self._download(u)
             except Exception:

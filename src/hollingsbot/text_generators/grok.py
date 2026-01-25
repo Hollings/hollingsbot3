@@ -1,15 +1,16 @@
 # text_generators/grok.py
 from __future__ import annotations
 
-from typing import Dict, Sequence, TypedDict, Union, List, Any
-import os
 import logging
+import os
+from collections.abc import Sequence
+from typing import TypedDict, Union
 
-from openai import AsyncOpenAI
+from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 
 from .base import TextGeneratorAPI
 
-_CLIENT_CACHE: Dict[str, AsyncOpenAI] = {}
+_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -33,10 +34,7 @@ class GrokTextGenerator(TextGeneratorAPI):
             api_key = os.getenv("XAI_API_KEY")
             if not api_key:
                 raise ValueError("XAI_API_KEY environment variable is required for Grok")
-            _CLIENT_CACHE["grok"] = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://api.x.ai/v1"
-            )
+            _CLIENT_CACHE["grok"] = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         return _CLIENT_CACHE["grok"]
 
     async def generate(
@@ -48,7 +46,7 @@ class GrokTextGenerator(TextGeneratorAPI):
         """Generate text using Grok via xAI's OpenAI-compatible API."""
         # Normalize input into a list of messages
         if isinstance(prompt, str):
-            messages: List[_Message] = [{"role": "user", "content": prompt}]
+            messages: list[_Message] = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, Sequence):
             if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
                 raise TypeError("Each message must be a dict with 'role' and 'content' keys")
@@ -61,10 +59,23 @@ class GrokTextGenerator(TextGeneratorAPI):
         # Use Chat Completions API (xAI is OpenAI-compatible)
         _LOG.debug("Grok: generating with model=%s, messages=%d", self.model, len(messages))
 
-        resp = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,      # type: ignore[arg-type]
-            temperature=temperature,
-        )
+        try:
+            resp = await client.chat.completions.create(
+                model=self.model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+            )
+        except RateLimitError as e:
+            _LOG.warning("Grok rate limit hit for model %s: %s", self.model, e)
+            raise
+        except APIConnectionError as e:
+            _LOG.error("Grok connection error for model %s: %s", self.model, e)
+            raise
+        except APIError as e:
+            _LOG.error(
+                "Grok API error for model %s (status %s): %s", self.model, getattr(e, "status_code", "unknown"), e
+            )
+            raise
+
         choice = resp.choices[0]
         return (choice.message.content or "").strip()

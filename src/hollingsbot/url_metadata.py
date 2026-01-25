@@ -8,7 +8,6 @@ import io
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
 from bs4 import BeautifulSoup
@@ -18,10 +17,7 @@ _LOG = logging.getLogger(__name__)
 
 # Regex pattern for detecting URLs in text
 # Matches http(s):// URLs or www. URLs, excluding common trailing punctuation
-_URL_PATTERN = re.compile(
-    r"https?://[^\s<>\"]+[^\s<>\".,!?;:)\]}>]|www\.[^\s<>\"]+[^\s<>\".,!?;:)\]}>]",
-    re.IGNORECASE
-)
+_URL_PATTERN = re.compile(r"https?://[^\s<>\"]+[^\s<>\".,!?;:)\]}>]|www\.[^\s<>\"]+[^\s<>\".,!?;:)\]}>]", re.IGNORECASE)
 
 _MAX_CONTENT_LENGTH = 5_000_000  # 5MB limit for fetched HTML
 _REQUEST_TIMEOUT = 10  # seconds
@@ -32,6 +28,7 @@ _IMAGE_MAX_BYTES = 9_500_000  # Max size for processed images
 @dataclass
 class ImageAttachment:
     """Image attachment for LLM conversation."""
+
     name: str
     url: str | None
     data_url: str | None
@@ -43,6 +40,7 @@ class ImageAttachment:
 @dataclass
 class URLMetadata:
     """Metadata extracted from a URL."""
+
     url: str
     title: str | None = None
     description: str | None = None
@@ -100,6 +98,7 @@ def _generate_syndication_token(tweet_id: str) -> str:
         Generated token string
     """
     import math
+
     tweet_id_num = int(tweet_id)
     value = (tweet_id_num / 1e15) * math.pi
     token = ""
@@ -111,11 +110,11 @@ def _generate_syndication_token(tweet_id: str) -> str:
         if digit < 10:
             base36_str = str(digit) + base36_str
         else:
-            base36_str = chr(ord('a') + digit - 10) + base36_str
+            base36_str = chr(ord("a") + digit - 10) + base36_str
         int_part //= 36
 
     # Remove leading zeros and dots
-    token = re.sub(r'(0+|\.)', '', base36_str)
+    token = re.sub(r"(0+|\.)", "", base36_str)
     return token if token else "0"
 
 
@@ -141,13 +140,12 @@ async def fetch_twitter_syndication_data(url: str) -> URLMetadata | None:
 
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(syndication_url) as response:
-                if response.status != 200:
-                    _LOG.warning("Syndication API returned HTTP %d for tweet %s", response.status, tweet_id)
-                    return None
+        async with aiohttp.ClientSession(timeout=timeout) as session, session.get(syndication_url) as response:
+            if response.status != 200:
+                _LOG.warning("Syndication API returned HTTP %d for tweet %s", response.status, tweet_id)
+                return None
 
-                data = await response.json()
+            data = await response.json()
 
         # Extract data from syndication response
         metadata = URLMetadata(url=url)
@@ -171,15 +169,11 @@ async def fetch_twitter_syndication_data(url: str) -> URLMetadata | None:
             if thumb_url and thumb_url not in metadata.image_urls:
                 metadata.image_urls.append(thumb_url)
 
-        _LOG.info(
-            "Syndication API: Extracted %d image(s) from tweet %s",
-            len(metadata.image_urls),
-            tweet_id
-        )
+        _LOG.info("Syndication API: Extracted %d image(s) from tweet %s", len(metadata.image_urls), tweet_id)
 
         return metadata
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.warning("Failed to fetch Twitter syndication data for %s: %s", url, exc)
         return None
 
@@ -209,14 +203,9 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
         # Increase header size limits for sites like X/Twitter that send large cookies
         connector = aiohttp.TCPConnector(limit_per_host=5)
         async with aiohttp.ClientSession(
-            timeout=timeout,
-            connector=connector,
-            max_line_size=16384,
-            max_field_size=16384
+            timeout=timeout, connector=connector, max_line_size=16384, max_field_size=16384
         ) as session:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"}
             async with session.get(url, headers=headers, allow_redirects=True) as response:
                 # Check content length
                 content_length = response.headers.get("Content-Length")
@@ -237,10 +226,7 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
         # Log extracted metadata for debugging
         if metadata.image_urls:
             _LOG.info(
-                "Extracted %d image(s) from %s: %s",
-                len(metadata.image_urls),
-                url,
-                ", ".join(metadata.image_urls)
+                "Extracted %d image(s) from %s: %s", len(metadata.image_urls), url, ", ".join(metadata.image_urls)
             )
 
         return metadata
@@ -251,7 +237,7 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
     except aiohttp.ClientError as exc:
         _LOG.warning("Failed to fetch URL %s: %s", url, exc)
         return None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.exception("Unexpected error fetching URL %s: %s", url, exc)
         return None
 
@@ -381,9 +367,7 @@ async def download_and_process_image(image_url: str, index: int = 1) -> ImageAtt
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
         async with aiohttp.ClientSession(timeout=timeout) as session:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"
-            }
+            headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"}
             async with session.get(image_url, headers=headers) as response:
                 if response.status != 200:
                     _LOG.warning("Failed to download image from %s: HTTP %d", image_url, response.status)
@@ -421,7 +405,7 @@ async def download_and_process_image(image_url: str, index: int = 1) -> ImageAtt
             size=len(jpeg_bytes),
         )
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.exception("Failed to download/process image from %s: %s", image_url, exc)
         return None
 
@@ -443,10 +427,7 @@ async def download_images_from_metadata(metadata: URLMetadata, max_images: int =
     image_urls = metadata.image_urls[:max_images]
 
     # Download images in parallel
-    tasks = [
-        download_and_process_image(img_url, index=i+1)
-        for i, img_url in enumerate(image_urls)
-    ]
+    tasks = [download_and_process_image(img_url, index=i + 1) for i, img_url in enumerate(image_urls)]
     results = await asyncio.gather(*tasks, return_exceptions=True)
 
     # Filter out failures and exceptions

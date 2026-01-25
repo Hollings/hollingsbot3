@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 try:
     import pytesseract
+
     HAS_OCR = True
 except ImportError:
     HAS_OCR = False
@@ -45,35 +46,34 @@ MIN_MARGIN_HEIGHT = 10
 
 def _init_db():
     """Create the elo_posts and match_history tables if they don't exist."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS elo_posts (
-            id INTEGER PRIMARY KEY,
-            name TEXT,
-            filename TEXT,
-            post_type TEXT DEFAULT 'image',
-            text_content TEXT,
-            rating INTEGER DEFAULT 1000,
-            wins INTEGER DEFAULT 0,
-            losses INTEGER DEFAULT 0
-        )
-    """)
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS match_history (
-            id INTEGER PRIMARY KEY,
-            winner_id INTEGER,
-            loser_id INTEGER,
-            winner_rating_before INTEGER,
-            loser_rating_before INTEGER,
-            winner_rating_after INTEGER,
-            loser_rating_after INTEGER,
-            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (winner_id) REFERENCES elo_posts(id),
-            FOREIGN KEY (loser_id) REFERENCES elo_posts(id)
-        )
-    """)
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS elo_posts (
+                id INTEGER PRIMARY KEY,
+                name TEXT,
+                filename TEXT,
+                post_type TEXT DEFAULT 'image',
+                text_content TEXT,
+                rating INTEGER DEFAULT 1000,
+                wins INTEGER DEFAULT 0,
+                losses INTEGER DEFAULT 0
+            )
+        """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS match_history (
+                id INTEGER PRIMARY KEY,
+                winner_id INTEGER,
+                loser_id INTEGER,
+                winner_rating_before INTEGER,
+                loser_rating_before INTEGER,
+                winner_rating_after INTEGER,
+                loser_rating_after INTEGER,
+                timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (winner_id) REFERENCES elo_posts(id),
+                FOREIGN KEY (loser_id) REFERENCES elo_posts(id)
+            )
+        """)
+        conn.commit()
 
 
 def _get_random_pair():
@@ -85,37 +85,33 @@ def _get_random_pair():
     - High vs High (20%): Refine top tier rankings
     - Low vs Low (20%): Refine bottom tier rankings
     """
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
 
-    # Get all posts with match counts
-    all_posts = conn.execute("""
-        SELECT *, (wins + losses) as total_matches
-        FROM elo_posts
-        ORDER BY total_matches ASC
-    """).fetchall()
-    conn.close()
+        # Get all posts with match counts
+        all_posts = conn.execute("""
+            SELECT *, (wins + losses) as total_matches
+            FROM elo_posts
+            ORDER BY total_matches ASC
+        """).fetchall()
 
     if len(all_posts) < 2:
         return all_posts
 
-    total = len(all_posts)
-
-    # Define percentile thresholds
-    HIGH_RATING_PERCENTILE = 0.49  # Top 49% by rating
-    LOW_RATING_PERCENTILE = 0.49   # Bottom 49% by rating
+    # Define percentile threshold for high/low rating pools
+    RATING_PERCENTILE = 0.49  # Top/bottom 49% by rating
 
     # Separate rated (1+ matches) from unrated posts
-    rated_posts = [p for p in all_posts if p['total_matches'] > 0]
-    unrated_posts = [p for p in all_posts if p['total_matches'] == 0]
+    rated_posts = [p for p in all_posts if p["total_matches"] > 0]
+    unrated_posts = [p for p in all_posts if p["total_matches"] == 0]
 
     # Fresh = unrated posts (0 matches)
     fresh_posts = unrated_posts
 
     # High/Low pools only from rated posts (skip unrated)
     if rated_posts:
-        by_rating = sorted(rated_posts, key=lambda p: p['rating'])
-        rating_cutoff = max(1, int(len(rated_posts) * HIGH_RATING_PERCENTILE))
+        by_rating = sorted(rated_posts, key=lambda p: p["rating"])
+        rating_cutoff = max(1, int(len(rated_posts) * RATING_PERCENTILE))
         low_posts = by_rating[:rating_cutoff]
         high_posts = by_rating[-rating_cutoff:]
     else:
@@ -125,11 +121,13 @@ def _get_random_pair():
     # Build strategies only for pools that have enough posts
     strategies = []
     if len(fresh_posts) >= 2:
-        strategies.append(('fresh_vs_fresh', 40))
+        strategies.append(("fresh_vs_fresh", 30))
+    if fresh_posts and rated_posts:
+        strategies.append(("fresh_vs_established", 30))
     if len(high_posts) >= 2:
-        strategies.append(('high_vs_high', 30))
+        strategies.append(("high_vs_high", 20))
     if len(low_posts) >= 2:
-        strategies.append(('low_vs_low', 30))
+        strategies.append(("low_vs_low", 20))
 
     # Fallback if no strategies available
     if not strategies:
@@ -156,38 +154,43 @@ def _get_random_pair():
         # Pick first post randomly
         first = random.choice(pool_list)
         # Find closest match by rating
-        remaining = [p for p in pool_list if p['id'] != first['id']]
+        remaining = [p for p in pool_list if p["id"] != first["id"]]
         if not remaining:
             return [first]
-        closest = min(remaining, key=lambda p: abs(p['rating'] - first['rating']))
+        closest = min(remaining, key=lambda p: abs(p["rating"] - first["rating"]))
         return [first, closest]
 
-    if chosen_strategy == 'fresh_vs_fresh':
+    if chosen_strategy == "fresh_vs_fresh":
         return pick_two_random(fresh_posts)
-    elif chosen_strategy == 'high_vs_high':
+    elif chosen_strategy == "fresh_vs_established":
+        # Pick one fresh and one established (rated) post
+        fresh_pick = random.choice(list(fresh_posts))
+        established_pick = random.choice(list(rated_posts))
+        return [fresh_pick, established_pick]
+    elif chosen_strategy == "high_vs_high":
         return pick_two_closest(high_posts)
-    elif chosen_strategy == 'low_vs_low':
+    elif chosen_strategy == "low_vs_low":
         return pick_two_closest(low_posts)
 
     return random.sample(list(all_posts), 2)
 
 
-def _update_ratings(winner_id, winner_new_rating, loser_id, loser_new_rating,
-                    winner_rating_before=None, loser_rating_before=None):
+def _update_ratings(
+    winner_id, winner_new_rating, loser_id, loser_new_rating, winner_rating_before=None, loser_rating_before=None
+):
     """Update ratings after a match and record history."""
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("UPDATE elo_posts SET rating = ?, wins = wins + 1 WHERE id = ?",
-                 (winner_new_rating, winner_id))
-    conn.execute("UPDATE elo_posts SET rating = ?, losses = losses + 1 WHERE id = ?",
-                 (loser_new_rating, loser_id))
-    conn.execute("""
-        INSERT INTO match_history (winner_id, loser_id, winner_rating_before, loser_rating_before,
-                                   winner_rating_after, loser_rating_after)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (winner_id, loser_id, winner_rating_before, loser_rating_before,
-          winner_new_rating, loser_new_rating))
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("UPDATE elo_posts SET rating = ?, wins = wins + 1 WHERE id = ?", (winner_new_rating, winner_id))
+        conn.execute("UPDATE elo_posts SET rating = ?, losses = losses + 1 WHERE id = ?", (loser_new_rating, loser_id))
+        conn.execute(
+            """
+            INSERT INTO match_history (winner_id, loser_id, winner_rating_before, loser_rating_before,
+                                       winner_rating_after, loser_rating_after)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """,
+            (winner_id, loser_id, winner_rating_before, loser_rating_before, winner_new_rating, loser_new_rating),
+        )
+        conn.commit()
 
 
 def _elo_calc(winner_rating, loser_rating, k=50):
@@ -200,26 +203,25 @@ def _elo_calc(winner_rating, loser_rating, k=50):
 
 def _filename_exists(filename: str) -> bool:
     """Check if a filename is already in the database."""
-    conn = sqlite3.connect(DB_PATH)
-    result = conn.execute("SELECT 1 FROM elo_posts WHERE filename = ?", (filename,)).fetchone()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        result = conn.execute("SELECT 1 FROM elo_posts WHERE filename = ?", (filename,)).fetchone()
     return result is not None
 
 
-def _insert_post(name: str, filename: str, post_type: str = "image", text_content: str = None) -> int:
+def _insert_post(name: str, filename: str, post_type: str = "image", text_content: str | None = None) -> int:
     """Insert a new post and return its ID."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.execute(
-        "INSERT INTO elo_posts (name, filename, post_type, text_content) VALUES (?, ?, ?, ?)",
-        (name, filename, post_type, text_content)
-    )
-    post_id = cursor.lastrowid
-    conn.commit()
-    conn.close()
+    with sqlite3.connect(DB_PATH) as conn:
+        cursor = conn.execute(
+            "INSERT INTO elo_posts (name, filename, post_type, text_content) VALUES (?, ?, ?, ?)",
+            (name, filename, post_type, text_content),
+        )
+        post_id = cursor.lastrowid
+        conn.commit()
     return post_id
 
 
 # --- OCR Caption Parsing ---
+
 
 def _get_header_height(img: Image.Image) -> int:
     """Find the height of a white/light header bar at the top of the image.
@@ -228,7 +230,7 @@ def _get_header_height(img: Image.Image) -> int:
     Text in the header has sparse dark pixels; image content has dense dark pixels.
     Returns 0 if no header is detected.
     """
-    gray = img.convert('L')
+    gray = img.convert("L")
     width, height = gray.size
 
     # Sample more positions across the row
@@ -261,10 +263,10 @@ def _extract_caption_ocr(img: Image.Image) -> str | None:
 
     def _clean_ocr_text(text: str) -> str:
         """Clean up OCR output."""
-        text = text.replace('\n', ' ').strip()
+        text = text.replace("\n", " ").strip()
         # Limit length to avoid garbage dumps
         if len(text) > MAX_CAPTION_LENGTH:
-            text = text[:MAX_CAPTION_LENGTH].rsplit(' ', 1)[0] + "..."
+            text = text[:MAX_CAPTION_LENGTH].rsplit(" ", 1)[0] + "..."
         return text
 
     # Try header OCR first
@@ -305,7 +307,7 @@ def _extract_caption_from_filename(filename: str) -> str:
 
     # Remove common suffixes (hash, seed, model info)
     # Pattern: text followed by 5-char alphanumeric hash
-    parts = name.rsplit('-', 1)
+    parts = name.rsplit("-", 1)
     if len(parts) == 2 and len(parts[1]) == 5 and parts[1].isalnum():
         name = parts[0]
 
@@ -314,18 +316,20 @@ def _extract_caption_from_filename(filename: str) -> str:
         return "Untitled"
 
     # Check if it's a hex hash
-    if re.match(r'^[0-9a-f]{20,}$', name, re.IGNORECASE):
+    if re.match(r"^[0-9a-f]{20,}$", name, re.IGNORECASE):
         return "Untitled"
 
     # Replace underscores with spaces
-    name = name.replace('_', ' ')
+    name = name.replace("_", " ")
 
     # Remove seed patterns like "seed 12345" or "seed-12345"
-    name = re.sub(r'\s*seed[\s-]*\d+', '', name, flags=re.IGNORECASE)
+    name = re.sub(r"\s*seed[\s-]*\d+", "", name, flags=re.IGNORECASE)
 
     # Remove model name patterns (usually at the end)
     # Pattern: replicate-openai-gpt-image-1.5, flux-schnell, google-imagen-4, etc.
-    name = re.sub(r'\s*(replicate|openai|flux|stable[-.]?diffusion|google[-.]?imagen?)[-.\w]*\s*$', '', name, flags=re.IGNORECASE)
+    name = re.sub(
+        r"\s*(replicate|openai|flux|stable[-.]?diffusion|google[-.]?imagen?)[-.\w]*\s*$", "", name, flags=re.IGNORECASE
+    )
 
     return name.strip() or "Untitled"
 
@@ -367,9 +371,9 @@ def ingest_image(img_path: Path, use_ocr: bool = True) -> int | None:
     dest_path = IMAGES_FOLDER / f"{post_id}.png"
     try:
         # Convert to RGB if needed (handles RGBA, P mode, etc)
-        if img.mode not in ('RGB', 'L'):
-            img = img.convert('RGB')
-        img.save(dest_path, 'PNG')
+        if img.mode not in ("RGB", "L"):
+            img = img.convert("RGB")
+        img.save(dest_path, "PNG")
     except Exception as e:
         _LOG.warning(f"Failed to save {dest_path}: {e}")
         # Still keep the db record, image might already be in place
@@ -378,7 +382,7 @@ def ingest_image(img_path: Path, use_ocr: bool = True) -> int | None:
     return post_id
 
 
-def ingest_text_post(text: str, name: str = None) -> int:
+def ingest_text_post(text: str, name: str | None = None) -> int:
     """Ingest a text post into the ELO database."""
     display_name = name or (text[:50] + "..." if len(text) > 50 else text)
     post_id = _insert_post(name=display_name, filename=None, post_type="text", text_content=text)
@@ -388,14 +392,15 @@ def ingest_text_post(text: str, name: str = None) -> int:
 
 # --- Image Rendering ---
 
+
 def _render_text_card(text: str) -> Image.Image:
     """Render text content as an image card."""
-    img = Image.new('RGB', (TEXT_CARD_WIDTH, TEXT_CARD_HEIGHT), TEXT_BG_COLOR)
+    img = Image.new("RGB", (TEXT_CARD_WIDTH, TEXT_CARD_HEIGHT), TEXT_BG_COLOR)
     draw = ImageDraw.Draw(img)
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-    except (OSError, IOError):
+    except OSError:
         font = ImageFont.load_default()
 
     wrapped = textwrap.fill(text, width=35)
@@ -411,8 +416,8 @@ def _render_text_card(text: str) -> Image.Image:
 
 def _get_post_image(post) -> Image.Image:
     """Get the image for a post (loads file for image posts, renders for text)."""
-    if post['post_type'] == 'text':
-        return _render_text_card(post['text_content'] or post['name'])
+    if post["post_type"] == "text":
+        return _render_text_card(post["text_content"] or post["name"])
     else:
         return Image.open(IMAGES_FOLDER / f"{post['id']}.png")
 
@@ -421,16 +426,17 @@ def _build_matchup_image(post_a, post_b):
     """Combine two posts side by side."""
     img1 = _get_post_image(post_a)
     img2 = _get_post_image(post_b)
-    combined = Image.new('RGB', (img1.width + img2.width + 50, max(img1.height, img2.height)), (0, 0, 0))
+    combined = Image.new("RGB", (img1.width + img2.width + 50, max(img1.height, img2.height)), (0, 0, 0))
     combined.paste(img1, (0, 0))
     combined.paste(img2, (img1.width + 50, 0))
     buf = io.BytesIO()
-    combined.save(buf, 'PNG')
+    combined.save(buf, "PNG")
     buf.seek(0)
     return buf
 
 
 # --- Cog ---
+
 
 class BestBotPosts(commands.Cog):
     def __init__(self, bot):
@@ -439,7 +445,7 @@ class BestBotPosts(commands.Cog):
         self.good_bot_channel_ids = set()
 
         if GOOD_BOT_POSTS_CHANNEL_ID:
-            for cid in GOOD_BOT_POSTS_CHANNEL_ID.split(','):
+            for cid in GOOD_BOT_POSTS_CHANNEL_ID.split(","):
                 cid = cid.strip()
                 if cid.isdigit():
                     self.good_bot_channel_ids.add(int(cid))
@@ -470,7 +476,7 @@ class BestBotPosts(commands.Cog):
 
         # Process attachments
         for attachment in message.attachments:
-            if not attachment.content_type or not attachment.content_type.startswith('image/'):
+            if not attachment.content_type or not attachment.content_type.startswith("image/"):
                 continue
 
             # Download and ingest
@@ -536,25 +542,33 @@ class BestBotPosts(commands.Cog):
             return
 
         if winner == 0:
-            w_new, l_new = _elo_calc(post_a['rating'], post_b['rating'])
-            _update_ratings(post_a['id'], w_new, post_b['id'], l_new,
-                           post_a['rating'], post_b['rating'])
+            w_new, l_new = _elo_calc(post_a["rating"], post_b["rating"])
+            _update_ratings(post_a["id"], w_new, post_b["id"], l_new, post_a["rating"], post_b["rating"])
             await channel.send(f"Winner: **{post_a['name']}** (+{w_new - post_a['rating']} pts)")
         else:
-            w_new, l_new = _elo_calc(post_b['rating'], post_a['rating'])
-            _update_ratings(post_b['id'], w_new, post_a['id'], l_new,
-                           post_b['rating'], post_a['rating'])
+            w_new, l_new = _elo_calc(post_b["rating"], post_a["rating"])
+            _update_ratings(post_b["id"], w_new, post_a["id"], l_new, post_b["rating"], post_a["rating"])
             await channel.send(f"Winner: **{post_b['name']}** (+{w_new - post_b['rating']} pts)")
 
     async def _poll_winner(self, msg):
         """Poll until same winner twice in a row, requiring at least one human vote.
 
         Waits indefinitely until a human votes.
+        Returns None if message is deleted or inaccessible.
         """
         prev_winner = None
+        channel = msg.channel
+        message_id = msg.id
         while True:
             await asyncio.sleep(POLL_INTERVAL)
-            msg = await msg.channel.fetch_message(msg.id)
+            try:
+                msg = await channel.fetch_message(message_id)
+            except discord.NotFound:
+                _LOG.warning(f"Poll message {message_id} was deleted, aborting poll")
+                return None
+            except discord.HTTPException as e:
+                _LOG.warning(f"Failed to fetch poll message {message_id}: {e}")
+                return None
 
             a_count = b_count = 1
             for r in msg.reactions:
@@ -584,12 +598,11 @@ class BestBotPosts(commands.Cog):
     @commands.command(name="score")
     async def score_cmd(self, ctx):
         """Show highest and lowest rated posts."""
-        conn = sqlite3.connect(DB_PATH)
-        conn.row_factory = sqlite3.Row
-        best = conn.execute("SELECT * FROM elo_posts ORDER BY rating DESC LIMIT 1").fetchone()
-        worst = conn.execute("SELECT * FROM elo_posts ORDER BY rating ASC LIMIT 1").fetchone()
-        total = conn.execute("SELECT COUNT(*) FROM elo_posts").fetchone()[0]
-        conn.close()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.row_factory = sqlite3.Row
+            best = conn.execute("SELECT * FROM elo_posts ORDER BY rating DESC LIMIT 1").fetchone()
+            worst = conn.execute("SELECT * FROM elo_posts ORDER BY rating ASC LIMIT 1").fetchone()
+            total = conn.execute("SELECT COUNT(*) FROM elo_posts").fetchone()[0]
 
         if not best or not worst:
             await ctx.send("No posts in database")
@@ -607,17 +620,16 @@ class BestBotPosts(commands.Cog):
         """Clear database and backfill 10 random images from the folder."""
         try:
             # Clear tables first
-            conn = sqlite3.connect(DB_PATH)
-            conn.execute("DELETE FROM match_history")
-            conn.execute("DELETE FROM elo_posts")
-            conn.commit()
-            conn.close()
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.execute("DELETE FROM match_history")
+                conn.execute("DELETE FROM elo_posts")
+                conn.commit()
             await ctx.send(f"Cleared database. Backfilling 10 random images from {IMAGES_FOLDER}...")
 
             # Gather eligible images
             candidates = []
             for img_path in IMAGES_FOLDER.glob("*"):
-                if img_path.suffix.lower() not in ('.png', '.jpg', '.jpeg', '.webp', '.gif'):
+                if img_path.suffix.lower() not in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
                     continue
                 if img_path.name.startswith("temp_"):
                     continue
@@ -630,10 +642,7 @@ class BestBotPosts(commands.Cog):
             # Use ThreadPoolExecutor for parallel OCR (8 workers)
             loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                futures = [
-                    loop.run_in_executor(executor, ingest_image, img_path, use_ocr)
-                    for img_path in candidates
-                ]
+                futures = [loop.run_in_executor(executor, ingest_image, img_path, use_ocr) for img_path in candidates]
                 results = await asyncio.gather(*futures)
 
             count = sum(1 for r in results if r is not None)

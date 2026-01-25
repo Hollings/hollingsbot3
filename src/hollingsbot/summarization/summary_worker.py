@@ -9,8 +9,8 @@ import asyncio
 import logging
 from typing import Union
 
-from .summary_cache import CachedMessage, MessageGroup, SummaryCache
 from .summarizer import Summarizer
+from .summary_cache import CachedMessage, MessageGroup, SummaryCache
 
 _LOG = logging.getLogger(__name__)
 
@@ -133,9 +133,7 @@ class SummaryWorker:
             return 0
 
         for level_1_groups in groups_to_summarize:
-            await self._generate_summary_for_group(
-                channel_id, level=2, items=level_1_groups
-            )
+            await self._generate_summary_for_group(channel_id, level=2, items=level_1_groups)
 
         return len(groups_to_summarize)
 
@@ -177,11 +175,19 @@ class SummaryWorker:
         """
         lock = self._get_lock(channel_id)
 
-        if not lock.locked():
+        # Use non-blocking acquire to skip if lock is already held
+        # This is atomic and avoids the race condition of check-then-lock
+        if lock.locked():
+            return
+
+        # Try to acquire lock, but another task might have acquired it
+        # between our check and now, so use try_lock pattern
+        try:
             async with lock:
                 try:
                     await self._run_summarization(channel_id)
                 except Exception:
-                    _LOG.exception(
-                        "Error during summarization for channel %d", channel_id
-                    )
+                    _LOG.exception("Error during summarization for channel %d", channel_id)
+        except RuntimeError:
+            # Lock was acquired by another task between our check and acquire
+            pass

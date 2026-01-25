@@ -13,6 +13,14 @@ A feature-rich Discord bot built with [discord.py](https://github.com/Rapptz/dis
 7. [Advanced Topics](#advanced-topics)
 8. [Troubleshooting](#troubleshooting)
 
+## Developer Documentation
+
+For in-depth technical documentation, see the [docs/](docs/) directory:
+
+- **[Architecture](docs/ARCHITECTURE.md)** - System design, component interactions, data flow
+- **[Configuration](docs/CONFIGURATION.md)** - Complete environment variable reference
+- **[Integrations](docs/INTEGRATIONS.md)** - AI provider integrations and how to add new ones
+
 ---
 
 ## Key Features

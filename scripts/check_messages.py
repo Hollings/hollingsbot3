@@ -5,11 +5,11 @@ Usage: python check_messages.py <channel_id> [--since <message_id>] [--limit <n>
 
 Returns JSON array of recent messages, newest first.
 """
+
 import argparse
 import json
 import os
 import sqlite3
-import sys
 from pathlib import Path
 
 # Default database path
@@ -24,7 +24,7 @@ def get_last_seen(channel_id: int) -> int | None:
     try:
         state = json.loads(STATE_FILE.read_text())
         return state.get("last_seen", {}).get(str(channel_id))
-    except (json.JSONDecodeError, IOError):
+    except (OSError, json.JSONDecodeError):
         return None
 
 
@@ -34,7 +34,7 @@ def update_last_seen(channel_id: int, message_id: int) -> None:
     if STATE_FILE.exists():
         try:
             state = json.loads(STATE_FILE.read_text())
-        except (json.JSONDecodeError, IOError):
+        except (OSError, json.JSONDecodeError):
             state = {}
 
     if "last_seen" not in state:

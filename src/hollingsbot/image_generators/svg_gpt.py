@@ -1,12 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import io
+import logging
 import os
 import re
-import io
 import time
-import asyncio
-import logging
-from typing import Optional
 
 from openai import AsyncOpenAI
 from PIL import Image, ImageDraw, ImageFont
@@ -28,7 +27,7 @@ except Exception as e:  # pragma: no cover - optional dependency
 from .base import ImageGeneratorAPI
 
 # --- Client singleton ---------------------------------------------------------------------------
-_CLIENT: Optional[AsyncOpenAI] = None
+_CLIENT: AsyncOpenAI | None = None
 
 
 def _client() -> AsyncOpenAI:
@@ -50,6 +49,7 @@ def _client() -> AsyncOpenAI:
 _CODE_BLOCK_RE = re.compile(r"```(?:svg)?\s*([\s\S]*?)```", re.IGNORECASE)
 _SVG_OPEN_RE = re.compile(r"<svg\b([^>]*)>", re.IGNORECASE | re.MULTILINE)
 _SVG_BLOCK_RE = re.compile(r"<svg\b[\s\S]*?</svg>", re.IGNORECASE)
+
 
 # Remove clearly-problematic constructs but keep the rest of the SVG intact.
 def _strip_disallowed(svg: str) -> str:

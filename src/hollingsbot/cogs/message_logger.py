@@ -25,14 +25,18 @@ Schema (message_history table):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import discord
 from discord.ext import commands
+
+if TYPE_CHECKING:
+    import discord
 
 _LOG = logging.getLogger(__name__)
 
@@ -46,6 +50,7 @@ class MessageLoggerCog(commands.Cog):
         self.bot = bot
         self.db_path = Path(os.getenv("MESSAGE_LOGGER_DB_PATH", str(DEFAULT_DB_PATH)))
         self.allowed_guilds = self._parse_guild_ids()
+        self._conn: sqlite3.Connection | None = None
 
         if not self.allowed_guilds:
             _LOG.warning("MESSAGE_LOGGER_GUILDS not set - message logging disabled")
@@ -54,8 +59,28 @@ class MessageLoggerCog(commands.Cog):
             _LOG.info(
                 "MessageLoggerCog initialized with %d guild(s): %s",
                 len(self.allowed_guilds),
-                ", ".join(str(g) for g in self.allowed_guilds)
+                ", ".join(str(g) for g in self.allowed_guilds),
             )
+
+    def _get_connection(self) -> sqlite3.Connection:
+        """Get or create a persistent database connection.
+
+        Using a persistent connection reduces overhead from repeated connect/disconnect cycles.
+        The connection is configured with WAL mode for better concurrent performance.
+        """
+        if self._conn is None:
+            self._conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            # Enable WAL mode for better concurrent read/write performance
+            self._conn.execute("PRAGMA journal_mode=WAL")
+            self._conn.execute("PRAGMA synchronous=NORMAL")
+        return self._conn
+
+    def cog_unload(self) -> None:
+        """Clean up database connection when cog is unloaded."""
+        if self._conn is not None:
+            with contextlib.suppress(Exception):
+                self._conn.close()
+            self._conn = None
 
     def _parse_guild_ids(self) -> set[int]:
         """Parse MESSAGE_LOGGER_GUILDS env var into a set of guild IDs."""
@@ -141,7 +166,7 @@ class MessageLoggerCog(commands.Cog):
         _LOG.info("Message logger database initialized at %s", self.db_path)
 
     def _log_message(self, message: discord.Message) -> None:
-        """Log a message to the database."""
+        """Log a message to the database using a persistent connection."""
         try:
             # Build attachment URLs list
             attachment_urls = [att.url for att in message.attachments] if message.attachments else []
@@ -151,14 +176,16 @@ class MessageLoggerCog(commands.Cog):
             if message.reference and message.reference.message_id:
                 reply_to_id = message.reference.message_id
 
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    INSERT OR REPLACE INTO message_history (
-                        message_id, channel_id, guild_id, timestamp,
-                        author_id, author_nickname, is_bot, is_webhook,
-                        content, attachment_urls, reply_to_id, reactions
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
+            conn = self._get_connection()
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO message_history (
+                    message_id, channel_id, guild_id, timestamp,
+                    author_id, author_nickname, is_bot, is_webhook,
+                    content, attachment_urls, reply_to_id, reactions
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+                (
                     message.id,
                     message.channel.id,
                     message.guild.id if message.guild else None,
@@ -171,8 +198,13 @@ class MessageLoggerCog(commands.Cog):
                     json.dumps(attachment_urls) if attachment_urls else None,
                     reply_to_id,
                     None,  # reactions populated on edit/reaction events
-                ))
-                conn.commit()
+                ),
+            )
+            conn.commit()
+        except sqlite3.Error as e:
+            # Reset connection on database errors
+            _LOG.exception("Database error logging message %s, resetting connection: %s", message.id, e)
+            self._conn = None
         except Exception as e:
             _LOG.exception("Failed to log message %s: %s", message.id, e)
 
@@ -210,13 +242,19 @@ class MessageLoggerCog(commands.Cog):
             return
 
         try:
-            with sqlite3.connect(self.db_path) as conn:
-                conn.execute("""
-                    UPDATE message_history
-                    SET content = ?
-                    WHERE message_id = ?
-                """, (data["content"], payload.message_id))
-                conn.commit()
+            conn = self._get_connection()
+            conn.execute(
+                """
+                UPDATE message_history
+                SET content = ?
+                WHERE message_id = ?
+            """,
+                (data["content"], payload.message_id),
+            )
+            conn.commit()
+        except sqlite3.Error as e:
+            _LOG.exception("Database error updating message %s, resetting connection: %s", payload.message_id, e)
+            self._conn = None
         except Exception as e:
             _LOG.exception("Failed to update edited message %s: %s", payload.message_id, e)
 

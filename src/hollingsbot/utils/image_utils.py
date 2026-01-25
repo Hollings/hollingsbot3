@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Tuple
 
 from PIL import Image
 
@@ -32,7 +31,7 @@ def compress_image_to_fit(
     *,
     target_margin: float = 0.98,
     prefer_jpeg: bool = True,
-) -> Tuple[bytes, str]:
+) -> tuple[bytes, str]:
     """
     Compress image bytes to fit under Discord's per-file size limit.
 
@@ -74,7 +73,8 @@ def compress_image_to_fit(
                 try:
                     im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
                 except Exception:
-                    buf.seek(0); buf.truncate(0)
+                    buf.seek(0)
+                    buf.truncate(0)
                     im.save(buf, format="JPEG", quality=q)
                 data = buf.getvalue()
                 if best_size is None or len(data) < best_size:
@@ -102,4 +102,3 @@ def compress_image_to_fit(
 
     # Give up; return original
     return image_bytes, "png"
-

@@ -6,9 +6,10 @@ Tables are created by prompt_db.init_db() - this module just uses them.
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Literal, Optional
+from typing import Literal
 
 from hollingsbot.prompt_db import DB_PATH
 
@@ -28,16 +29,16 @@ class MessageGroup:
     Level 3+: Each covers 5 groups from the level below
     """
 
-    id: Optional[int]
+    id: int | None
     channel_id: int
     level: int
     start_message_id: int  # First message ID in this group
-    end_message_id: int    # Last message ID in this group
-    summary_text: Optional[str]  # None until summarized
+    end_message_id: int  # Last message ID in this group
+    summary_text: str | None  # None until summarized
     message_count: int
-    start_timestamp: Optional[int] = None  # Timestamp of first message
-    end_timestamp: Optional[int] = None    # Timestamp of last message
-    created_at: Optional[int] = None
+    start_timestamp: int | None = None  # Timestamp of first message
+    end_timestamp: int | None = None  # Timestamp of last message
+    created_at: int | None = None
 
     def __post_init__(self):
         if self.created_at is None:
@@ -126,9 +127,7 @@ class SummaryCache:
             )
             return cursor.fetchone()[0]
 
-    def get_all_messages_ordered(
-        self, channel_id: int, include_old: bool = False
-    ) -> list[CachedMessage]:
+    def get_all_messages_ordered(self, channel_id: int, include_old: bool = False) -> list[CachedMessage]:
         """Get all cached messages for a channel, ordered by message_id (chronological).
 
         Args:
@@ -157,9 +156,7 @@ class SummaryCache:
                 )
             return [self._row_to_cached_message(row) for row in cursor.fetchall()]
 
-    def get_messages_by_ids(
-        self, channel_id: int, start_id: int, end_id: int
-    ) -> list[CachedMessage]:
+    def get_messages_by_ids(self, channel_id: int, start_id: int, end_id: int) -> list[CachedMessage]:
         """Get cached messages between two message IDs (inclusive)."""
         with self._get_connection(row_factory=True) as conn:
             cursor = conn.execute(
@@ -254,7 +251,7 @@ class SummaryCache:
         self,
         channel_id: int,
         level: int,
-        summary_filter: Optional[Literal["summarized", "unsummarized"]],
+        summary_filter: Literal["summarized", "unsummarized"] | None,
     ) -> list[MessageGroup]:
         """Query message groups with optional summary filter.
 
@@ -286,7 +283,7 @@ class SummaryCache:
             )
             return [self._row_to_message_group(row) for row in cursor.fetchall()]
 
-    def get_latest_group(self, channel_id: int, level: int) -> Optional[MessageGroup]:
+    def get_latest_group(self, channel_id: int, level: int) -> MessageGroup | None:
         """Get the most recent message group at a specific level."""
         with self._get_connection(row_factory=True) as conn:
             cursor = conn.execute(
@@ -301,9 +298,7 @@ class SummaryCache:
             row = cursor.fetchone()
             return self._row_to_message_group(row) if row else None
 
-    def group_exists(
-        self, channel_id: int, level: int, start_message_id: int
-    ) -> bool:
+    def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
         """Check if a group already exists."""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -325,8 +320,8 @@ class SummaryCache:
             end_message_id=row["end_message_id"],
             summary_text=row["summary_text"],
             message_count=row["message_count"],
-            start_timestamp=row["start_timestamp"] if "start_timestamp" in row.keys() else None,
-            end_timestamp=row["end_timestamp"] if "end_timestamp" in row.keys() else None,
+            start_timestamp=row.get("start_timestamp", None),
+            end_timestamp=row.get("end_timestamp", None),
             created_at=row["created_at"],
         )
 
@@ -391,7 +386,7 @@ class SummaryCache:
         groups: list[MessageGroup],
         exclude_end_ids: set[int],
         limit: int,
-        min_start_id: Optional[int] = None,
+        min_start_id: int | None = None,
     ) -> list[MessageGroup]:
         """Extract message groups that pass filtering criteria.
 
@@ -443,7 +438,7 @@ class SummaryCache:
                 (channel_id, message_id, int(time.time())),
             )
 
-    def get_clear_point(self, channel_id: int) -> Optional[int]:
+    def get_clear_point(self, channel_id: int) -> int | None:
         """Get the clear point message ID for a channel.
 
         Args:
@@ -462,9 +457,7 @@ class SummaryCache:
 
     # ==================== Summarization Logic Helpers ====================
 
-    def get_messages_needing_level1_summary(
-        self, channel_id: int
-    ) -> list[list[CachedMessage]]:
+    def get_messages_needing_level1_summary(self, channel_id: int) -> list[list[CachedMessage]]:
         """Get groups of 5 messages that need level-1 summaries.
 
         Returns message groups that:
@@ -488,15 +481,11 @@ class SummaryCache:
 
         # Build set of already-covered message ranges
         existing_groups = self.get_groups_by_level(channel_id, 1)
-        covered_ranges = {
-            (g.start_message_id, g.end_message_id) for g in existing_groups
-        }
+        covered_ranges = {(g.start_message_id, g.end_message_id) for g in existing_groups}
 
         return self._find_uncovered_chunks(available, covered_ranges)
 
-    def get_level1_groups_needing_level2(
-        self, channel_id: int
-    ) -> list[list[MessageGroup]]:
+    def get_level1_groups_needing_level2(self, channel_id: int) -> list[list[MessageGroup]]:
         """Get groups of 5 level-1 summaries that need level-2 summarization.
 
         Returns:
@@ -514,7 +503,7 @@ class SummaryCache:
         # Group level-1 summaries into chunks of GROUP_SIZE
         groups_to_summarize = []
         for i in range(0, len(level_1_groups) - GROUP_SIZE + 1, GROUP_SIZE):
-            chunk = level_1_groups[i:i + GROUP_SIZE]
+            chunk = level_1_groups[i : i + GROUP_SIZE]
             if len(chunk) == GROUP_SIZE:
                 start_id = chunk[0].start_message_id
                 if start_id not in covered_start_ids:
@@ -538,7 +527,7 @@ class SummaryCache:
         """
         chunks = []
         for i in range(0, len(messages) - GROUP_SIZE + 1, GROUP_SIZE):
-            chunk = messages[i:i + GROUP_SIZE]
+            chunk = messages[i : i + GROUP_SIZE]
             if len(chunk) == GROUP_SIZE:
                 start_id = chunk[0].message_id
                 end_id = chunk[-1].message_id

@@ -12,11 +12,11 @@ Examples:
     python search_messages.py 1050900592031178752 --author "John" --limit 20
     python search_messages.py --all-channels --search "important" --limit 100
 """
+
 import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime
 
 DB_PATH = "/data/hollingsbot.db"
 
@@ -57,13 +57,15 @@ def search_messages(channel_id=None, search=None, author=None, recent=None, limi
         cursor = conn.execute(query, params)
         results = []
         for row in cursor:
-            results.append({
-                "message_id": row["message_id"],
-                "channel_id": row["channel_id"],
-                "author": row["author_name"],
-                "content": row["content"][:500] if row["content"] else "",
-                "time": row["time_str"],
-            })
+            results.append(
+                {
+                    "message_id": row["message_id"],
+                    "channel_id": row["channel_id"],
+                    "author": row["author_name"],
+                    "content": row["content"][:500] if row["content"] else "",
+                    "time": row["time_str"],
+                }
+            )
         return results
     finally:
         conn.close()

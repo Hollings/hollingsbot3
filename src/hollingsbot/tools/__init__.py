@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING
 
-from .tokens import give_token, check_tokens
+from .tokens import check_tokens, give_token
 
-__all__ = ["Tool", "AVAILABLE_TOOLS", "get_tool_definitions_text"]
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+__all__ = ["AVAILABLE_TOOLS", "Tool", "get_tool_definitions_text"]
 
 
 @dataclass
 class Tool:
     """Represents a callable tool that the LLM can use."""
+
     name: str
     description: str
     parameters: dict[str, str]  # param_name -> description
@@ -35,9 +39,7 @@ AVAILABLE_TOOLS: dict[str, Tool] = {
     "check_tokens": Tool(
         name="check_tokens",
         description="Check how many tokens a user has.",
-        parameters={
-            "user": "The user to check. Can be a @mention, user ID, or display name"
-        },
+        parameters={"user": "The user to check. Can be a @mention, user ID, or display name"},
         function=check_tokens,
         channel_message=None,
     ),
@@ -60,7 +62,7 @@ def get_tool_definitions_text() -> str:
         "The tool will be executed and you'll receive the result. You can then continue your response.",
         "",
         "Available tools:",
-        ""
+        "",
     ]
 
     for tool in AVAILABLE_TOOLS.values():
@@ -77,7 +79,7 @@ def get_tool_definitions_text() -> str:
 
         # Example usage
         if tool.parameters:
-            example_params = ", ".join(f"{p}=..." for p in tool.parameters.keys())
+            example_params = ", ".join(f"{p}=..." for p in tool.parameters)
             lines.append(f"Example: TOOL_CALL: {tool.name}({example_params})")
         else:
             lines.append(f"Example: TOOL_CALL: {tool.name}()")

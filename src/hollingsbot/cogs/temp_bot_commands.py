@@ -124,9 +124,7 @@ class TempBotCommands(commands.Cog):
         # All summaries and cached messages before this message will be ignored
         if coordinator.summary_cache:
             coordinator.summary_cache.set_clear_point(channel_id, ctx.message.id)
-            _LOG.info(
-                f"Set clear point for channel {channel_id} at message {ctx.message.id}"
-            )
+            _LOG.info(f"Set clear point for channel {channel_id} at message {ctx.message.id}")
 
         _LOG.info(f"Cleared conversation history for channel {channel_id}")
         await ctx.message.add_reaction("\u2705")  # Checkmark
@@ -221,7 +219,7 @@ class TempBotCommands(commands.Cog):
             status = "(active)" if bot.get("is_active") else ""
             lines.append(f"- **{name}** {status} - _{prompt}_ ({created})")
 
-        lines.append(f"\nUse `!recall <count> <name>` to bring one back.")
+        lines.append("\nUse `!recall <count> <name>` to bring one back.")
         await ctx.send("\n".join(lines))
 
 

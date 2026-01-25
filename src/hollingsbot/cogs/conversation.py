@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 @dataclass(slots=True)
 class ImageAttachment:
     """Represents an image attachment with metadata and encoded data."""
+
     name: str
     url: str
     data_url: str  # base64 encoded data URL
@@ -24,6 +25,7 @@ class ConversationTurn:
 
     This is the RAW turn stored in the coordinator's history with real names/IDs.
     """
+
     role: str  # "user" or "assistant"
     content: str
     images: list[ImageAttachment] = field(default_factory=list)
@@ -36,6 +38,7 @@ class ConversationTurn:
 @dataclass(slots=True)
 class ModelTurn:
     """Lightweight turn for sending to LLM API."""
+
     role: str
     text: str
     images: list[ImageAttachment] = field(default_factory=list)

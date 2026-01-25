@@ -1,11 +1,27 @@
-# bot.py
-import os
-import time
-from dotenv import load_dotenv
-import discord
-from discord.ext import commands, tasks
+"""Hollingsbot3 main entry point.
+
+This module initializes and runs the Discord bot, loading all cogs (extensions)
+and handling the connection lifecycle.
+
+Usage:
+    python -m hollingsbot
+
+The bot connects to Discord using the token from DISCORD_TOKEN environment variable.
+All cogs are loaded on startup, and the bot supports automatic reconnection with
+retry logic for transient connection errors.
+
+Configuration is done via environment variables. See docs/CONFIGURATION.md for
+the complete reference.
+"""
+
 import asyncio
 import logging
+import os
+import time
+
+import discord
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -16,11 +32,14 @@ logging.basicConfig(level=logging.INFO)
 intents = discord.Intents.default()
 intents.message_content = True
 
+
 def _ids_from_env(name: str) -> set[int]:
     raw = os.getenv(name, "") or ""
     return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
 
+
 _IMG_CHANNEL_IDS = _ids_from_env("STABLE_DIFFUSION_CHANNEL_IDS")
+
 
 def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
     """
@@ -30,7 +49,9 @@ def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
     """
     return commands.when_mentioned_or("!")(bot, message)
 
+
 bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True, help_command=None)
+
 
 @bot.event
 async def on_ready():
@@ -38,7 +59,9 @@ async def on_ready():
     print(f"Loaded cogs: {list(bot.cogs.keys())}")
     print(f"Commands: {[c.name for c in bot.commands]}")
 
+
 RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
+
 
 @tasks.loop(seconds=RESTART_INTERVAL)
 async def restart_task():
@@ -46,8 +69,10 @@ async def restart_task():
     await bot.close()
     os._exit(0)
 
+
 async def main():
     async with bot:
+
         async def _ensure_loaded(name: str) -> None:
             # Avoid double-loading across crash/retry loops
             if name in bot.extensions:
@@ -74,6 +99,7 @@ async def main():
         logger.info("starting bot")
         await bot.start(token)
 
+
 @bot.event
 async def on_message(message):
     if message.author.bot:
@@ -84,13 +110,14 @@ async def on_message(message):
     # Important: keep this so other command cogs still work
     await bot.process_commands(message)
 
+
 if __name__ == "__main__":
     # Robust launcher: retry on transient connect errors (e.g., gateway timeouts)
     while True:
         try:
             asyncio.run(main())
             break  # Normal exit
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Log and retry with backoff; discord.py sometimes raises during initial connect
             logger.exception("Bot crashed during startup/connect; retrying in 5s: %s", e)
             time.sleep(5)
