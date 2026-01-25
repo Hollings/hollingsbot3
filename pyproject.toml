@@ -82,14 +82,20 @@ select = [
 
 # Ignore rules that conflict with Discord bot patterns or are too noisy
 ignore = [
+    "E402",   # module level import not at top (sometimes needed for conditional imports)
     "E501",   # line too long (handled by formatter, but allow exceptions)
     "B008",   # function call in default argument (common in discord.py)
     "B904",   # raise from in except (often unnecessary)
+    "SIM102", # nested if (readability preference)
+    "SIM105", # try-except-pass (contextlib.suppress style preference)
     "SIM108", # ternary operator (readability preference)
+    "SIM115", # context manager for files (not always appropriate)
+    "SIM117", # nested with (readability preference)
     "UP007",  # Use X | Y for type unions (needs py310+)
     "RUF001", # ambiguous unicode (allow emojis in strings)
     "RUF002", # ambiguous unicode in docstrings
     "RUF003", # ambiguous unicode in comments
+    "RUF006", # asyncio.create_task return value (fire-and-forget is intentional)
 ]
 
 # Allow autofix for all rules

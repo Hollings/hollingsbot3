@@ -67,7 +67,8 @@ class RealESRGANUpscaler:
             try:
                 im.save(buf, format="JPEG", quality=q, optimize=True, progressive=True)
             except Exception:
-                buf.seek(0); buf.truncate(0)
+                buf.seek(0)
+                buf.truncate(0)
                 im.save(buf, format="JPEG", quality=q)
             data = buf.getvalue()
             delta = abs(len(data) - target)
