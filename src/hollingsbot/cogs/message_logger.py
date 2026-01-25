@@ -74,17 +74,21 @@ class MessageLoggerCog(commands.Cog):
         return guild_ids
 
     def _init_db(self) -> None:
-        """Initialize the SQLite database schema."""
+        """Initialize the SQLite database schema.
+
+        Handles migration from older schemas by adding missing columns.
+        """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
         with sqlite3.connect(self.db_path) as conn:
+            # Create table if not exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS message_history (
                     message_id INTEGER PRIMARY KEY,
                     channel_id INTEGER NOT NULL,
                     guild_id INTEGER,
                     timestamp TEXT NOT NULL,
-                    author_id INTEGER NOT NULL,
+                    author_id INTEGER,
                     author_nickname TEXT,
                     is_bot INTEGER DEFAULT 0,
                     is_webhook INTEGER DEFAULT 0,
@@ -94,18 +98,44 @@ class MessageLoggerCog(commands.Cog):
                     reactions TEXT
                 )
             """)
+
+            # Migration: Add columns that might be missing in older schemas
+            # These are added with defaults that work for existing data
+            migration_columns = [
+                ("guild_id", "INTEGER"),
+                ("author_id", "INTEGER"),
+                ("is_bot", "INTEGER DEFAULT 0"),
+                ("is_webhook", "INTEGER DEFAULT 0"),
+                ("reply_to_id", "INTEGER"),
+            ]
+
+            for col_name, col_type in migration_columns:
+                try:
+                    conn.execute(f"ALTER TABLE message_history ADD COLUMN {col_name} {col_type}")
+                    _LOG.info("Added column %s to message_history", col_name)
+                except sqlite3.OperationalError:
+                    pass  # Column already exists
+
+            # Create indexes (IF NOT EXISTS handles existing indexes)
             conn.execute("""
                 CREATE INDEX IF NOT EXISTS idx_message_history_channel_time
                 ON message_history(channel_id, timestamp)
             """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_message_history_author
-                ON message_history(author_id)
-            """)
-            conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_message_history_guild
-                ON message_history(guild_id)
-            """)
+            # Only create author index if author_id exists
+            try:
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_message_history_author
+                    ON message_history(author_id)
+                """)
+            except sqlite3.OperationalError:
+                pass  # Index creation failed, column might not exist yet
+            try:
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_message_history_guild
+                    ON message_history(guild_id)
+                """)
+            except sqlite3.OperationalError:
+                pass  # Index creation failed
             conn.commit()
 
         _LOG.info("Message logger database initialized at %s", self.db_path)
