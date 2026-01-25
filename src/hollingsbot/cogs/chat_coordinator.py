@@ -22,7 +22,6 @@ from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
 from hollingsbot.cogs.typing_tracker import TypingTracker
 from hollingsbot.utils.discord_utils import get_display_name
-from hollingsbot.prompt_db import add_message_to_history
 
 # Summarization imports
 from hollingsbot.summarization import (
@@ -290,24 +289,6 @@ class ChatCoordinator(commands.Cog):
                         f"content_preview={turn.content[:80]}..."
                     )
 
-                    # Save to message_history table for archival
-                    try:
-                        add_message_to_history(
-                            message_id=message.id,
-                            channel_id=channel_id,
-                            timestamp=message.created_at.isoformat(),
-                            author_id=message.author.id,
-                            content=turn.content,
-                            guild_id=message.guild.id if message.guild else None,
-                            author_nickname=turn.author_name,
-                            is_bot=message.author.bot,
-                            is_webhook=message.webhook_id is not None,
-                            attachment_urls=[att.url for att in message.attachments],
-                            reply_to_id=message.reference.message_id if message.reference else None,
-                        )
-                    except Exception as e:
-                        _LOG.exception(f"Failed to save message {message.id} to history: {e}")
-
                     # Cache message for summarization and trigger background summarization
                     if self.summary_enabled and self.summary_cache:
                         self._cache_message_for_summary(turn, channel_id)
@@ -476,24 +457,6 @@ class ChatCoordinator(commands.Cog):
                     f"Added bot response to history: bot={bot_name}, "
                     f"message_id={message_id}, text={text[:80]}..."
                 )
-
-                # Save to message_history table for archival
-                try:
-                    channel = self.bot.get_channel(channel_id)
-                    guild_id = channel.guild.id if channel and channel.guild else None
-                    add_message_to_history(
-                        message_id=message_id,
-                        channel_id=channel_id,
-                        timestamp=discord.utils.snowflake_time(message_id).isoformat(),
-                        author_id=self.bot.user.id if not webhook_id else webhook_id,
-                        content=text,
-                        guild_id=guild_id,
-                        author_nickname=bot_name,
-                        is_bot=True,
-                        is_webhook=webhook_id is not None,
-                    )
-                except Exception as e:
-                    _LOG.exception(f"Failed to save bot response {message_id} to history: {e}")
 
                 # Cache for summarization and trigger background summarization
                 if self.summary_enabled and self.summary_cache:
