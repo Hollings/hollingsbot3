@@ -6,7 +6,6 @@ import json
 import logging
 import sqlite3
 import subprocess
-import tempfile
 from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
@@ -230,14 +229,33 @@ def _fallback_search(thought: str, channel_id: int | None) -> str:
 
     results = []
     for kw in keywords[:3]:
-        sql = f"""
+        # Use parameterized query to prevent SQL injection
+        sql = """
             SELECT author_name, content, datetime(timestamp, 'unixepoch') as time
             FROM cached_messages
-            WHERE channel_id = {channel_id} AND LOWER(content) LIKE '%{kw}%'
+            WHERE channel_id = ? AND LOWER(content) LIKE ?
             ORDER BY timestamp DESC LIMIT 5
         """
-        result = _run_sql_query(sql)
-        if "no results" not in result.lower():
-            results.append(f"'{kw}':\n{result}")
+        try:
+            with sqlite3.connect(DB_PATH) as conn:
+                conn.row_factory = sqlite3.Row
+                # Escape any existing % or _ in keyword and wrap with %
+                escaped_kw = kw.replace('%', r'\%').replace('_', r'\_')
+                rows = conn.execute(sql, (channel_id, f'%{escaped_kw}%')).fetchall()
+
+                if not rows:
+                    continue
+
+                cols = rows[0].keys()
+                lines = [f"Found {len(rows)} row(s):"]
+                for i, row in enumerate(rows[:5]):
+                    data = {c: row[c] for c in cols}
+                    if "content" in data and data["content"] and len(str(data["content"])) > 150:
+                        data["content"] = str(data["content"])[:150] + "..."
+                    lines.append(f"{i+1}. {json.dumps(data, default=str)}")
+                results.append(f"'{kw}':\n" + "\n".join(lines))
+        except Exception as e:
+            _LOG.warning("Fallback search error for keyword '%s': %s", kw, e)
+            continue
 
     return "\n\n".join(results) if results else "I can't remember that"

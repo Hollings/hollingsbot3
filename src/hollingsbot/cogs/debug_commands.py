@@ -192,7 +192,7 @@ class DebugCommands(commands.Cog):
         # Daily taper info
         daily_count = llm_debug.get("daily_message_count")
         if daily_count is not None:
-            debug_lines.append(f"\n=== DAILY TAPER ===")
+            debug_lines.append("\n=== DAILY TAPER ===")
             debug_lines.append(f"Daily Message Count: {daily_count}")
             debug_lines.append(f"Model Taper Phase: {llm_debug.get('model_taper_phase', 'N/A')}")
             debug_lines.append(f"Model Selected: {llm_debug.get('model_selected', 'N/A')}")

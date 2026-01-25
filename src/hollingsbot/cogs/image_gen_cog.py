@@ -1,3 +1,19 @@
+"""Image generation cog for Discord bot.
+
+This cog handles all image generation commands, including:
+- Text-to-image generation via multiple providers (Flux, Stable Diffusion, etc.)
+- Image-to-image transformations (upscaling, outpainting)
+- Cost tracking and rate limiting per user
+- Batch generation and prompt enhancement
+
+Commands are triggered by prefixes (e.g., !flux, !sd) which route to different
+generation backends. Image generation is offloaded to Celery workers to prevent
+blocking the bot.
+
+Configuration is loaded from image_gen_config.json and environment variables.
+See docs/CONFIGURATION.md for details.
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -46,6 +62,7 @@ _DEFAULT_OUTPAINT_PROMPT_TIMEOUT = 30.0
 _DEFAULT_CELERY_POLL_INTERVAL = 0.5
 _HISTORY_SEARCH_LIMIT = 10
 _MAX_FILENAME_LENGTH = 32
+_MAX_PROMPT_LENGTH = 10000  # Maximum allowed prompt length to prevent abuse
 
 
 # ============================================================================
@@ -298,6 +315,7 @@ class ImageGenCog(commands.Cog):
         aspect_ratio: str | None = None,
         model_options: dict | None = None,
         poll_interval: float = _DEFAULT_CELERY_POLL_INTERVAL,
+        timeout: float = 300.0,
     ) -> str | list[str]:
         """
         Launch an image-generation task via Celery and poll for results.
@@ -315,9 +333,14 @@ class ImageGenCog(commands.Cog):
             aspect_ratio: Aspect ratio for OpenAI ('1:1', '3:2', '2:3', etc.)
             model_options: Extra model-specific options
             poll_interval: Seconds between result checks
+            timeout: Maximum time to wait for result in seconds (default 5 min)
 
         Returns:
             File path(s) or base64-encoded image data
+
+        Raises:
+            TimeoutError: If task doesn't complete within timeout
+            RuntimeError: If Celery task fails
         """
         # Convert images to data URLs for JSON serialization
         payload_images = bytes_list_to_data_urls(image_input) if image_input else None
@@ -336,8 +359,18 @@ class ImageGenCog(commands.Cog):
             queue="image",
         )
 
+        elapsed = 0.0
         while not async_result.ready():
+            if elapsed >= timeout:
+                async_result.revoke(terminate=True)
+                raise TimeoutError(f"Image generation timed out after {timeout}s")
             await asyncio.sleep(poll_interval)
+            elapsed += poll_interval
+
+        # Check for task failure
+        if async_result.failed():
+            error = async_result.result
+            raise RuntimeError(f"Image generation failed: {error}")
 
         return await asyncio.to_thread(async_result.get)
 
@@ -958,6 +991,16 @@ class ImageGenCog(commands.Cog):
             await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
             await message.channel.send("Prompt may not be empty.")
+            return
+
+        # Validate prompt length to prevent abuse
+        if len(raw_prompt) > _MAX_PROMPT_LENGTH:
+            await self._react(message, working_emoji, remove=True)
+            await self._react(message, FAILURE)
+            await self._send_error_message(
+                message,
+                f"Prompt is too long ({len(raw_prompt)} characters). Maximum allowed is {_MAX_PROMPT_LENGTH} characters.",
+            )
             return
 
         # Set placeholder for outpaint mode if needed

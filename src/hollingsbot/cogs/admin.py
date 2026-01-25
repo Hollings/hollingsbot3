@@ -333,6 +333,11 @@ class Admin(commands.Cog):
             await ctx.send("❌ This command is restricted to admins.")
             return
 
+        # Validate amount - prevent extreme values
+        if not (-10000 <= amount <= 10000):
+            await ctx.send("❌ Amount must be between -$10,000 and $10,000.")
+            return
+
         try:
             self._cost_tracker.grant_credits(user.id, amount)
             action = "granted" if amount >= 0 else "deducted"
@@ -371,8 +376,8 @@ class Admin(commands.Cog):
 
             lines = [
                 f"**Balance for {user.mention}:**",
-                f"",
-                f"**Current status:**",
+                "",
+                "**Current status:**",
                 f"  - Free budget: ${current_budget:.2f} / ${free_total:.2f}",
                 f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]

@@ -2,7 +2,6 @@
 
 Watches /data/wendy/outbox/ for JSON files and sends messages to Discord.
 """
-import asyncio
 import json
 import logging
 import os

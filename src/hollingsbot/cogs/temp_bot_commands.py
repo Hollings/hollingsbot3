@@ -221,7 +221,7 @@ class TempBotCommands(commands.Cog):
             status = "(active)" if bot.get("is_active") else ""
             lines.append(f"- **{name}** {status} - _{prompt}_ ({created})")
 
-        lines.append(f"\nUse `!recall <count> <name>` to bring one back.")
+        lines.append("\nUse `!recall <count> <name>` to bring one back.")
         await ctx.send("\n".join(lines))
 
 

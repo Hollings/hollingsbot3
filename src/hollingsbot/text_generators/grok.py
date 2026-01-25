@@ -1,11 +1,11 @@
 # text_generators/grok.py
 from __future__ import annotations
 
-from typing import Dict, Sequence, TypedDict, Union, List, Any
+from typing import Dict, Sequence, TypedDict, Union, List
 import os
 import logging
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError
 
 from .base import TextGeneratorAPI
 
@@ -61,10 +61,21 @@ class GrokTextGenerator(TextGeneratorAPI):
         # Use Chat Completions API (xAI is OpenAI-compatible)
         _LOG.debug("Grok: generating with model=%s, messages=%d", self.model, len(messages))
 
-        resp = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,      # type: ignore[arg-type]
-            temperature=temperature,
-        )
+        try:
+            resp = await client.chat.completions.create(
+                model=self.model,
+                messages=messages,      # type: ignore[arg-type]
+                temperature=temperature,
+            )
+        except RateLimitError as e:
+            _LOG.warning("Grok rate limit hit for model %s: %s", self.model, e)
+            raise
+        except APIConnectionError as e:
+            _LOG.error("Grok connection error for model %s: %s", self.model, e)
+            raise
+        except APIError as e:
+            _LOG.error("Grok API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            raise
+
         choice = resp.choices[0]
         return (choice.message.content or "").strip()

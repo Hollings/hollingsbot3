@@ -1,4 +1,28 @@
-# text_generators/__init__.py
+"""Text generation providers for LLM interactions.
+
+This package provides a unified interface for multiple LLM providers:
+- Anthropic (Claude models)
+- OpenAI (GPT models)
+- xAI (Grok)
+- Google (Gemini)
+- OpenRouter (multi-provider routing)
+- HuggingFace (local/HF models)
+
+All generators implement the TextGeneratorAPI abstract base class, providing
+a consistent `generate(prompt: str) -> str` method.
+
+Usage:
+    from hollingsbot.text_generators import get_text_generator
+
+    # Get a generator for a specific API
+    generator = get_text_generator("anthropic", "claude-sonnet-4")
+
+    # Generate text
+    response = await generator.generate("Hello, how are you?")
+
+See docs/INTEGRATIONS.md for details on each provider.
+"""
+
 from .base import TextGeneratorAPI
 from .huggingface import HuggingFaceTextGenerator
 from .anthropic import AnthropicTextGenerator

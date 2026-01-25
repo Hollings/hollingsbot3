@@ -1429,7 +1429,7 @@ Be concise and capture the essence of the bot's time in the chat."""
 
             # Send via webhook (coordinator will add to history automatically via on_message)
             webhook = await self.bot.fetch_webhook(webhook_id)
-            sent_message = await webhook.send(full_response, username=bot_name, wait=True)
+            await webhook.send(full_response, username=bot_name, wait=True)
 
             _LOG.info(f"Temp bot '{bot_name}' sent initial response ({remaining} replies remaining)")
 
@@ -1484,7 +1484,7 @@ Be concise and capture the essence of the bot's time in the chat."""
             except discord.NotFound:
                 delete_temp_bot(webhook_id)
                 despawned.append(bot_name)
-            except (discord.Forbidden, discord.HTTPException) as exc:
+            except (discord.Forbidden, discord.HTTPException):
                 _LOG.exception(f"Failed to despawn {bot_name}")
                 failed.append(bot_name)
 

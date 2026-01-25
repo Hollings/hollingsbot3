@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import re
 import logging
-from typing import NamedTuple, TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from . import AVAILABLE_TOOLS
+from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)
 

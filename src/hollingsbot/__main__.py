@@ -1,4 +1,19 @@
-# bot.py
+"""Hollingsbot3 main entry point.
+
+This module initializes and runs the Discord bot, loading all cogs (extensions)
+and handling the connection lifecycle.
+
+Usage:
+    python -m hollingsbot
+
+The bot connects to Discord using the token from DISCORD_TOKEN environment variable.
+All cogs are loaded on startup, and the bot supports automatic reconnection with
+retry logic for transient connection errors.
+
+Configuration is done via environment variables. See docs/CONFIGURATION.md for
+the complete reference.
+"""
+
 import os
 import time
 from dotenv import load_dotenv

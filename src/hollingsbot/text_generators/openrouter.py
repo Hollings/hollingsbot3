@@ -5,7 +5,7 @@ from typing import Dict, Sequence, TypedDict, Union, List
 import os
 import logging
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError
 
 from .base import TextGeneratorAPI
 
@@ -67,12 +67,22 @@ class OpenRouterTextGenerator(TextGeneratorAPI):
 
         _LOG.info("OpenRouter request: model=%s, messages=%s", self.model, messages)
 
-        resp = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,      # type: ignore[arg-type]
-            temperature=temperature,
-            max_tokens=500,
-        )
+        try:
+            resp = await client.chat.completions.create(
+                model=self.model,
+                messages=messages,      # type: ignore[arg-type]
+                temperature=temperature,
+                max_tokens=500,
+            )
+        except RateLimitError as e:
+            _LOG.warning("OpenRouter rate limit hit for model %s: %s", self.model, e)
+            raise
+        except APIConnectionError as e:
+            _LOG.error("OpenRouter connection error for model %s: %s", self.model, e)
+            raise
+        except APIError as e:
+            _LOG.error("OpenRouter API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            raise
 
         _LOG.info("OpenRouter response: %s", resp)
 
@@ -118,12 +128,22 @@ class OpenRouterCompletionsGenerator(TextGeneratorAPI):
             self.model, len(prompt), temperature
         )
 
-        resp = await client.completions.create(
-            model=self.model,
-            prompt=prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        try:
+            resp = await client.completions.create(
+                model=self.model,
+                prompt=prompt,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except RateLimitError as e:
+            _LOG.warning("OpenRouter completions rate limit hit for model %s: %s", self.model, e)
+            raise
+        except APIConnectionError as e:
+            _LOG.error("OpenRouter completions connection error for model %s: %s", self.model, e)
+            raise
+        except APIError as e:
+            _LOG.error("OpenRouter completions API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            raise
 
         _LOG.info("OpenRouter completions response: %s", resp)
 
@@ -180,12 +200,22 @@ class OpenRouterLoomGenerator(TextGeneratorAPI):
             self.model, len(prompt), temperature
         )
 
-        resp = await client.chat.completions.create(
-            model=self.model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        try:
+            resp = await client.chat.completions.create(
+                model=self.model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except RateLimitError as e:
+            _LOG.warning("OpenRouter Loom rate limit hit for model %s: %s", self.model, e)
+            raise
+        except APIConnectionError as e:
+            _LOG.error("OpenRouter Loom connection error for model %s: %s", self.model, e)
+            raise
+        except APIError as e:
+            _LOG.error("OpenRouter Loom API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            raise
 
         _LOG.info("OpenRouter Loom response: %s", resp)
 

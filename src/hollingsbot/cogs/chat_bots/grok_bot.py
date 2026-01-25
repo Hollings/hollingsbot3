@@ -17,12 +17,10 @@ import discord
 from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
-from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
-from hollingsbot.settings import clear_system_prompt_cache, get_default_system_prompt
+from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
-from hollingsbot.tools import get_tool_definitions_text
-from hollingsbot.tools.notebook import get_notebook_manager, initialize_notebook
 from hollingsbot.tools.parser import execute_tool_call, parse_tool_calls
+from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
 _LOG = logging.getLogger(__name__)
 
@@ -465,10 +463,6 @@ class GrokBot:
         stored_conversation = conversation.copy()
 
         try:
-            # Typing indicator disabled temporarily
-            # TODO: Re-enable once Discord rate limit clears
-            typing_ctx = None
-
             # Generate initial response
             text, llm_debug, stored_conversation = await self._run_generation(provider, model, conversation, job)
             response_text = text
@@ -519,9 +513,9 @@ class GrokBot:
             _LOG.warning("⚠️  LLM returned EMPTY response (likely conversation history issue) in channel %s", channel.id)
             return None
 
-        # Extract and convert SVGs if present
-        svg_files = await self._extract_and_convert_svgs(text)
-        clean_text = self._clean_svgs_from_text(text)
+        # Extract and convert SVGs if present (using shared utility)
+        clean_text, svg_tuples = extract_render_and_strip_svgs(text)
+        svg_files = [discord.File(fp=buf, filename=name) for name, buf in svg_tuples]
 
         # Wait for human to finish typing (if applicable)
         await self._wait_for_typing_to_clear(channel.id)
@@ -744,50 +738,6 @@ class GrokBot:
 
         return sent
 
-    async def _extract_and_convert_svgs(self, text: str) -> list[discord.File]:
-        """Extract SVG code from text and convert to PNG files."""
-        import io
-        svg_files: list[discord.File] = []
-
-        try:
-            import cairosvg  # type: ignore
-        except Exception:
-            return svg_files
-
-        # Pattern for SVG code blocks: ```svg\n...\n```
-        pattern = r'```svg\s*\n(.*?)\n```'
-        matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        for idx, svg_code in enumerate(matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"diagram_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert SVG to PNG")
-
-        # Also check for raw SVG tags
-        raw_pattern = r'<svg[\s\S]*?</svg>'
-        raw_matches = re.findall(raw_pattern, text, re.IGNORECASE)
-
-        for idx, svg_code in enumerate(raw_matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"svg_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert raw SVG to PNG")
-
-        return svg_files
-
-    def _clean_svgs_from_text(self, text: str) -> str:
-        """Remove SVG code blocks and raw SVG tags from text."""
-        # Remove SVG code blocks
-        text = re.sub(r'```svg\s*\n.*?\n```', '', text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove raw SVG tags
-        text = re.sub(r'<svg[\s\S]*?</svg>', '', text, flags=re.IGNORECASE)
-        return text.strip()
-
     # ==================== Tool Execution ====================
 
     def _execute_tool_calls(self, text: str, channel_id: int | None = None) -> tuple[str, list[str], list[str], list[dict[str, Any]]]:
@@ -983,7 +933,3 @@ class GrokBot:
         """Handle !cancel command to cancel active generation."""
         await self._cancel_generation(ctx.channel.id)
         await ctx.send("Generation cancelled")
-
-
-# Suppress import errors
-from contextlib import suppress

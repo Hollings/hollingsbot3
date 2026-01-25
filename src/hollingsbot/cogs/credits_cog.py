@@ -9,7 +9,6 @@ from __future__ import annotations
 import logging
 import os
 
-import discord
 from discord.ext import commands
 
 from hollingsbot.cost_tracking import CostTracker
@@ -61,7 +60,7 @@ class CreditsCog(commands.Cog):
 
             # Build the response message
             lines = [
-                f"**Your current status:**",
+                "**Your current status:**",
                 f"  - Free budget: ${current_budget:.2f} / ${free_total:.2f}",
                 f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]

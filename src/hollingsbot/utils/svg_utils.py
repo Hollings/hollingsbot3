@@ -48,7 +48,6 @@ def _ensure_svg_root_has_namespaces(svg_xml: str) -> str:
     if not m:
         return svg_xml  # no root tag found; caller handles wrapping/closing recovery
 
-    tag_full = m.group(0)
     attrs = m.group(1) or ""
 
     needs_xmlns = "xmlns=" not in attrs

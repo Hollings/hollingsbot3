@@ -79,9 +79,9 @@ class FeatureRequests(commands.Cog):
             _LOG.error(f"Claude Code timed out after {timeout}s")
             return f"Error: Claude Code timed out after {timeout}s", False
         except FileNotFoundError:
-            _LOG.error(f"Claude Code CLI not found at: {CLAUDE_CODE_CLI_PATH}")
+            _LOG.error("Claude Code CLI not found at: %s", CLAUDE_CODE_CLI_PATH)
             return (
-                f"Error: Claude Code CLI not found. Please ensure 'claude' is installed and accessible.",
+                "Error: Claude Code CLI not found. Please ensure 'claude' is installed and accessible.",
                 False,
             )
         except Exception as e:

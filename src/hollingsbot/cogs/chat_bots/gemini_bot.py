@@ -17,8 +17,9 @@ import discord
 from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
-from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
+from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
 _LOG = logging.getLogger(__name__)
 
@@ -505,9 +506,9 @@ class GeminiBot:
             _LOG.warning("LLM returned EMPTY response (likely conversation history issue) in channel %s", channel.id)
             return None
 
-        # Extract and convert SVGs if present
-        svg_files = await self._extract_and_convert_svgs(text)
-        clean_text = self._clean_svgs_from_text(text)
+        # Extract and convert SVGs if present (using shared utility)
+        clean_text, svg_tuples = extract_render_and_strip_svgs(text)
+        svg_files = [discord.File(fp=buf, filename=name) for name, buf in svg_tuples]
 
         # Wait for human to finish typing (if applicable)
         await self._wait_for_typing_to_clear(channel.id)
@@ -710,50 +711,6 @@ class GeminiBot:
                 sent.append(msg)
 
         return sent
-
-    async def _extract_and_convert_svgs(self, text: str) -> list[discord.File]:
-        """Extract SVG code from text and convert to PNG files."""
-        import io
-        svg_files: list[discord.File] = []
-
-        try:
-            import cairosvg  # type: ignore
-        except Exception:
-            return svg_files
-
-        # Pattern for SVG code blocks: ```svg\n...\n```
-        pattern = r'```svg\s*\n(.*?)\n```'
-        matches = re.findall(pattern, text, re.DOTALL | re.IGNORECASE)
-
-        for idx, svg_code in enumerate(matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"diagram_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert SVG to PNG")
-
-        # Also check for raw SVG tags
-        raw_pattern = r'<svg[\s\S]*?</svg>'
-        raw_matches = re.findall(raw_pattern, text, re.IGNORECASE)
-
-        for idx, svg_code in enumerate(raw_matches):
-            try:
-                png_bytes = cairosvg.svg2png(bytestring=svg_code.encode("utf-8"))
-                filename = f"svg_{idx + 1}.png"
-                svg_files.append(discord.File(io.BytesIO(png_bytes), filename=filename))
-            except Exception:
-                _LOG.exception("Failed to convert raw SVG to PNG")
-
-        return svg_files
-
-    def _clean_svgs_from_text(self, text: str) -> str:
-        """Remove SVG code blocks and raw SVG tags from text."""
-        # Remove SVG code blocks
-        text = re.sub(r'```svg\s*\n.*?\n```', '', text, flags=re.DOTALL | re.IGNORECASE)
-        # Remove raw SVG tags
-        text = re.sub(r'<svg[\s\S]*?</svg>', '', text, flags=re.IGNORECASE)
-        return text.strip()
 
     # ==================== Model Preferences ====================
 

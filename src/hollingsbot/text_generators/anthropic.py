@@ -1,13 +1,15 @@
 """Text-generation backend that calls Anthropic's Claude models."""
 from __future__ import annotations
 
-import asyncio
+import logging
 import os
 from typing import Dict, Sequence, Union, TypedDict, Any, List
 
-from anthropic import AsyncAnthropic
+from anthropic import AsyncAnthropic, APIError, APIConnectionError, RateLimitError
 
 from .base import TextGeneratorAPI
+
+_log = logging.getLogger(__name__)
 
 # --------------------------------------------------------------------------- #
 # A single shared client is plenty; reuse it across all requests              #
@@ -155,7 +157,18 @@ class AnthropicTextGenerator(TextGeneratorAPI):
                         "cache_control": {"type": "ephemeral"},
                     }
                 ]
-            response = await client.messages.create(**kwargs)
+            try:
+                response = await client.messages.create(**kwargs)
+            except RateLimitError as e:
+                _log.warning("Anthropic rate limit hit for model %s: %s", self.model, e)
+                raise
+            except APIConnectionError as e:
+                _log.error("Anthropic connection error for model %s: %s", self.model, e)
+                raise
+            except APIError as e:
+                _log.error("Anthropic API error for model %s (status %s): %s", self.model, e.status_code, e.message)
+                raise
+
             # SDK returns a list of content blocks; aggregate text blocks.
             parts: List[str] = []
             for block in getattr(response, "content", []) or []:

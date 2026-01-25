@@ -1,13 +1,11 @@
 """Shared utility functions for chat system."""
 
-import asyncio
 import base64
 import io
 import logging
 import os
 import re
 import textwrap
-from collections import deque
 from typing import Deque
 
 import discord
@@ -33,6 +31,7 @@ _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _MAX_TEXT_ATTACHMENT_BYTES = 120_000  # 120KB
 _IMAGE_MAX_EDGE = 2048
 _IMAGE_MAX_BYTES = 10_000_000  # ~9.5MB after base64
+_IMAGE_MAX_DOWNLOAD_BYTES = 50_000_000  # 50MB max download to prevent memory issues
 
 
 # ==================== Message Cleaning ====================
@@ -191,10 +190,26 @@ def resize_image_if_needed(img: Image.Image) -> Image.Image:
 
 async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttachment | None:
     """Download and process image attachment into ImageAttachment object."""
+    # Safety check: skip extremely large attachments to prevent memory issues
+    if attachment.size and attachment.size > _IMAGE_MAX_DOWNLOAD_BYTES:
+        _LOG.warning(
+            "Skipping image attachment %s: size %d bytes exceeds limit %d",
+            attachment.filename, attachment.size, _IMAGE_MAX_DOWNLOAD_BYTES
+        )
+        return None
+
     try:
         data = await attachment.read()
     except Exception:
         _LOG.exception("Failed to download image attachment %s", attachment.filename)
+        return None
+
+    # Double-check actual size after download
+    if len(data) > _IMAGE_MAX_DOWNLOAD_BYTES:
+        _LOG.warning(
+            "Skipping image attachment %s: downloaded %d bytes exceeds limit %d",
+            attachment.filename, len(data), _IMAGE_MAX_DOWNLOAD_BYTES
+        )
         return None
 
     try:

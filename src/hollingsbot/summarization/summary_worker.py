@@ -177,7 +177,14 @@ class SummaryWorker:
         """
         lock = self._get_lock(channel_id)
 
-        if not lock.locked():
+        # Use non-blocking acquire to skip if lock is already held
+        # This is atomic and avoids the race condition of check-then-lock
+        if lock.locked():
+            return
+
+        # Try to acquire lock, but another task might have acquired it
+        # between our check and now, so use try_lock pattern
+        try:
             async with lock:
                 try:
                     await self._run_summarization(channel_id)
@@ -185,3 +192,6 @@ class SummaryWorker:
                     _LOG.exception(
                         "Error during summarization for channel %d", channel_id
                     )
+        except RuntimeError:
+            # Lock was acquired by another task between our check and acquire
+            pass

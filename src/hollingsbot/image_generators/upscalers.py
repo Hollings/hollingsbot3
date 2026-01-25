@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import asyncio
 from dataclasses import dataclass, field
 from io import BytesIO
 from typing import Any, Optional
@@ -113,20 +112,31 @@ class RealESRGANUpscaler:
         # Replicate can take a file handle for the input image under the key "image"
         # Use a small async helper to run and normalize outputs.
         async def _run(img: bytes) -> bytes:
-            from tempfile import NamedTemporaryFile
+            import tempfile
 
-            tmp = NamedTemporaryFile(prefix="esrgan_", suffix=".png", delete=False)
-            tmp.write(img)
-            tmp.flush(); tmp.close()
-            fh = open(tmp.name, "rb")
+            # Create temp file and track its path for guaranteed cleanup
+            tmp_path = None
+            fh = None
             try:
+                # Create temp file - use context manager for initial write
+                fd, tmp_path = tempfile.mkstemp(prefix="esrgan_", suffix=".png")
+                os.write(fd, img)
+                os.close(fd)
+
+                # Open for reading
+                fh = open(tmp_path, "rb")
                 out = await self._client.async_run(self.model, input={"image": fh, **inputs})  # type: ignore[union-attr]
             finally:
-                try:
-                    fh.close()
-                finally:
+                # Always close file handle first
+                if fh is not None:
                     try:
-                        os.unlink(tmp.name)
+                        fh.close()
+                    except OSError:
+                        pass
+                # Then delete the temp file
+                if tmp_path is not None:
+                    try:
+                        os.unlink(tmp_path)
                     except OSError:
                         pass
 

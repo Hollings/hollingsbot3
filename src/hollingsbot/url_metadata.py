@@ -8,7 +8,6 @@ import io
 import logging
 import re
 from dataclasses import dataclass
-from typing import Any
 
 import aiohttp
 from bs4 import BeautifulSoup

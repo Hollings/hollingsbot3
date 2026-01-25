@@ -1,3 +1,37 @@
+Metadata-Version: 2.4
+Name: hollingsbot3
+Version: 0.1.0
+Summary: Discord bot with AI integrations, image generation, and more
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+Requires-Dist: discord.py>=2.5.2
+Requires-Dist: python-dotenv
+Requires-Dist: replicate
+Requires-Dist: aiohttp
+Requires-Dist: celery
+Requires-Dist: redis
+Requires-Dist: pillow
+Requires-Dist: transformers
+Requires-Dist: torch
+Requires-Dist: watchfiles
+Requires-Dist: anthropic
+Requires-Dist: openai
+Requires-Dist: cairosvg
+Requires-Dist: pytesseract
+Requires-Dist: beautifulsoup4
+Requires-Dist: emoji
+Requires-Dist: fastapi
+Requires-Dist: uvicorn[standard]
+Requires-Dist: python-multipart
+Provides-Extra: dev
+Requires-Dist: pytest>=7.0; extra == "dev"
+Requires-Dist: pytest-asyncio>=0.21; extra == "dev"
+Requires-Dist: pytest-cov>=4.0; extra == "dev"
+Requires-Dist: ruff>=0.4.0; extra == "dev"
+Requires-Dist: pre-commit>=3.0; extra == "dev"
+Requires-Dist: mypy>=1.0; extra == "dev"
+
 # Hollingsbot3
 
 A feature-rich Discord bot built with [discord.py](https://github.com/Rapptz/discord.py), powered by LLMs and image generation APIs. The bot runs in Docker with asynchronous task processing via Celery, enabling GPU-accelerated image generation, multi-model LLM chat with conversation history, and various utility features.
@@ -12,14 +46,6 @@ A feature-rich Discord bot built with [discord.py](https://github.com/Rapptz/dis
 6. [Configuration](#configuration)
 7. [Advanced Topics](#advanced-topics)
 8. [Troubleshooting](#troubleshooting)
-
-## Developer Documentation
-
-For in-depth technical documentation, see the [docs/](docs/) directory:
-
-- **[Architecture](docs/ARCHITECTURE.md)** - System design, component interactions, data flow
-- **[Configuration](docs/CONFIGURATION.md)** - Complete environment variable reference
-- **[Integrations](docs/INTEGRATIONS.md)** - AI provider integrations and how to add new ones
 
 ---
 
