@@ -2,6 +2,7 @@
 
 Watches /data/wendy/outbox/ for JSON files and sends messages to Discord.
 """
+
 import json
 import logging
 import os
@@ -31,13 +32,7 @@ class WendyOutbox(commands.Cog):
         """Create outbox directory if it doesn't exist."""
         OUTBOX_DIR.mkdir(parents=True, exist_ok=True)
 
-    def _log_sent_message(
-        self,
-        discord_msg_id: int,
-        outbox_ts: int,
-        channel_id: int,
-        content: str
-    ) -> None:
+    def _log_sent_message(self, discord_msg_id: int, outbox_ts: int, channel_id: int, content: str) -> None:
         """Log a sent message to message_log.jsonl for debug correlation."""
         try:
             MESSAGE_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -130,8 +125,9 @@ class WendyOutbox(commands.Cog):
             else:
                 sent_msg = await channel.send(message_text)
 
-            _LOG.info("Sent Wendy outbox message to channel %s (msg_id=%s): %s...",
-                     channel_id, sent_msg.id, message_text[:50])
+            _LOG.info(
+                "Sent Wendy outbox message to channel %s (msg_id=%s): %s...", channel_id, sent_msg.id, message_text[:50]
+            )
 
             # Log the message correlation for debug lookups
             outbox_ts = self._extract_outbox_timestamp(outbox_file.name)

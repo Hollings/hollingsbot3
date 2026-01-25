@@ -45,11 +45,7 @@ async def generate_image_async(prompt: str) -> str:
 
     try:
         # Use the Replicate API with gpt-image-1.5 low quality
-        generator = get_image_generator(
-            api="replicate",
-            model="openai/gpt-image-1.5",
-            quality="low"
-        )
+        generator = get_image_generator(api="replicate", model="openai/gpt-image-1.5", quality="low")
 
         # Generate the image
         image_bytes = await generator.generate(prompt)

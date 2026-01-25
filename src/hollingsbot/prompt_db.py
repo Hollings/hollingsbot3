@@ -26,9 +26,7 @@ def init_db() -> None:
             )
             """
         )
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)"
-        )
+        conn.execute("CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)")
         # Per-user model preference (scoped to guild)
         conn.execute(
             """
@@ -134,9 +132,7 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_message_history_channel_time ON message_history(channel_id, timestamp)"
         )
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_message_history_author ON message_history(author_id)"
-        )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_message_history_author ON message_history(author_id)")
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS feature_requests (
@@ -258,9 +254,7 @@ class RateLimitError(RuntimeError):
         self.used = used
         self.requested = requested
         self.window_start = window_start
-        super().__init__(
-            f"Daily limit exceeded: requested {requested} with {used}/{limit} already used"
-        )
+        super().__init__(f"Daily limit exceeded: requested {requested} with {used}/{limit} already used")
 
 
 def add_prompt(text: str, submitter: str, api: str, model: str, *, status: str = "queued") -> int:
@@ -445,6 +439,7 @@ def update_pr_status(number: int, status: str) -> None:
 
 # ------------------------- Model preferences -------------------------
 
+
 def set_model_pref(guild_id: int, user_id: int, provider: str, model: str) -> None:
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
@@ -467,6 +462,7 @@ def get_model_pref(guild_id: int, user_id: int) -> tuple[str, str] | None:
 
 
 # ------------------------- Temp bot management -------------------------
+
 
 def create_temp_bot(
     channel_id: int,
@@ -491,8 +487,14 @@ def create_temp_bot(
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
             """,
             (
-                channel_id, webhook_id, name, avatar_url, avatar_bytes,
-                spawn_prompt, replies_remaining, spawn_message_id,
+                channel_id,
+                webhook_id,
+                name,
+                avatar_url,
+                avatar_bytes,
+                spawn_prompt,
+                replies_remaining,
+                spawn_message_id,
                 datetime.utcnow().isoformat(),
             ),
         )
@@ -770,9 +772,7 @@ def search_temp_bots(query: str, limit: int = 10) -> list[dict]:
         ]
 
 
-def get_temp_bot_previous_messages(
-    channel_id: int, bot_name: str, limit: int = 5
-) -> list[dict]:
+def get_temp_bot_previous_messages(channel_id: int, bot_name: str, limit: int = 5) -> list[dict]:
     """Get a temp bot's most recent messages from their last session.
 
     Args:
@@ -916,6 +916,7 @@ def increment_temp_bot_replies(webhook_id: int) -> int:
 
 # ------------------------- LLM API logging -------------------------
 
+
 def log_llm_api_call(
     provider: str,
     model: str,
@@ -987,6 +988,7 @@ def get_daily_llm_call_count(exclude_haiku: bool = True) -> int:
 
 
 # ------------------------- Message history -------------------------
+
 
 def add_message_to_history(
     message_id: int,
@@ -1085,20 +1087,22 @@ def search_message_history(
 
         results = []
         for row in cur.fetchall():
-            results.append({
-                "message_id": row[0],
-                "channel_id": row[1],
-                "guild_id": row[2],
-                "timestamp": row[3],
-                "author_id": row[4],
-                "author_nickname": row[5],
-                "is_bot": bool(row[6]),
-                "is_webhook": bool(row[7]),
-                "content": row[8],
-                "attachment_urls": json.loads(row[9]) if row[9] else [],
-                "reply_to_id": row[10],
-                "reactions": json.loads(row[11]) if row[11] else [],
-            })
+            results.append(
+                {
+                    "message_id": row[0],
+                    "channel_id": row[1],
+                    "guild_id": row[2],
+                    "timestamp": row[3],
+                    "author_id": row[4],
+                    "author_nickname": row[5],
+                    "is_bot": bool(row[6]),
+                    "is_webhook": bool(row[7]),
+                    "content": row[8],
+                    "attachment_urls": json.loads(row[9]) if row[9] else [],
+                    "reply_to_id": row[10],
+                    "reactions": json.loads(row[11]) if row[11] else [],
+                }
+            )
 
         return results
 
@@ -1156,6 +1160,7 @@ def bulk_add_messages(messages: list[dict]) -> int:
 
 
 # ------------------------- Feature request automation -------------------------
+
 
 def create_feature_request(
     channel_id: int,
@@ -1276,6 +1281,7 @@ def get_feature_request_by_questions_message_id(questions_message_id: int) -> di
 
 
 # ------------------------- User tokens -------------------------
+
 
 def give_user_token(user_id: int) -> int:
     """Give one token to a user. Returns the user's new token balance."""

@@ -167,9 +167,7 @@ class GPT2Chat(commands.Cog):
 
     # Text generation
 
-    async def _celery_task(
-        self, api: str, model: str, prompt: str, temperature: float
-    ) -> str:
+    async def _celery_task(self, api: str, model: str, prompt: str, temperature: float) -> str:
         """Execute text generation task via Celery.
 
         Args:
@@ -184,9 +182,7 @@ class GPT2Chat(commands.Cog):
         Raises:
             RuntimeError: If task exceeds timeout.
         """
-        task = generate_text.apply_async(
-            (api, model, prompt, temperature), queue="text"
-        )
+        task = generate_text.apply_async((api, model, prompt, temperature), queue="text")
         try:
             # Run the potentially blocking task.get call in a thread
             return await asyncio.to_thread(task.get, timeout=self.timeout)

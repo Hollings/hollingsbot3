@@ -46,6 +46,7 @@ class MessageInfo(BaseModel):
 
 # ==================== State Management ====================
 
+
 def get_last_seen(channel_id: int) -> int | None:
     """Get the last seen message_id for a channel."""
     if not STATE_FILE.exists():
@@ -76,6 +77,7 @@ def update_last_seen(channel_id: int, message_id: int) -> None:
 
 # ==================== Attachments ====================
 
+
 def find_attachments_for_message(message_id: int) -> list[str]:
     """Find attachment files for a message ID."""
     if not ATTACHMENTS_DIR.exists():
@@ -90,6 +92,7 @@ def find_attachments_for_message(message_id: int) -> list[str]:
 
 # ==================== Endpoints ====================
 
+
 @app.post("/api/send_message", response_model=SendMessageResponse)
 async def send_message(request: SendMessageRequest):
     """Send a message to a Discord channel via the outbox."""
@@ -103,14 +106,10 @@ async def send_message(request: SendMessageRequest):
             allowed_prefixes = ["/data/wendy/", "/tmp/"]
             if not any(request.attachment.startswith(p) for p in allowed_prefixes):
                 raise HTTPException(
-                    status_code=400,
-                    detail=f"Attachment must be in /data/wendy/ or /tmp/, got: {request.attachment}"
+                    status_code=400, detail=f"Attachment must be in /data/wendy/ or /tmp/, got: {request.attachment}"
                 )
             if not att_path.exists():
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Attachment file not found: {request.attachment}"
-                )
+                raise HTTPException(status_code=400, detail=f"Attachment file not found: {request.attachment}")
 
         # Create outbox message
         timestamp_ns = time.time_ns()
@@ -138,11 +137,7 @@ async def send_message(request: SendMessageRequest):
 
 
 @app.get("/api/check_messages/{channel_id}")
-async def check_messages(
-    channel_id: int,
-    limit: int = 10,
-    all_messages: bool = False
-) -> list[MessageInfo]:
+async def check_messages(channel_id: int, limit: int = 10, all_messages: bool = False) -> list[MessageInfo]:
     """Check for new messages in a channel."""
     try:
         db_path = Path(DB_PATH)
@@ -250,10 +245,7 @@ async def deploy_site(
         files: Tarball (.tar.gz) of site files
     """
     if not WENDY_DEPLOY_TOKEN:
-        raise HTTPException(
-            status_code=500,
-            detail="WENDY_DEPLOY_TOKEN not configured on server"
-        )
+        raise HTTPException(status_code=500, detail="WENDY_DEPLOY_TOKEN not configured on server")
 
     try:
         # Read the uploaded file
@@ -275,10 +267,7 @@ async def deploy_site(
                 error_detail = error_json.get("detail", error_detail)
             except Exception:
                 pass
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Deploy failed: {error_detail}"
-            )
+            raise HTTPException(status_code=response.status_code, detail=f"Deploy failed: {error_detail}")
 
         result = response.json()
         return DeploySiteResponse(
@@ -288,10 +277,7 @@ async def deploy_site(
         )
 
     except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to connect to wendy-sites service: {e!s}"
-        )
+        raise HTTPException(status_code=502, detail=f"Failed to connect to wendy-sites service: {e!s}")
     except HTTPException:
         raise
     except Exception as e:
@@ -347,10 +333,7 @@ async def deploy_game(
         files: Tarball (.tar.gz) containing server.ts
     """
     if not WENDY_GAMES_TOKEN:
-        raise HTTPException(
-            status_code=500,
-            detail="WENDY_GAMES_TOKEN not configured on server"
-        )
+        raise HTTPException(status_code=500, detail="WENDY_GAMES_TOKEN not configured on server")
 
     try:
         # Read the uploaded file
@@ -372,10 +355,7 @@ async def deploy_game(
                 error_detail = error_json.get("detail", error_detail)
             except Exception:
                 pass
-            raise HTTPException(
-                status_code=response.status_code,
-                detail=f"Deploy failed: {error_detail}"
-            )
+            raise HTTPException(status_code=response.status_code, detail=f"Deploy failed: {error_detail}")
 
         result = response.json()
         return DeployGameResponse(
@@ -387,10 +367,7 @@ async def deploy_game(
         )
 
     except httpx.RequestError as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Failed to connect to wendy-games service: {e!s}"
-        )
+        raise HTTPException(status_code=502, detail=f"Failed to connect to wendy-games service: {e!s}")
     except HTTPException:
         raise
     except Exception as e:
@@ -399,4 +376,5 @@ async def deploy_game(
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8080)

@@ -23,9 +23,7 @@ def build_level_1_prompt(messages: list[CachedMessage]) -> str:
     Returns:
         Formatted prompt for LLM
     """
-    messages_text = "\n".join(
-        f"{msg.author_name}: {msg.content}" for msg in messages
-    )
+    messages_text = "\n".join(f"{msg.author_name}: {msg.content}" for msg in messages)
 
     prompt = f"""Write a ONE sentence note about this conversation from Wendy's perspective (first person as Wendy). Be extremely brief. Example: "I talked with Hollings about X" or "We discussed Y". Never say "I talked with Wendy" - you ARE Wendy.
 

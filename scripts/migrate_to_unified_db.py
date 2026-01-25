@@ -40,10 +40,7 @@ def migrate():
     for table in tables:
         try:
             # Check if table exists in old DB
-            cursor = old_conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
-                (table,)
-            )
+            cursor = old_conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name=?", (table,))
             if not cursor.fetchone():
                 print(f"  Table {table} not found in old DB, skipping")
                 continue
@@ -66,10 +63,7 @@ def migrate():
             # Insert into new DB (ignore conflicts)
             for row in rows:
                 try:
-                    new_conn.execute(
-                        f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({placeholders})",
-                        row
-                    )
+                    new_conn.execute(f"INSERT OR IGNORE INTO {table} ({col_str}) VALUES ({placeholders})", row)
                 except sqlite3.IntegrityError:
                     pass  # Skip duplicates
 

@@ -22,11 +22,9 @@ class RealESRGANUpscaler:
     """
 
     # Use a pinned model version to avoid 404 and ensure consistent outputs
-    model: str = (
-        os.getenv(
-            "REALESRGAN_MODEL",
-            "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
-        )
+    model: str = os.getenv(
+        "REALESRGAN_MODEL",
+        "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
     )
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
     # Internal client/session are explicit fields to be compatible with slots

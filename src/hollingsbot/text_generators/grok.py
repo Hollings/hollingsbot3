@@ -34,10 +34,7 @@ class GrokTextGenerator(TextGeneratorAPI):
             api_key = os.getenv("XAI_API_KEY")
             if not api_key:
                 raise ValueError("XAI_API_KEY environment variable is required for Grok")
-            _CLIENT_CACHE["grok"] = AsyncOpenAI(
-                api_key=api_key,
-                base_url="https://api.x.ai/v1"
-            )
+            _CLIENT_CACHE["grok"] = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
         return _CLIENT_CACHE["grok"]
 
     async def generate(
@@ -65,7 +62,7 @@ class GrokTextGenerator(TextGeneratorAPI):
         try:
             resp = await client.chat.completions.create(
                 model=self.model,
-                messages=messages,      # type: ignore[arg-type]
+                messages=messages,  # type: ignore[arg-type]
                 temperature=temperature,
             )
         except RateLimitError as e:
@@ -75,7 +72,9 @@ class GrokTextGenerator(TextGeneratorAPI):
             _LOG.error("Grok connection error for model %s: %s", self.model, e)
             raise
         except APIError as e:
-            _LOG.error("Grok API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            _LOG.error(
+                "Grok API error for model %s (status %s): %s", self.model, getattr(e, "status_code", "unknown"), e
+            )
             raise
 
         choice = resp.choices[0]

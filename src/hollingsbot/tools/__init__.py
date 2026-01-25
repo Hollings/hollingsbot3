@@ -16,6 +16,7 @@ __all__ = ["AVAILABLE_TOOLS", "Tool", "get_tool_definitions_text"]
 @dataclass
 class Tool:
     """Represents a callable tool that the LLM can use."""
+
     name: str
     description: str
     parameters: dict[str, str]  # param_name -> description
@@ -38,9 +39,7 @@ AVAILABLE_TOOLS: dict[str, Tool] = {
     "check_tokens": Tool(
         name="check_tokens",
         description="Check how many tokens a user has.",
-        parameters={
-            "user": "The user to check. Can be a @mention, user ID, or display name"
-        },
+        parameters={"user": "The user to check. Can be a @mention, user ID, or display name"},
         function=check_tokens,
         channel_message=None,
     ),
@@ -63,7 +62,7 @@ def get_tool_definitions_text() -> str:
         "The tool will be executed and you'll receive the result. You can then continue your response.",
         "",
         "Available tools:",
-        ""
+        "",
     ]
 
     for tool in AVAILABLE_TOOLS.values():

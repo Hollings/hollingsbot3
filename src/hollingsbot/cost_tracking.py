@@ -31,10 +31,7 @@ class CostTracker:
         self.db_path = db_path
         self.daily_free_budget = daily_free_budget
         # Tables are created by prompt_db.init_db() which runs at bot startup
-        _log.info(
-            f"CostTracker initialized with db_path={db_path}, "
-            f"daily_free_budget=${daily_free_budget:.2f}"
-        )
+        _log.info(f"CostTracker initialized with db_path={db_path}, daily_free_budget=${daily_free_budget:.2f}")
 
     def _get_today_string(self) -> str:
         """Get today's date as a string in YYYY-MM-DD format (UTC).
@@ -52,7 +49,6 @@ class CostTracker:
         """
         now = datetime.now(timezone.utc)
         return now.replace(second=0, microsecond=0)
-
 
     def _update_hourly_budget(self, user_id: int, conn: sqlite3.Connection) -> float:
         """Update a user's budget based on elapsed time (tracked per minute).
@@ -163,18 +159,14 @@ class CostTracker:
         # Check if affordable
         if current_budget >= cost:
             # Can afford with free budget
-            _log.debug(
-                f"User {user_id} can afford ${cost:.5f} using free budget "
-                f"(${current_budget:.5f} remaining)"
-            )
+            _log.debug(f"User {user_id} can afford ${cost:.5f} using free budget (${current_budget:.5f} remaining)")
             return (True, "")
 
         shortfall = cost - current_budget
         if credit_balance >= shortfall:
             # Can afford with free budget + credits
             _log.debug(
-                f"User {user_id} can afford ${cost:.5f} using "
-                f"${current_budget:.5f} free + ${shortfall:.5f} credits"
+                f"User {user_id} can afford ${cost:.5f} using ${current_budget:.5f} free + ${shortfall:.5f} credits"
             )
             return (True, "")
 
@@ -191,8 +183,7 @@ class CostTracker:
         )
 
         _log.info(
-            f"User {user_id} cannot afford ${cost:.5f} "
-            f"(free: ${current_budget:.5f}, credits: ${credit_balance:.2f})"
+            f"User {user_id} cannot afford ${cost:.5f} (free: ${current_budget:.5f}, credits: ${credit_balance:.2f})"
         )
         return (False, error_msg)
 

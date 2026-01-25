@@ -102,9 +102,7 @@ class LlamaBot:
 
         # Generate response
         job = GenerationJob()
-        task = self.bot.loop.create_task(
-            self._generate_and_send(message, raw_text, job)
-        )
+        task = self.bot.loop.create_task(self._generate_and_send(message, raw_text, job))
         job.task = task
         self._active_generations[message.channel.id] = job
 

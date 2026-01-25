@@ -115,8 +115,7 @@ class CreditsCog(commands.Cog):
 
         if not success:
             await ctx.send(
-                f"You don't have enough tokens. You have {new_balance} tokens, "
-                f"but tried to redeem {amount}."
+                f"You don't have enough tokens. You have {new_balance} tokens, but tried to redeem {amount}."
             )
             return
 
@@ -125,12 +124,9 @@ class CreditsCog(commands.Cog):
         self._cost_tracker.grant_credits(ctx.author.id, credits_earned)
 
         await ctx.send(
-            f"Redeemed {amount} tokens for ${credits_earned:.2f} in credits!\n"
-            f"Remaining tokens: {new_balance}"
+            f"Redeemed {amount} tokens for ${credits_earned:.2f} in credits!\nRemaining tokens: {new_balance}"
         )
-        _log.info(
-            f"User {ctx.author.id} redeemed {amount} tokens for ${credits_earned:.2f} credits"
-        )
+        _log.info(f"User {ctx.author.id} redeemed {amount} tokens for ${credits_earned:.2f} credits")
 
 
 async def setup(bot: commands.Bot) -> None:

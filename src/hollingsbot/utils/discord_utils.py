@@ -20,11 +20,11 @@ def get_display_name(user: discord.User | discord.Member) -> str:
         The display name to use for this user
     """
     # For Member objects, check if they have a server nickname (nick)
-    if hasattr(user, 'nick') and user.nick:
+    if hasattr(user, "nick") and user.nick:
         return user.nick
 
     # Fall back to global display name (cross-server display name)
-    if hasattr(user, 'global_name') and user.global_name:
+    if hasattr(user, "global_name") and user.global_name:
         return user.global_name
 
     # Final fallback to username

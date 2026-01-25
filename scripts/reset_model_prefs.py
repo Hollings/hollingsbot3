@@ -4,6 +4,7 @@
 NOTE: This script should be run when the bot is stopped, as the database
 may be locked if the bot is actively using it.
 """
+
 import sqlite3
 from pathlib import Path
 
@@ -33,6 +34,7 @@ def reset_model_prefs():
         print("3. Restart the bot (docker-compose up -d)")
     except Exception as e:
         print(f"Unexpected error: {e}")
+
 
 if __name__ == "__main__":
     reset_model_prefs()

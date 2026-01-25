@@ -138,6 +138,7 @@ DEFAULT_SYSTEM_PROMPT: str = get_default_system_prompt()
 
 # --------------------- Admin user IDs ---------------------
 
+
 def get_admin_user_ids() -> set[int]:
     """Get the set of admin user IDs from environment variable.
 

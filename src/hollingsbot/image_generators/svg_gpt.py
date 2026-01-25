@@ -50,6 +50,7 @@ _CODE_BLOCK_RE = re.compile(r"```(?:svg)?\s*([\s\S]*?)```", re.IGNORECASE)
 _SVG_OPEN_RE = re.compile(r"<svg\b([^>]*)>", re.IGNORECASE | re.MULTILINE)
 _SVG_BLOCK_RE = re.compile(r"<svg\b[\s\S]*?</svg>", re.IGNORECASE)
 
+
 # Remove clearly-problematic constructs but keep the rest of the SVG intact.
 def _strip_disallowed(svg: str) -> str:
     svg = re.sub(r"<script\b[^>]*>[\s\S]*?</script>", "", svg, flags=re.IGNORECASE)

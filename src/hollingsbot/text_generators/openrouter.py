@@ -25,10 +25,7 @@ def _get_openrouter_client() -> AsyncOpenAI:
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable is required for OpenRouter")
-        _CLIENT_CACHE["openrouter"] = AsyncOpenAI(
-            api_key=api_key,
-            base_url="https://openrouter.ai/api/v1"
-        )
+        _CLIENT_CACHE["openrouter"] = AsyncOpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
     return _CLIENT_CACHE["openrouter"]
 
 
@@ -71,7 +68,7 @@ class OpenRouterTextGenerator(TextGeneratorAPI):
         try:
             resp = await client.chat.completions.create(
                 model=self.model,
-                messages=messages,      # type: ignore[arg-type]
+                messages=messages,  # type: ignore[arg-type]
                 temperature=temperature,
                 max_tokens=500,
             )
@@ -82,17 +79,23 @@ class OpenRouterTextGenerator(TextGeneratorAPI):
             _LOG.error("OpenRouter connection error for model %s: %s", self.model, e)
             raise
         except APIError as e:
-            _LOG.error("OpenRouter API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            _LOG.error(
+                "OpenRouter API error for model %s (status %s): %s", self.model, getattr(e, "status_code", "unknown"), e
+            )
             raise
 
         _LOG.info("OpenRouter response: %s", resp)
 
         choice = resp.choices[0]
-        finish_reason = getattr(choice, 'finish_reason', None)
+        finish_reason = getattr(choice, "finish_reason", None)
         content = choice.message.content
 
-        _LOG.info("OpenRouter result: finish_reason=%s, content_len=%d, content=%s",
-                  finish_reason, len(content) if content else 0, content[:200] if content else None)
+        _LOG.info(
+            "OpenRouter result: finish_reason=%s, content_len=%d, content=%s",
+            finish_reason,
+            len(content) if content else 0,
+            content[:200] if content else None,
+        )
 
         return (content or "").strip()
 
@@ -124,10 +127,7 @@ class OpenRouterCompletionsGenerator(TextGeneratorAPI):
 
         client = self._get_client()
 
-        _LOG.info(
-            "OpenRouter completions: model=%s, prompt_len=%d, temp=%.2f",
-            self.model, len(prompt), temperature
-        )
+        _LOG.info("OpenRouter completions: model=%s, prompt_len=%d, temp=%.2f", self.model, len(prompt), temperature)
 
         try:
             resp = await client.completions.create(
@@ -143,7 +143,12 @@ class OpenRouterCompletionsGenerator(TextGeneratorAPI):
             _LOG.error("OpenRouter completions connection error for model %s: %s", self.model, e)
             raise
         except APIError as e:
-            _LOG.error("OpenRouter completions API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            _LOG.error(
+                "OpenRouter completions API error for model %s (status %s): %s",
+                self.model,
+                getattr(e, "status_code", "unknown"),
+                e,
+            )
             raise
 
         _LOG.info("OpenRouter completions response: %s", resp)
@@ -153,8 +158,8 @@ class OpenRouterCompletionsGenerator(TextGeneratorAPI):
 
         _LOG.info(
             "OpenRouter completions result: finish_reason=%s, text_len=%d",
-            getattr(choice, 'finish_reason', None),
-            len(text) if text else 0
+            getattr(choice, "finish_reason", None),
+            len(text) if text else 0,
         )
 
         return (text or "").strip()
@@ -196,10 +201,7 @@ class OpenRouterLoomGenerator(TextGeneratorAPI):
             {"role": "assistant", "content": prompt},
         ]
 
-        _LOG.info(
-            "OpenRouter Loom: model=%s, prompt_len=%d, temp=%.2f",
-            self.model, len(prompt), temperature
-        )
+        _LOG.info("OpenRouter Loom: model=%s, prompt_len=%d, temp=%.2f", self.model, len(prompt), temperature)
 
         try:
             resp = await client.chat.completions.create(
@@ -215,7 +217,12 @@ class OpenRouterLoomGenerator(TextGeneratorAPI):
             _LOG.error("OpenRouter Loom connection error for model %s: %s", self.model, e)
             raise
         except APIError as e:
-            _LOG.error("OpenRouter Loom API error for model %s (status %s): %s", self.model, getattr(e, 'status_code', 'unknown'), e)
+            _LOG.error(
+                "OpenRouter Loom API error for model %s (status %s): %s",
+                self.model,
+                getattr(e, "status_code", "unknown"),
+                e,
+            )
             raise
 
         _LOG.info("OpenRouter Loom response: %s", resp)
@@ -225,8 +232,8 @@ class OpenRouterLoomGenerator(TextGeneratorAPI):
 
         _LOG.info(
             "OpenRouter Loom result: finish_reason=%s, content_len=%d",
-            getattr(choice, 'finish_reason', None),
-            len(content) if content else 0
+            getattr(choice, "finish_reason", None),
+            len(content) if content else 0,
         )
 
         return (content or "").strip()

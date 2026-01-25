@@ -6,7 +6,7 @@ import math
 import re
 import sys
 
-sys.path.insert(0, 'src')
+sys.path.insert(0, "src")
 
 import aiohttp
 
@@ -14,6 +14,7 @@ import aiohttp
 def extract_tweet_id(url):
     match = re.search(r"/status/(\d+)", url)
     return match.group(1) if match else None
+
 
 def generate_syndication_token(tweet_id):
     tweet_id_num = int(tweet_id)
@@ -25,10 +26,11 @@ def generate_syndication_token(tweet_id):
         if digit < 10:
             base36_str = str(digit) + base36_str
         else:
-            base36_str = chr(ord('a') + digit - 10) + base36_str
+            base36_str = chr(ord("a") + digit - 10) + base36_str
         int_part //= 36
-    token = re.sub(r'(0+|\.)', '', base36_str)
+    token = re.sub(r"(0+|\.)", "", base36_str)
     return token if token else "0"
+
 
 async def debug_syndication():
     url = "https://x.com/hollingsfsdf/status/1982214423054852291"
@@ -49,9 +51,9 @@ async def debug_syndication():
         data = await response.json()
 
     print("Full JSON response:")
-    print("="*80)
+    print("=" * 80)
     print(json.dumps(data, indent=2))
-    print("="*80)
+    print("=" * 80)
 
     print("\n\nExtracted fields:")
     print(f"User name: {data.get('user', {}).get('name')}")
@@ -63,10 +65,11 @@ async def debug_syndication():
     print(f"Reply count: {data.get('reply_count')}")
     print(f"Retweet count: {data.get('retweet_count')}")
 
-    photos = data.get('photos', [])
+    photos = data.get("photos", [])
     print(f"\nPhotos ({len(photos)}):")
     for i, photo in enumerate(photos, 1):
         print(f"  {i}. {photo.get('url')}")
+
 
 if __name__ == "__main__":
     asyncio.run(debug_syndication())

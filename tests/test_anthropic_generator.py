@@ -51,7 +51,7 @@ class TestGenerate:
 
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             result = await generator.generate("Hello")
 
         assert result == "Hello, world!"
@@ -77,7 +77,7 @@ class TestGenerate:
             {"role": "user", "content": "How are you?"},
         ]
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             result = await generator.generate(messages)
 
         assert result == "Response"
@@ -99,7 +99,7 @@ class TestGenerate:
             {"role": "user", "content": "Hello"},
         ]
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             await generator.generate(messages)
 
         call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -118,7 +118,7 @@ class TestGenerate:
 
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             await generator.generate("Hello", temperature=0.5)
 
         call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -149,7 +149,7 @@ class TestGenerate:
 
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             result = await generator.generate("Hello")
 
         assert result == "Part 1 Part 2"
@@ -162,7 +162,7 @@ class TestGenerate:
 
         mock_client.messages.create = AsyncMock(return_value=mock_response)
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             result = await generator.generate("Hello")
 
         assert result == ""
@@ -180,7 +180,7 @@ class TestErrorHandling:
             side_effect=RateLimitError("Rate limit exceeded", response=MagicMock(), body=None)
         )
 
-        with patch.object(generator, '_get_client', return_value=mock_client), pytest.raises(RateLimitError):
+        with patch.object(generator, "_get_client", return_value=mock_client), pytest.raises(RateLimitError):
             await generator.generate("Hello")
 
     @pytest.mark.asyncio
@@ -194,7 +194,7 @@ class TestErrorHandling:
             side_effect=APIConnectionError(message="Connection failed", request=mock_request)
         )
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             with pytest.raises(APIConnectionError):
                 await generator.generate("Hello")
 
@@ -215,7 +215,7 @@ class TestErrorHandling:
 
         mock_client.messages.create = AsyncMock(side_effect=error)
 
-        with patch.object(generator, '_get_client', return_value=mock_client), pytest.raises(APIStatusError):
+        with patch.object(generator, "_get_client", return_value=mock_client), pytest.raises(APIStatusError):
             await generator.generate("Hello")
 
 
@@ -236,7 +236,7 @@ class TestCaching:
             {"role": "user", "content": "Cached content", "_cacheable": True},
         ]
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             await generator.generate(messages)
 
         call_kwargs = mock_client.messages.create.call_args.kwargs
@@ -259,7 +259,7 @@ class TestCaching:
             {"role": "user", "content": "Hello"},
         ]
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
+        with patch.object(generator, "_get_client", return_value=mock_client):
             await generator.generate(messages)
 
         call_kwargs = mock_client.messages.create.call_args.kwargs

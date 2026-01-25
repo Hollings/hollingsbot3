@@ -9,6 +9,7 @@ import re
 # Try to enable SVG rendering; degrade gracefully if native Cairo is missing.
 try:
     import cairosvg  # type: ignore
+
     _SVG_RENDERING_AVAILABLE = True
 except Exception as e:  # pragma: no cover
     cairosvg = None  # type: ignore
@@ -65,7 +66,7 @@ def _ensure_svg_root_has_namespaces(svg_xml: str) -> str:
 
     # Insert the missing namespace attrs before the closing ">"
     new_open = f"<svg{attrs} {' '.join(extras)}>"
-    return svg_xml[:m.start()] + new_open + svg_xml[m.end():]
+    return svg_xml[: m.start()] + new_open + svg_xml[m.end() :]
 
 
 def _strip_doctype_and_scripts(svg_xml: str) -> str:
@@ -165,7 +166,9 @@ def _render_with_recovery(svg_xml: str) -> tuple[bool, bytes | None, str | None]
                 return True, png, None
             except Exception as e3:
                 # Report the last error, keep earlier for logs
-                logging.getLogger(__name__).debug("SVG render failed. First error: %r; Second: %r; Third: %r", e1, e2, e3)
+                logging.getLogger(__name__).debug(
+                    "SVG render failed. First error: %r; Second: %r; Third: %r", e1, e2, e3
+                )
                 return False, None, str(e3)
 
 

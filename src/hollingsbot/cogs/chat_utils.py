@@ -23,9 +23,38 @@ _LOG = logging.getLogger(__name__)
 
 # Constants
 _TEXT_ATTACHMENT_EXTENSIONS = {
-    ".txt", ".md", ".py", ".js", ".ts", ".tsx", ".jsx", ".json", ".xml", ".yaml", ".yml",
-    ".html", ".css", ".sql", ".sh", ".bash", ".java", ".c", ".cpp", ".h", ".go", ".rs",
-    ".rb", ".php", ".swift", ".kt", ".cs", ".log", ".env", ".toml", ".ini", ".conf"
+    ".txt",
+    ".md",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".json",
+    ".xml",
+    ".yaml",
+    ".yml",
+    ".html",
+    ".css",
+    ".sql",
+    ".sh",
+    ".bash",
+    ".java",
+    ".c",
+    ".cpp",
+    ".h",
+    ".go",
+    ".rs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".kt",
+    ".cs",
+    ".log",
+    ".env",
+    ".toml",
+    ".ini",
+    ".conf",
 }
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"}
 _MAX_TEXT_ATTACHMENT_BYTES = 120_000  # 120KB
@@ -35,6 +64,7 @@ _IMAGE_MAX_DOWNLOAD_BYTES = 50_000_000  # 50MB max download to prevent memory is
 
 
 # ==================== Message Cleaning ====================
+
 
 def clean_mentions(message: discord.Message, bot: discord.Client) -> str:
     """Replace user mentions with display names instead of IDs."""
@@ -73,7 +103,7 @@ def clean_mentions(message: discord.Message, bot: discord.Client) -> str:
         return f"@User{user_id_str}"
 
     # Pattern matches <@123456> or <@!123456>
-    content = re.sub(r'<@!?(\d+)>', replace_user_mention, content)
+    content = re.sub(r"<@!?(\d+)>", replace_user_mention, content)
 
     return content
 
@@ -90,6 +120,7 @@ def should_ignore_message(content: str | None) -> bool:
 
 
 # ==================== Attachment Detection ====================
+
 
 def is_text_attachment(attachment: discord.Attachment) -> bool:
     """Check if attachment is a text file."""
@@ -119,6 +150,7 @@ def is_image_attachment(attachment: discord.Attachment) -> bool:
 
 
 # ==================== Text Attachments ====================
+
 
 async def read_text_attachment(attachment: discord.Attachment) -> tuple[str, bool] | None:
     """Read text attachment and return (content, was_truncated) or None on error."""
@@ -165,6 +197,7 @@ async def collect_text_attachments_full(message: discord.Message) -> tuple[list[
 
 # ==================== Image Processing ====================
 
+
 def encode_jpeg(image: Image.Image) -> bytes:
     """Encode image as JPEG, trying progressively lower quality to meet size limit."""
     for quality in (90, 85, 80, 75, 70, 60, 50):
@@ -193,7 +226,9 @@ async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttac
     if attachment.size and attachment.size > _IMAGE_MAX_DOWNLOAD_BYTES:
         _LOG.warning(
             "Skipping image attachment %s: size %d bytes exceeds limit %d",
-            attachment.filename, attachment.size, _IMAGE_MAX_DOWNLOAD_BYTES
+            attachment.filename,
+            attachment.size,
+            _IMAGE_MAX_DOWNLOAD_BYTES,
         )
         return None
 
@@ -207,7 +242,9 @@ async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttac
     if len(data) > _IMAGE_MAX_DOWNLOAD_BYTES:
         _LOG.warning(
             "Skipping image attachment %s: downloaded %d bytes exceeds limit %d",
-            attachment.filename, len(data), _IMAGE_MAX_DOWNLOAD_BYTES
+            attachment.filename,
+            len(data),
+            _IMAGE_MAX_DOWNLOAD_BYTES,
         )
         return None
 
@@ -247,9 +284,7 @@ def image_from_bytes(name: str, data: bytes) -> ImageAttachment:
     except Exception:
         width = height = None
     data_url = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
-    return ImageAttachment(
-        name=name, url="", data_url=data_url, width=width, height=height, size=len(data)
-    )
+    return ImageAttachment(name=name, url="", data_url=data_url, width=width, height=height, size=len(data))
 
 
 def images_from_history(
@@ -313,6 +348,7 @@ async def collect_image_attachments(message: discord.Message) -> list[ImageAttac
 
 # ==================== Reply Context ====================
 
+
 async def fetch_referenced_message(message: discord.Message) -> discord.Message | None:
     """Fetch the message being replied to, if any."""
     ref = message.reference
@@ -363,6 +399,7 @@ async def build_reply_hint(
 
 # ==================== URL Metadata ====================
 
+
 async def extract_url_images(base_text: str) -> tuple[list[ImageAttachment], str, str]:
     """
     Extract URL metadata and images from text.
@@ -380,15 +417,11 @@ async def extract_url_images(base_text: str) -> tuple[list[ImageAttachment], str
         return url_images, full_metadata_text, history_metadata_text
 
     # For current turn to LLM: include images
-    full_metadata_parts = [
-        format_metadata_for_llm(m, include_images=True) for m in url_metadata_list
-    ]
+    full_metadata_parts = [format_metadata_for_llm(m, include_images=True) for m in url_metadata_list]
     full_metadata_text = "\n\n".join(full_metadata_parts)
 
     # For history: exclude images
-    history_metadata_parts = [
-        format_metadata_for_llm(m, include_images=False) for m in url_metadata_list
-    ]
+    history_metadata_parts = [format_metadata_for_llm(m, include_images=False) for m in url_metadata_list]
     history_metadata_text = "\n\n".join(history_metadata_parts)
 
     # Download and process images from URL metadata
@@ -411,6 +444,7 @@ async def extract_url_images(base_text: str) -> tuple[list[ImageAttachment], str
 
 
 # ==================== Turn Building ====================
+
 
 def build_user_message_text(display_name: str, reply_hint: str | None, base_text: str) -> str:
     """Build formatted user message text with display name and optional reply hint."""

@@ -1,4 +1,5 @@
 """Text-generation backend that calls Anthropic's Claude models."""
+
 from __future__ import annotations
 
 import logging
@@ -73,18 +74,11 @@ class AnthropicTextGenerator(TextGeneratorAPI):
             messages: list[_Message] = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, Sequence):
             # A very light validation to help catch obvious misuse.
-            if not all(
-                isinstance(m, dict) and "role" in m and "content" in m
-                for m in prompt
-            ):
-                raise TypeError(
-                    "Each message must be a dict with 'role' and 'content' keys"
-                )
+            if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
+                raise TypeError("Each message must be a dict with 'role' and 'content' keys")
             messages = list(prompt)  # type: ignore[arg-type]
         else:
-            raise TypeError(
-                "prompt must be either a string or a sequence of message dicts"
-            )
+            raise TypeError("prompt must be either a string or a sequence of message dicts")
 
         # Extract system messages (Anthropic expects top-level `system`, not a
         # message role). Concatenate multiple system entries with blank lines.

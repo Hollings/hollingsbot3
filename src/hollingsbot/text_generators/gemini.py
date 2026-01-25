@@ -1,5 +1,6 @@
 # text_generators/gemini.py
 """Gemini 3 API text generator using the google-genai SDK."""
+
 from __future__ import annotations
 
 import logging
@@ -40,9 +41,7 @@ class GeminiTextGenerator(TextGeneratorAPI):
             try:
                 from google import genai
             except ImportError:
-                raise ImportError(
-                    "google-genai package not installed. Install with: pip install google-genai"
-                )
+                raise ImportError("google-genai package not installed. Install with: pip install google-genai")
 
             # Check for API key
             api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
@@ -52,9 +51,7 @@ class GeminiTextGenerator(TextGeneratorAPI):
             _CLIENT_CACHE["default"] = genai.Client(api_key=api_key)
         return _CLIENT_CACHE["default"]
 
-    def _convert_messages_to_contents(
-        self, messages: list[dict[str, Any]]
-    ) -> tuple[str | None, list[Any]]:
+    def _convert_messages_to_contents(self, messages: list[dict[str, Any]]) -> tuple[str | None, list[Any]]:
         """Convert internal message format to Gemini content format.
 
         Returns (system_instruction, contents) where:
@@ -92,6 +89,7 @@ class GeminiTextGenerator(TextGeneratorAPI):
                     # Handle data URL format: {"data": "base64...", "content_type": "image/jpeg"}
                     if "data" in img:
                         import base64
+
                         # Extract base64 data (may be prefixed with data:...)
                         data = img["data"]
                         if data.startswith("data:"):

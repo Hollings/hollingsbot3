@@ -102,4 +102,3 @@ def compress_image_to_fit(
 
     # Give up; return original
     return image_bytes, "png"
-

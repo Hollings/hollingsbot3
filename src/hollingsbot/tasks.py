@@ -20,7 +20,7 @@ celery_app = Celery(
 )
 
 celery_app.conf.task_routes = {
-    "tasks.generate_text":  {"queue": "text"},
+    "tasks.generate_text": {"queue": "text"},
     "tasks.generate_image": {"queue": "image"},
     "tasks.generate_llm_chat_response": {"queue": "text"},
     "tasks.repair_wendy": {"queue": "text"},
@@ -117,9 +117,7 @@ def generate_image(
         raise RuntimeError(err) from exc
     except Exception as exc:
         duration = time.monotonic() - start
-        logger.exception(
-            "generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc
-        )
+        logger.exception("generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc)
         update_status(prompt_id, f"failed: {exc}")
         raise
     finally:
@@ -141,9 +139,7 @@ def generate_image(
             paths.append(str(fp))
         update_status(prompt_id, "completed")
         duration = time.monotonic() - start
-        logger.info(
-            "generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths)
-        )
+        logger.info("generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths))
         return paths
     else:
         filename = f"{prompt_id}_{ts}.png"
@@ -275,14 +271,16 @@ def _build_messages_for_generator(
                     try:
                         header, b64_data = data_url.split(",", 1)
                         media_type = header.split(";")[0].replace("data:", "")
-                        content_parts.append({
-                            "type": "image",
-                            "source": {
-                                "type": "base64",
-                                "media_type": media_type,
-                                "data": b64_data,
-                            },
-                        })
+                        content_parts.append(
+                            {
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": media_type,
+                                    "data": b64_data,
+                                },
+                            }
+                        )
                     except Exception:
                         logger.warning("Failed to parse data URL for image %s", img.get("name"))
             if not content_parts:
@@ -346,6 +344,7 @@ def generate_llm_chat_response(
     # Serialize conversation for logging
     import json
     import traceback
+
     conversation_json = json.dumps(conversation, indent=2)
     response_text = ""
     status = "error"
@@ -418,7 +417,7 @@ def generate_llm_chat_response(
     }
 
     # Try to get token usage from generator if available
-    token_usage = getattr(generator, 'last_token_usage', None)
+    token_usage = getattr(generator, "last_token_usage", None)
     if token_usage:
         debug_info["token_usage"] = token_usage
 
@@ -454,7 +453,7 @@ def repair_wendy(self, channel_id: int) -> dict:
     if not cli_path:
         return {"success": False, "error": "Claude CLI not found"}
 
-    repair_prompt = f'''EMERGENCY REPAIR MODE - Channel {channel_id}
+    repair_prompt = f"""EMERGENCY REPAIR MODE - Channel {channel_id}
 
 CRITICAL: You are debugging why Wendy (the Discord bot) is not responding. This is NOT for adding features or minor issues - only for fixing crashes and critical failures.
 
@@ -492,7 +491,7 @@ IMPORTANT:
 - Always send a summary message when done
 - If you edit code, you MUST restart the relevant container
 
-START by checking the docker logs and session state.'''
+START by checking the docker logs and session state."""
 
     try:
         # Run claude CLI with the repair prompt (fresh session, no resume)
@@ -500,8 +499,10 @@ START by checking the docker logs and session state.'''
             [
                 cli_path,
                 "-p",  # Print mode
-                "--model", "opus",
-                "--allowedTools", "Read,Bash,Edit,Write",
+                "--model",
+                "opus",
+                "--allowedTools",
+                "Read,Bash,Edit,Write",
             ],
             input=repair_prompt,
             capture_output=True,

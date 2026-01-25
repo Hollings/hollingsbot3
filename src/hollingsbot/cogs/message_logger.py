@@ -59,7 +59,7 @@ class MessageLoggerCog(commands.Cog):
             _LOG.info(
                 "MessageLoggerCog initialized with %d guild(s): %s",
                 len(self.allowed_guilds),
-                ", ".join(str(g) for g in self.allowed_guilds)
+                ", ".join(str(g) for g in self.allowed_guilds),
             )
 
     def _get_connection(self) -> sqlite3.Connection:
@@ -177,26 +177,29 @@ class MessageLoggerCog(commands.Cog):
                 reply_to_id = message.reference.message_id
 
             conn = self._get_connection()
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO message_history (
                     message_id, channel_id, guild_id, timestamp,
                     author_id, author_nickname, is_bot, is_webhook,
                     content, attachment_urls, reply_to_id, reactions
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                message.id,
-                message.channel.id,
-                message.guild.id if message.guild else None,
-                message.created_at.isoformat(),
-                message.author.id,
-                message.author.display_name,
-                1 if message.author.bot else 0,
-                1 if message.webhook_id else 0,
-                message.content,
-                json.dumps(attachment_urls) if attachment_urls else None,
-                reply_to_id,
-                None,  # reactions populated on edit/reaction events
-            ))
+            """,
+                (
+                    message.id,
+                    message.channel.id,
+                    message.guild.id if message.guild else None,
+                    message.created_at.isoformat(),
+                    message.author.id,
+                    message.author.display_name,
+                    1 if message.author.bot else 0,
+                    1 if message.webhook_id else 0,
+                    message.content,
+                    json.dumps(attachment_urls) if attachment_urls else None,
+                    reply_to_id,
+                    None,  # reactions populated on edit/reaction events
+                ),
+            )
             conn.commit()
         except sqlite3.Error as e:
             # Reset connection on database errors
@@ -240,11 +243,14 @@ class MessageLoggerCog(commands.Cog):
 
         try:
             conn = self._get_connection()
-            conn.execute("""
+            conn.execute(
+                """
                 UPDATE message_history
                 SET content = ?
                 WHERE message_id = ?
-            """, (data["content"], payload.message_id))
+            """,
+                (data["content"], payload.message_id),
+            )
             conn.commit()
         except sqlite3.Error as e:
             _LOG.exception("Database error updating message %s, resetting connection: %s", payload.message_id, e)

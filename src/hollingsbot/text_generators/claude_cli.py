@@ -6,6 +6,7 @@ allowing use of subscription usage instead of API credits for cost savings.
 Uses --resume for persistent per-channel sessions, with simple nudge prompts
 to trigger Wendy to check messages via her tools.
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -178,7 +179,9 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 
             _LOG.info(
                 "Session %s has %d Discord messages (max %d), truncating...",
-                session_id[:8], discord_msg_count, MAX_DISCORD_MESSAGES
+                session_id[:8],
+                discord_msg_count,
+                MAX_DISCORD_MESSAGES,
             )
 
             # Find cutoff point by walking backwards and counting Discord messages
@@ -230,8 +233,10 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 
             _LOG.info(
                 "Truncated session %s: removed %d entries, kept %d (with %d Discord messages)",
-                session_id[:8], removed_count, len(truncated),
-                _count_discord_messages(truncated)
+                session_id[:8],
+                removed_count,
+                len(truncated),
+                _count_discord_messages(truncated),
             )
 
         except Exception as e:
@@ -263,9 +268,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
             if path and Path(path).exists():
                 return path
 
-        raise ClaudeCliError(
-            "Claude CLI not found. Install it or set CLAUDE_CLI_PATH env var."
-        )
+        raise ClaudeCliError("Claude CLI not found. Install it or set CLAUDE_CLI_PATH env var.")
 
     def _get_recent_cli_error(self) -> str | None:
         """Read the most recent Claude CLI debug file to extract error messages."""
@@ -290,6 +293,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
             if "authentication_error" in content:
                 # Try to extract the message
                 import re
+
                 match = re.search(r'"message":\s*"([^"]+)"', content)
                 if match:
                     return match.group(1)
@@ -326,9 +330,12 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 
         for i, img in enumerate(images):
             data_url = img.get("data_url", "")
-            _LOG.info("Image %d: data_url length=%d, starts_with=%s",
-                      i, len(data_url) if data_url else 0,
-                      data_url[:50] if data_url else "None")
+            _LOG.info(
+                "Image %d: data_url length=%d, starts_with=%s",
+                i,
+                len(data_url) if data_url else 0,
+                data_url[:50] if data_url else "None",
+            )
 
             if not data_url or not data_url.startswith("data:"):
                 _LOG.warning("Image %d: Invalid or missing data_url", i)
@@ -363,9 +370,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         refs = [f"[Image: {p}]" for p in paths]
         return "\n".join(refs)
 
-    def _format_conversation(
-        self, conversation: list[dict[str, Any]]
-    ) -> tuple[str, str]:
+    def _format_conversation(self, conversation: list[dict[str, Any]]) -> tuple[str, str]:
         """Convert conversation to (system_prompt, user_prompt) for CLI.
 
         Returns:
@@ -428,6 +433,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
                 dest = wendy_dir / script.name
                 if not dest.exists() or dest.stat().st_mtime < script.stat().st_mtime:
                     import shutil
+
                     shutil.copy2(script, dest)
                     dest.chmod(0o755)  # Make executable
             # Copy Python scripts
@@ -435,6 +441,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
                 dest = wendy_dir / script.name
                 if not dest.exists() or dest.stat().st_mtime < script.stat().st_mtime:
                     import shutil
+
                     shutil.copy2(script, dest)
 
         # Also copy check_messages.py from parent scripts dir
@@ -443,6 +450,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
             check_messages_dest = wendy_dir / "check_messages.py"
             if not check_messages_dest.exists():
                 import shutil
+
                 shutil.copy2(check_messages_src, check_messages_dest)
 
         # Create outbox directory
@@ -462,7 +470,9 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         try:
             content = notes_path.read_text().strip()
             if content:
-                return f"\n\n---\nYOUR PERSONAL NOTES (from wendys_folder/CLAUDE.md - you can edit this!):\n{content}\n---"
+                return (
+                    f"\n\n---\nYOUR PERSONAL NOTES (from wendys_folder/CLAUDE.md - you can edit this!):\n{content}\n---"
+                )
             return ""
         except Exception as e:
             _LOG.warning("Failed to read Wendy's notes: %s", e)
@@ -625,10 +635,12 @@ Key tables:
                 for block in content:
                     if isinstance(block, dict):
                         if block.get("type") == "tool_use":
-                            summary["tool_uses"].append({
-                                "tool": block.get("name"),
-                                "input_preview": str(block.get("input", ""))[:200],
-                            })
+                            summary["tool_uses"].append(
+                                {
+                                    "tool": block.get("name"),
+                                    "input_preview": str(block.get("input", ""))[:200],
+                                }
+                            )
                         elif block.get("type") == "text":
                             text = block.get("text", "")
                             if text:
@@ -745,12 +757,14 @@ Key tables:
             cmd.extend(["--append-system-prompt", system_prompt])
 
         # Enable tools with sandboxed permissions
-        cmd.extend([
-            "--allowedTools",
-            "Read,WebSearch,WebFetch,Bash,Edit(/data/wendy/wendys_folder/**),Write(/data/wendy/wendys_folder/**),Write(/data/wendy/uploads/**)",
-            "--disallowedTools",
-            "Edit(/data/wendy/*.sh),Edit(/data/wendy/*.py),Edit(/app/**),Write(/app/**)",
-        ])
+        cmd.extend(
+            [
+                "--allowedTools",
+                "Read,WebSearch,WebFetch,Bash,Edit(/data/wendy/wendys_folder/**),Write(/data/wendy/wendys_folder/**),Write(/data/wendy/uploads/**)",
+                "--disallowedTools",
+                "Edit(/data/wendy/*.sh),Edit(/data/wendy/*.py),Edit(/app/**),Write(/app/**)",
+            ]
+        )
 
         _LOG.info(
             "ClaudeCLI: model=%s, session=%s, is_new=%s",
@@ -839,12 +853,10 @@ Key tables:
                 _LOG.error("Claude CLI failed: %s", stderr_text)
                 # If resume failed, try creating a fresh session and retry
                 # Check for various session-related error messages
-                session_error = (
-                    "--resume" in cmd and (
-                        "session" in stderr_text.lower() or
-                        "no conversation found" in stderr_text.lower() or
-                        not stderr_text.strip()  # Empty stderr often means session not found
-                    )
+                session_error = "--resume" in cmd and (
+                    "session" in stderr_text.lower()
+                    or "no conversation found" in stderr_text.lower()
+                    or not stderr_text.strip()  # Empty stderr often means session not found
                 )
                 if session_error and not kwargs.get("_force_new_session"):
                     _LOG.warning("Session resume failed, retrying with fresh session for channel %d", channel_id)
@@ -856,9 +868,7 @@ Key tables:
                 if not stderr_text.strip():
                     error_detail = self._get_recent_cli_error() or "unknown error"
 
-                raise ClaudeCliError(
-                    f"CLI failed (code {proc.returncode}): {error_detail}"
-                )
+                raise ClaudeCliError(f"CLI failed (code {proc.returncode}): {error_detail}")
 
             # Save debug log (legacy format) and trim stream log
             self._save_debug_log(events, channel_id)

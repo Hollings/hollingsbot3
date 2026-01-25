@@ -228,9 +228,7 @@ class ChatCoordinator(commands.Cog):
     # ==================== Message Processing ====================
 
     @commands.Cog.listener()
-    async def on_typing(
-        self, channel: discord.abc.Messageable, user: discord.User | discord.Member, when
-    ) -> None:
+    async def on_typing(self, channel: discord.abc.Messageable, user: discord.User | discord.Member, when) -> None:
         """Handle typing events and forward to the typing tracker."""
         await self.typing_tracker.on_typing(channel, user, when)
 
@@ -270,9 +268,7 @@ class ChatCoordinator(commands.Cog):
                 history = self._history_for_channel(channel_id)
 
                 # Check if this message is already in history (avoid duplicates)
-                already_in_history = any(
-                    t.message_id == message.id for t in history if t.message_id is not None
-                )
+                already_in_history = any(t.message_id == message.id for t in history if t.message_id is not None)
 
                 if not already_in_history:
                     history.append(turn)
@@ -305,7 +301,9 @@ class ChatCoordinator(commands.Cog):
                 if self._active_message_tasks.get(channel_id) is task:
                     self._active_message_tasks.pop(channel_id, None)
 
-    async def _try_bot_responses(self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]) -> None:
+    async def _try_bot_responses(
+        self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]
+    ) -> None:
         """Try to get a response from bots (can be cancelled)."""
         # Wendy always gets triggered first - she's the main character
         # Other bots run after, with only one responding
@@ -340,6 +338,7 @@ class ChatCoordinator(commands.Cog):
 
         # Then try other bots (temp bots, etc.) - stop after first response
         import random
+
         random.shuffle(other_bots)
 
         for bot_instance in other_bots:
@@ -374,9 +373,7 @@ class ChatCoordinator(commands.Cog):
         display = get_display_name(message.author)
 
         # Build reply hint and collect reply images
-        hint, reply_images = await chat_utils.build_reply_hint(
-            message, self.bot, self.channel_histories
-        )
+        hint, reply_images = await chat_utils.build_reply_hint(message, self.bot, self.channel_histories)
 
         base_text = chat_utils.clean_mentions(message, self.bot).strip()
 
@@ -430,9 +427,7 @@ class ChatCoordinator(commands.Cog):
             history = self._history_for_channel(channel_id)
 
             # Check if already in history
-            already_in_history = any(
-                t.message_id == message_id for t in history if t.message_id is not None
-            )
+            already_in_history = any(t.message_id == message_id for t in history if t.message_id is not None)
 
             if not already_in_history:
                 # Store as "user" - each bot will translate to their own perspective
@@ -448,8 +443,7 @@ class ChatCoordinator(commands.Cog):
                 history.append(turn)
                 text_preview = (text or "")[:80]
                 _LOG.info(
-                    f"Added bot response to history: bot={bot_name}, "
-                    f"message_id={message_id}, text={text_preview}..."
+                    f"Added bot response to history: bot={bot_name}, message_id={message_id}, text={text_preview}..."
                 )
 
                 # Cache for summarization and trigger background summarization
@@ -472,6 +466,7 @@ class ChatCoordinator(commands.Cog):
         webhook_name = None
         if webhook_id:
             from hollingsbot.prompt_db import get_temp_bot_by_webhook_id
+
             temp_bot = get_temp_bot_by_webhook_id(webhook_id)
             if temp_bot:
                 try:

@@ -51,9 +51,7 @@ class AutoPin(commands.Cog):
             return await self.bot.fetch_channel(channel_id)
         return None
 
-    async def _fetch_message_safely(
-        self, channel: GuildChannel, message_id: int
-    ) -> discord.Message | None:
+    async def _fetch_message_safely(self, channel: GuildChannel, message_id: int) -> discord.Message | None:
         """Safely fetch a message from a channel.
 
         Args:

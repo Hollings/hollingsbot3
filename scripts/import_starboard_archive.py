@@ -129,10 +129,7 @@ def import_archive(json_path: Path, db_path: Path, update_existing: bool) -> tup
                 original_author_name = ""
                 if isinstance(author, Mapping):
                     original_author_name = (
-                        author.get("nickname")
-                        or author.get("globalName")
-                        or author.get("name")
-                        or ""
+                        author.get("nickname") or author.get("globalName") or author.get("name") or ""
                     )
                 body = "\n".join(lines[1:]) if len(lines) > 1 else ""
                 created_at = raw_msg.get("timestamp") if isinstance(raw_msg.get("timestamp"), str) else None

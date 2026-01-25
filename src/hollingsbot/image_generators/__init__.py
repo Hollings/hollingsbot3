@@ -39,7 +39,9 @@ def get_image_generator(
         ImageGeneratorAPI instance
     """
     if api == "replicate":
-        return ReplicateImageGenerator(model=model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options)
+        return ReplicateImageGenerator(
+            model=model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options
+        )
     if api in ("svg", "openai-svg"):
         return SvgGPTImageGenerator(model)
     raise ValueError(f"Unknown API: {api}")

@@ -193,8 +193,7 @@ class Admin(commands.Cog):
 
             if exit_code != 0:
                 _LOG.warning(
-                    f"Shell command failed with exit code {exit_code}. "
-                    f"stderr: {stderr.decode(errors='ignore')[:200]}"
+                    f"Shell command failed with exit code {exit_code}. stderr: {stderr.decode(errors='ignore')[:200]}"
                 )
 
             return exit_code == 0
@@ -340,8 +339,12 @@ class Admin(commands.Cog):
         try:
             self._cost_tracker.grant_credits(user.id, amount)
             action = "granted" if amount >= 0 else "deducted"
-            await ctx.send(f"✅ Successfully {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} {user.mention}.")
-            _LOG.info(f"Admin {ctx.author.id} {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} user {user.id}")
+            await ctx.send(
+                f"✅ Successfully {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} {user.mention}."
+            )
+            _LOG.info(
+                f"Admin {ctx.author.id} {action} ${abs(amount):.2f} {'to' if amount >= 0 else 'from'} user {user.id}"
+            )
         except Exception as exc:
             _LOG.exception(f"Failed to grant credits: {exc}")
             await ctx.send(f"❌ Failed to grant credits: {exc}")

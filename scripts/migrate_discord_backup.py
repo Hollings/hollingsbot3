@@ -26,9 +26,7 @@ BATCH_SIZE = 10000
 
 def get_user_info(backup_conn: sqlite3.Connection) -> dict:
     """Build lookup table: user_id -> (nickname, name, is_bot)."""
-    cursor = backup_conn.execute(
-        "SELECT id, name, nickname, is_bot FROM users"
-    )
+    cursor = backup_conn.execute("SELECT id, name, nickname, is_bot FROM users")
     users = {}
     for row in cursor.fetchall():
         user_id = int(row[0])
@@ -41,9 +39,7 @@ def get_user_info(backup_conn: sqlite3.Connection) -> dict:
 
 def get_attachments(backup_conn: sqlite3.Connection) -> dict:
     """Build lookup table: message_id -> [attachment_urls]."""
-    cursor = backup_conn.execute(
-        "SELECT message_id, url FROM attachments"
-    )
+    cursor = backup_conn.execute("SELECT message_id, url FROM attachments")
     attachments = defaultdict(list)
     for row in cursor.fetchall():
         message_id = int(row[0])
@@ -54,20 +50,20 @@ def get_attachments(backup_conn: sqlite3.Connection) -> dict:
 
 def get_reactions(backup_conn: sqlite3.Connection) -> dict:
     """Build lookup table: message_id -> [reaction_objects]."""
-    cursor = backup_conn.execute(
-        "SELECT message_id, emoji_id, emoji_name, count FROM reactions"
-    )
+    cursor = backup_conn.execute("SELECT message_id, emoji_id, emoji_name, count FROM reactions")
     reactions = defaultdict(list)
     for row in cursor.fetchall():
         message_id = int(row[0])
         emoji_id = row[1]
         emoji_name = row[2]
         count = row[3]
-        reactions[message_id].append({
-            "emoji": emoji_name,
-            "emoji_id": emoji_id,
-            "count": count,
-        })
+        reactions[message_id].append(
+            {
+                "emoji": emoji_name,
+                "emoji_id": emoji_id,
+                "count": count,
+            }
+        )
     return reactions
 
 
@@ -116,9 +112,7 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
 
     # Count messages per channel
     print("\nCounting messages per channel in backup...")
-    cursor = backup_conn.execute(
-        "SELECT channel_id, COUNT(*) FROM messages GROUP BY channel_id"
-    )
+    cursor = backup_conn.execute("SELECT channel_id, COUNT(*) FROM messages GROUP BY channel_id")
     channel_counts = {}
     for row in cursor.fetchall():
         channel_id = int(row[0])
@@ -187,28 +181,33 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
         msg_attachments = attachments.get(msg_id, [])
         msg_reactions = reactions.get(msg_id, [])
 
-        batch.append((
-            msg_id,
-            channel_id,
-            GUILD_ID,
-            timestamp,
-            author_id,
-            author_nickname,
-            is_bot,
-            is_webhook,
-            content,
-            json.dumps(msg_attachments) if msg_attachments else "[]",
-            reference_message_id,
-            json.dumps(msg_reactions) if msg_reactions else "[]",
-        ))
+        batch.append(
+            (
+                msg_id,
+                channel_id,
+                GUILD_ID,
+                timestamp,
+                author_id,
+                author_nickname,
+                is_bot,
+                is_webhook,
+                content,
+                json.dumps(msg_attachments) if msg_attachments else "[]",
+                reference_message_id,
+                json.dumps(msg_reactions) if msg_reactions else "[]",
+            )
+        )
 
         if len(batch) >= BATCH_SIZE:
-            target_conn.executemany("""
+            target_conn.executemany(
+                """
                 INSERT OR IGNORE INTO message_history
                 (message_id, channel_id, guild_id, timestamp, author_id, author_nickname,
                  is_bot, is_webhook, content, attachment_urls, reply_to_id, reactions)
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, batch)
+            """,
+                batch,
+            )
             target_conn.commit()
             imported += len(batch)
             print(f"  Imported {imported} messages...")
@@ -216,12 +215,15 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
 
     # Insert remaining batch
     if batch:
-        target_conn.executemany("""
+        target_conn.executemany(
+            """
             INSERT OR IGNORE INTO message_history
             (message_id, channel_id, guild_id, timestamp, author_id, author_nickname,
              is_bot, is_webhook, content, attachment_urls, reply_to_id, reactions)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, batch)
+        """,
+            batch,
+        )
         target_conn.commit()
         imported += len(batch)
 
@@ -231,12 +233,15 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
 
     # Verify counts
     print("\nVerifying message counts per channel in target...")
-    cursor = target_conn.execute("""
+    cursor = target_conn.execute(
+        """
         SELECT channel_id, COUNT(*)
         FROM message_history
         WHERE guild_id = ?
         GROUP BY channel_id
-    """, (GUILD_ID,))
+    """,
+        (GUILD_ID,),
+    )
     for row in cursor.fetchall():
         channel_id = row[0]
         count = row[1]
@@ -244,8 +249,7 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
         print(f"  {channel_name}: {count} messages")
 
     total_in_target = target_conn.execute(
-        "SELECT COUNT(*) FROM message_history WHERE guild_id = ?",
-        (GUILD_ID,)
+        "SELECT COUNT(*) FROM message_history WHERE guild_id = ?", (GUILD_ID,)
     ).fetchone()[0]
     print(f"\nTotal messages in target for guild: {total_in_target}")
 
@@ -255,18 +259,9 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Migrate discord_backup.db into hollingsbot.db message_history"
-    )
-    parser.add_argument(
-        "backup_db_path",
-        help="Path to the discord_backup.db file"
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Show what would be imported without actually importing"
-    )
+    parser = argparse.ArgumentParser(description="Migrate discord_backup.db into hollingsbot.db message_history")
+    parser.add_argument("backup_db_path", help="Path to the discord_backup.db file")
+    parser.add_argument("--dry-run", action="store_true", help="Show what would be imported without actually importing")
     args = parser.parse_args()
 
     return migrate(args.backup_db_path, args.dry_run)

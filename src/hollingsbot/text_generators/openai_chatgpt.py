@@ -256,9 +256,9 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
                     "OpenAI Responses: input_messages=%d (first roles: %s; first content types: %s)",
                     len(input_messages),
                     ", ".join(m.get("role", "?") for m in input_messages[:3]),
-                    ", ".join(
-                        (c.get("type", "?")) for c in (input_messages[0].get("content", []) or [])
-                    ) if input_messages else "",
+                    ", ".join((c.get("type", "?")) for c in (input_messages[0].get("content", []) or []))
+                    if input_messages
+                    else "",
                 )
 
             # Optional per-request timeout; falls back to client default if unset
@@ -311,7 +311,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         # Fallback for non-gpt-5 models: Chat Completions with temperature
         resp = await client.chat.completions.create(
             model=self.model,
-            messages=messages,      # type: ignore[arg-type]
+            messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
         )
         choice = resp.choices[0]

@@ -22,11 +22,12 @@ def temp_db():
 @pytest.fixture
 def setup_best_bot_posts(temp_db):
     """Set up the best_bot_posts module with test database."""
-    with patch.dict('os.environ', {'PROMPT_DB_PATH': temp_db}):
+    with patch.dict("os.environ", {"PROMPT_DB_PATH": temp_db}):
         # Re-import to pick up new DB_PATH
         import importlib
 
         import hollingsbot.cogs.best_bot_posts as bbp
+
         importlib.reload(bbp)
 
         # Initialize the database
@@ -41,9 +42,7 @@ class TestInitDb:
         """Test that elo_posts table is created."""
         _bbp, db_path = setup_best_bot_posts
         with sqlite3.connect(db_path) as conn:
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='elo_posts'"
-            )
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='elo_posts'")
             result = cursor.fetchone()
         assert result is not None
 
@@ -51,9 +50,7 @@ class TestInitDb:
         """Test that match_history table is created."""
         _bbp, db_path = setup_best_bot_posts
         with sqlite3.connect(db_path) as conn:
-            cursor = conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name='match_history'"
-            )
+            cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='match_history'")
             result = cursor.fetchone()
         assert result is not None
 
@@ -144,14 +141,14 @@ class TestGetRandomPair:
             for i in range(10):
                 conn.execute(
                     "INSERT INTO elo_posts (name, filename, wins, losses) VALUES (?, ?, ?, ?)",
-                    (f'post{i}', f'file{i}.png', i, 0)
+                    (f"post{i}", f"file{i}.png", i, 0),
                 )
             conn.commit()
 
         # Run multiple times to check randomness
         for _ in range(10):
             result = bbp._get_random_pair()
-            assert result[0]['id'] != result[1]['id']
+            assert result[0]["id"] != result[1]["id"]
 
 
 class TestUpdateRatings:
@@ -212,7 +209,7 @@ class TestPairingStrategies:
             for i in range(5):
                 conn.execute(
                     "INSERT INTO elo_posts (name, filename, wins, losses) VALUES (?, ?, 0, 0)",
-                    (f'fresh{i}', f'fresh{i}.png')
+                    (f"fresh{i}", f"fresh{i}.png"),
                 )
             conn.commit()
 
@@ -220,8 +217,8 @@ class TestPairingStrategies:
         result = bbp._get_random_pair()
         assert len(result) == 2
         # Both should have 0 matches
-        assert result[0]['wins'] + result[0]['losses'] == 0
-        assert result[1]['wins'] + result[1]['losses'] == 0
+        assert result[0]["wins"] + result[0]["losses"] == 0
+        assert result[1]["wins"] + result[1]["losses"] == 0
 
     def test_high_vs_high_strategy(self, setup_best_bot_posts):
         """Test high vs high pairing picks close ratings."""
@@ -232,7 +229,7 @@ class TestPairingStrategies:
             for i, rating in enumerate([800, 900, 1000, 1100, 1200]):
                 conn.execute(
                     "INSERT INTO elo_posts (name, filename, rating, wins, losses) VALUES (?, ?, ?, 10, 10)",
-                    (f'post{i}', f'post{i}.png', rating)
+                    (f"post{i}", f"post{i}.png", rating),
                 )
             conn.commit()
 
@@ -240,7 +237,7 @@ class TestPairingStrategies:
         pairs_seen = []
         for _ in range(50):
             result = bbp._get_random_pair()
-            pairs_seen.append((result[0]['rating'], result[1]['rating']))
+            pairs_seen.append((result[0]["rating"], result[1]["rating"]))
 
         # Should see high-rated pairs (1100, 1200 range) or low-rated pairs (800, 900)
         # rather than always random mix
@@ -257,12 +254,12 @@ class TestFilenameExists:
             conn.execute("INSERT INTO elo_posts (name, filename) VALUES ('test', 'existing.png')")
             conn.commit()
 
-        assert bbp._filename_exists('existing.png') is True
+        assert bbp._filename_exists("existing.png") is True
 
     def test_returns_false_for_missing(self, setup_best_bot_posts):
         """Test that missing filename returns False."""
         bbp, _ = setup_best_bot_posts
-        assert bbp._filename_exists('nonexistent.png') is False
+        assert bbp._filename_exists("nonexistent.png") is False
 
 
 class TestInsertPost:
@@ -272,24 +269,24 @@ class TestInsertPost:
         """Test inserting an image post."""
         bbp, db_path = setup_best_bot_posts
 
-        bbp._insert_post('test post', 'test.png', 'image')
+        bbp._insert_post("test post", "test.png", "image")
 
         with sqlite3.connect(db_path) as conn:
             post = conn.execute("SELECT * FROM elo_posts WHERE filename = 'test.png'").fetchone()
 
         assert post is not None
-        assert post[1] == 'test post'  # name
-        assert post[3] == 'image'  # post_type
+        assert post[1] == "test post"  # name
+        assert post[3] == "image"  # post_type
         assert post[5] == 1000  # default rating
 
     def test_inserts_text_post(self, setup_best_bot_posts):
         """Test inserting a text post."""
         bbp, db_path = setup_best_bot_posts
 
-        bbp._insert_post('text post', 'text_1234.txt', 'text', text_content='Hello world')
+        bbp._insert_post("text post", "text_1234.txt", "text", text_content="Hello world")
 
         with sqlite3.connect(db_path) as conn:
             post = conn.execute("SELECT * FROM elo_posts WHERE post_type = 'text'").fetchone()
 
         assert post is not None
-        assert post[4] == 'Hello world'  # text_content
+        assert post[4] == "Hello world"  # text_content

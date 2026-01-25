@@ -43,7 +43,7 @@ def _parse_user_identifier(user: str) -> tuple[int | None, str]:
     user = user.strip()
 
     # Check for mention format: <@123456> or <@!123456>
-    mention_match = re.match(r'^<@!?(\d+)>$', user)
+    mention_match = re.match(r"^<@!?(\d+)>$", user)
     if mention_match:
         return int(mention_match.group(1)), "mention"
 

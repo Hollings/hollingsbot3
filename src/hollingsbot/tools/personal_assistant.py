@@ -25,7 +25,7 @@ ASSISTANT_SETTINGS_FILE = ASSISTANT_WORKSPACE / ".claude" / "settings.json"
 ASSISTANT_CLAUDE_MD = ASSISTANT_WORKSPACE / "CLAUDE.md"
 
 # Reference documentation for the assistant
-CLAUDE_MD_CONTENT = '''# Wendy's Personal Assistant
+CLAUDE_MD_CONTENT = """# Wendy's Personal Assistant
 
 You are Wendy's personal assistant with access to specialized capabilities.
 
@@ -169,7 +169,7 @@ Available in your environment:
 3. For memory/notes: store in workspace files
 4. For searches: query the database, summarize findings concisely
 5. Max 2-3 sentences unless the task explicitly requires more
-'''
+"""
 
 
 def _ensure_workspace_exists() -> None:
@@ -183,11 +183,7 @@ def _ensure_workspace_exists() -> None:
 
     # Create sandbox settings with expanded permissions
     settings = {
-        "sandbox": {
-            "enabled": True,
-            "autoAllowBashIfSandboxed": True,
-            "allowUnsandboxedCommands": False
-        },
+        "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True, "allowUnsandboxedCommands": False},
         "permissions": {
             "allow": [
                 # Web access
@@ -237,12 +233,12 @@ def _ensure_workspace_exists() -> None:
                 "Bash(node:*)",
                 "Bash(npm:*)",
             ],
-            "defaultMode": "plan"
-        }
+            "defaultMode": "plan",
+        },
     }
 
     # Write settings file (always update to ensure latest permissions)
-    with open(ASSISTANT_SETTINGS_FILE, 'w') as f:
+    with open(ASSISTANT_SETTINGS_FILE, "w") as f:
         json.dump(settings, f, indent=2)
 
     # Create/update CLAUDE.md reference documentation
@@ -287,6 +283,7 @@ def ask_assistant(task: str = "", request: str = "") -> str:
     channel_id = None
     try:
         from hollingsbot.tools.parser import get_current_context
+
         context = get_current_context()
         channel_id = context.get("channel_id")
     except Exception:
@@ -302,7 +299,7 @@ TASK: {query}
 
 CONTEXT:
 - Server ID: 1020445108707000331
-- Channel ID: {channel_id or '1050900592031178752'}
+- Channel ID: {channel_id or "1050900592031178752"}
 - Workspace: {ASSISTANT_WORKSPACE}
 - Database: /data/hollingsbot.db
 
@@ -318,7 +315,7 @@ Rules:
 
     try:
         # Write prompt to temp file (avoids shell escaping issues)
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(prompt)
             prompt_file = f.name
 
@@ -328,22 +325,25 @@ Rules:
         # Build environment with API keys
         # Remove ANTHROPIC_API_KEY so claude CLI uses Max subscription instead of API credits
         env = os.environ.copy()
-        env.pop('ANTHROPIC_API_KEY', None)
-        env['REPLICATE_API_TOKEN'] = os.getenv('REPLICATE_API_TOKEN', '')
-        env['DISCORD_TOKEN'] = os.getenv('DISCORD_TOKEN', '')
-        env['CHANNEL_ID'] = str(channel_id) if channel_id else ''
+        env.pop("ANTHROPIC_API_KEY", None)
+        env["REPLICATE_API_TOKEN"] = os.getenv("REPLICATE_API_TOKEN", "")
+        env["DISCORD_TOKEN"] = os.getenv("DISCORD_TOKEN", "")
+        env["CHANNEL_ID"] = str(channel_id) if channel_id else ""
 
         try:
             # Run Claude Code as non-root user with sandbox settings
             result = subprocess.run(
                 [
-                    "su", "-s", "/bin/bash", "-c",
+                    "su",
+                    "-s",
+                    "/bin/bash",
+                    "-c",
                     f'claude -p "$(cat {prompt_file})" '
-                    f'--dangerously-skip-permissions '
-                    f'--output-format json '
-                    f'--max-turns 10 '
-                    f'--model sonnet',
-                    "claude"
+                    f"--dangerously-skip-permissions "
+                    f"--output-format json "
+                    f"--max-turns 10 "
+                    f"--model sonnet",
+                    "claude",
                 ],
                 capture_output=True,
                 text=True,
@@ -391,7 +391,9 @@ Rules:
                             if isinstance(block, dict):
                                 block_type = block.get("type", "")
                                 if block_type == "tool_use":
-                                    _LOG.info(f"  [{i}] {role} -> TOOL: {block.get('name')} | input: {json.dumps(block.get('input', {}))[:200]}")
+                                    _LOG.info(
+                                        f"  [{i}] {role} -> TOOL: {block.get('name')} | input: {json.dumps(block.get('input', {}))[:200]}"
+                                    )
                                 elif block_type == "text":
                                     _LOG.info(f"  [{i}] {role}: {block.get('text', '')[:300]}")
                     else:

@@ -16,9 +16,7 @@ _LOG = logging.getLogger(__name__)
 
 # Environment configuration
 FEATURE_REQUEST_CHANNEL_IDS = [
-    int(x.strip())
-    for x in os.getenv("FEATURE_REQUEST_CHANNEL_IDS", "").split(",")
-    if x.strip()
+    int(x.strip()) for x in os.getenv("FEATURE_REQUEST_CHANNEL_IDS", "").split(",") if x.strip()
 ]
 CLAUDE_CODE_CLI_PATH = os.getenv("CLAUDE_CODE_CLI_PATH", "claude")
 
@@ -30,9 +28,7 @@ class FeatureRequests(commands.Cog):
         self.bot = bot
         self._allowed_channels = set(FEATURE_REQUEST_CHANNEL_IDS)
         self._pending_implementations: set[asyncio.Task] = set()
-        _LOG.info(
-            f"FeatureRequests cog initialized (allowed channels: {self._allowed_channels})"
-        )
+        _LOG.info(f"FeatureRequests cog initialized (allowed channels: {self._allowed_channels})")
 
     def _is_allowed_channel(self, channel_id: int) -> bool:
         """Check if a channel is allowed for feature requests."""
@@ -62,9 +58,7 @@ class FeatureRequests(commands.Cog):
                 cwd=str(Path.cwd()),
             )
 
-            stdout, stderr = await asyncio.wait_for(
-                proc.communicate(), timeout=timeout
-            )
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
 
             output = stdout.decode("utf-8", errors="replace")
             if stderr:
@@ -161,21 +155,15 @@ class FeatureRequests(commands.Cog):
         """
         # Check channel permissions
         if not self._is_allowed_channel(ctx.channel.id):
-            await ctx.send(
-                "This command can only be used in designated feature request channels."
-            )
+            await ctx.send("This command can only be used in designated feature request channels.")
             return
 
         # Validate description
         if len(description.strip()) < 10:
-            await ctx.send(
-                "Please provide a more detailed description (at least 10 characters)."
-            )
+            await ctx.send("Please provide a more detailed description (at least 10 characters).")
             return
 
-        _LOG.info(
-            f"Feature request from {ctx.author} ({ctx.author.id}): {description}"
-        )
+        _LOG.info(f"Feature request from {ctx.author} ({ctx.author.id}): {description}")
 
         # Create database record
         request_id = prompt_db.create_feature_request(
@@ -209,12 +197,8 @@ Output format:
             output, success = await self._run_claude_code(phase1_prompt, timeout=300)
 
             if not success:
-                await status_msg.edit(
-                    content="Failed to generate questions. See attached log."
-                )
-                await self._send_log_file(
-                    ctx.channel, request_id, output, prefix="error"
-                )
+                await status_msg.edit(content="Failed to generate questions. See attached log.")
+                await self._send_log_file(ctx.channel, request_id, output, prefix="error")
                 prompt_db.update_feature_request(request_id, status="failed")
                 return
 
@@ -245,9 +229,7 @@ Output format:
 
         except Exception as e:
             _LOG.exception(f"Error in Phase 1 for request #{request_id}")
-            await status_msg.edit(
-                content=f"An error occurred while processing your request: {e}"
-            )
+            await status_msg.edit(content=f"An error occurred while processing your request: {e}")
             prompt_db.update_feature_request(request_id, status="failed")
 
     def _extract_questions(self, output: str) -> str:
@@ -262,11 +244,7 @@ Output format:
         for line in lines:
             stripped = line.strip()
             # Match patterns like "1.", "2)", "1:", etc.
-            if stripped and any(
-                stripped.startswith(f"{i}{sep}")
-                for i in range(1, 10)
-                for sep in [".", ")", ":"]
-            ):
+            if stripped and any(stripped.startswith(f"{i}{sep}") for i in range(1, 10) for sep in [".", ")", ":"]):
                 questions.append(stripped)
 
         if questions:
@@ -293,9 +271,7 @@ Output format:
                 return
 
             # Check if this is a reply to a questions message
-            request = prompt_db.get_feature_request_by_questions_message_id(
-                replied_msg_id
-            )
+            request = prompt_db.get_feature_request_by_questions_message_id(replied_msg_id)
 
             if not request:
                 return
@@ -316,17 +292,13 @@ Output format:
                 )
                 return
 
-            _LOG.info(
-                f"Feature request #{request['id']}: Received user reply, starting implementation"
-            )
+            _LOG.info(f"Feature request #{request['id']}: Received user reply, starting implementation")
 
             # Update status
             prompt_db.update_feature_request(request["id"], status="implementing")
 
             # Start implementation in background
-            task = asyncio.create_task(
-                self._implement_feature(request, message.content)
-            )
+            task = asyncio.create_task(self._implement_feature(request, message.content))
             self._pending_implementations.add(task)
             task.add_done_callback(self._pending_implementations.discard)
 
@@ -337,9 +309,7 @@ Output format:
                 mention_author=False,
             )
 
-    async def _implement_feature(
-        self, request: dict, user_answers: str
-    ) -> None:
+    async def _implement_feature(self, request: dict, user_answers: str) -> None:
         """Phase 2: Implement the feature with user answers."""
         request_id = request["id"]
         channel = self.bot.get_channel(request["channel_id"])
@@ -350,14 +320,10 @@ Output format:
 
         try:
             # Send status message
-            status_msg = await channel.send(
-                f"**Feature Request #{request_id}**: Starting implementation..."
-            )
+            status_msg = await channel.send(f"**Feature Request #{request_id}**: Starting implementation...")
 
             # Auto-commit git state
-            await status_msg.edit(
-                content=f"**Feature Request #{request_id}**: Checking git status..."
-            )
+            await status_msg.edit(content=f"**Feature Request #{request_id}**: Checking git status...")
             git_msg, git_success = await self._auto_commit_git()
 
             if not git_success:
@@ -372,7 +338,7 @@ Output format:
             # Phase 2 prompt
             phase2_prompt = f"""Implement this feature request:
 
-**Original request:** {request['request_description']}
+**Original request:** {request["request_description"]}
 
 **User answers to clarifying questions:**
 {user_answers}
@@ -388,9 +354,7 @@ Please proceed with the implementation.
 """
 
             # Update status
-            await status_msg.edit(
-                content=f"**Feature Request #{request_id}**: Implementing feature..."
-            )
+            await status_msg.edit(content=f"**Feature Request #{request_id}**: Implementing feature...")
 
             # Run Claude Code with longer timeout for implementation
             full_log = request.get("conversation_log", "")
@@ -401,21 +365,15 @@ Please proceed with the implementation.
             full_log += output
 
             # Update conversation log
-            prompt_db.update_feature_request(
-                request_id, conversation_log=full_log
-            )
+            prompt_db.update_feature_request(request_id, conversation_log=full_log)
 
             # Send results
             if success:
-                await status_msg.edit(
-                    content=f"**Feature Request #{request_id}**: Implementation complete!"
-                )
+                await status_msg.edit(content=f"**Feature Request #{request_id}**: Implementation complete!")
                 prompt_db.update_feature_request(request_id, status="completed")
 
                 # Send conversation log
-                await self._send_log_file(
-                    channel, request_id, full_log, prefix="completed"
-                )
+                await self._send_log_file(channel, request_id, full_log, prefix="completed")
 
                 _LOG.info(f"Feature request #{request_id}: Implementation completed")
             else:
@@ -432,9 +390,7 @@ Please proceed with the implementation.
         except Exception as e:
             _LOG.exception(f"Error implementing feature request #{request_id}")
             with contextlib.suppress(BaseException):
-                await channel.send(
-                    f"**Feature Request #{request_id}**: An error occurred during implementation: {e}"
-                )
+                await channel.send(f"**Feature Request #{request_id}**: An error occurred during implementation: {e}")
             prompt_db.update_feature_request(request_id, status="failed")
 
     async def _send_log_file(
@@ -454,9 +410,7 @@ for this automated feature request.
             full_content = log + "\n\n" + summary
 
             filename = f"feature_request_{request_id}_{prefix}.txt"
-            file = discord.File(
-                io.BytesIO(full_content.encode("utf-8")), filename=filename
-            )
+            file = discord.File(io.BytesIO(full_content.encode("utf-8")), filename=filename)
 
             await channel.send(f"Conversation log for feature request #{request_id}:", file=file)
         except Exception as e:

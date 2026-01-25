@@ -47,14 +47,48 @@ MIN_GENERATION_TIME_BEFORE_CANCEL = 2.0  # Don't cancel if generation started le
 
 # Name generation - occult, abstract names
 _ADJECTIVES = [
-    "Veiled", "Forgotten", "Obscured", "Liminal", "Spectral", "Cryptic", "Arcane",
-    "Fractured", "Ephemeral", "Aberrant", "Eldritch", "Nameless", "Silent",
-    "Distant", "Hollow", "Echoing", "Wandering", "Shrouded", "Hidden", "Fading"
+    "Veiled",
+    "Forgotten",
+    "Obscured",
+    "Liminal",
+    "Spectral",
+    "Cryptic",
+    "Arcane",
+    "Fractured",
+    "Ephemeral",
+    "Aberrant",
+    "Eldritch",
+    "Nameless",
+    "Silent",
+    "Distant",
+    "Hollow",
+    "Echoing",
+    "Wandering",
+    "Shrouded",
+    "Hidden",
+    "Fading",
 ]
 _NOUNS = [
-    "Cipher", "Sigil", "Phantom", "Revenant", "Threshold", "Abyss", "Echo",
-    "Vestige", "Whisper", "Shadow", "Oracle", "Glyph", "Omen", "Ritual",
-    "Fragment", "Veil", "Specter", "Herald", "Watcher", "Void"
+    "Cipher",
+    "Sigil",
+    "Phantom",
+    "Revenant",
+    "Threshold",
+    "Abyss",
+    "Echo",
+    "Vestige",
+    "Whisper",
+    "Shadow",
+    "Oracle",
+    "Glyph",
+    "Omen",
+    "Ritual",
+    "Fragment",
+    "Veil",
+    "Specter",
+    "Herald",
+    "Watcher",
+    "Void",
 ]
 
 
@@ -97,6 +131,7 @@ class TempBotManager:
 
         # Debug log storage (message_id -> log data) - shared with WendyBot
         from pathlib import Path
+
         self._debug_logs_file = Path("generated/debug_logs.json")
         self._response_logs: dict[int, dict[str, Any]] = {}
         self._response_log_max_size = 100
@@ -120,6 +155,7 @@ class TempBotManager:
 
         try:
             import json
+
             with self._debug_logs_file.open("r") as f:
                 data = json.load(f)
 
@@ -134,6 +170,7 @@ class TempBotManager:
         """Save debug logs to disk."""
         try:
             import json
+
             self._debug_logs_file.parent.mkdir(exist_ok=True)
 
             # Convert integer keys to strings for JSON serialization
@@ -189,6 +226,7 @@ class TempBotManager:
         try:
             # Use separate temp bot system prompt (no "Wendy" references)
             from pathlib import Path
+
             temp_bot_prompt_file = Path("config/temp_bot_system_prompt.txt")
             if temp_bot_prompt_file.exists():
                 return temp_bot_prompt_file.read_text(encoding="utf-8").strip()
@@ -242,7 +280,9 @@ class TempBotManager:
 
         # Atomically reserve a reply slot before generation
         remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
-        _LOG.info(f"Reserved reply slot for temp bot '{bot_name}', {remaining} remaining, should_cleanup={should_cleanup}")
+        _LOG.info(
+            f"Reserved reply slot for temp bot '{bot_name}', {remaining} remaining, should_cleanup={should_cleanup}"
+        )
         if remaining < 0:
             _LOG.warning(f"Temp bot '{bot_name}' depleted during reservation")
             return None
@@ -260,7 +300,9 @@ class TempBotManager:
 
             # Filter history to only include messages after spawn
             filtered_history = self._filter_history_after_spawn(history[:-1], spawn_message_id)
-            _LOG.info(f"Filtered history: {len(history[:-1])} turns -> {len(filtered_history)} turns (spawn_message_id={spawn_message_id})")
+            _LOG.info(
+                f"Filtered history: {len(history[:-1])} turns -> {len(filtered_history)} turns (spawn_message_id={spawn_message_id})"
+            )
 
             # Translate history to this temp bot's perspective
             translated_history = self._translate_history(filtered_history, webhook_id)
@@ -269,9 +311,7 @@ class TempBotManager:
             temp_bot_system_prompt = self._build_temp_bot_system_prompt(bot_name, spawn_prompt, remaining)
 
             # Build conversation payload
-            conversation = self._build_conversation_payload(
-                translated_history, current_turn, temp_bot_system_prompt
-            )
+            conversation = self._build_conversation_payload(translated_history, current_turn, temp_bot_system_prompt)
 
             # Cancel any existing generation in this channel (may be skipped if limits hit)
             was_cancelled = await self._cancel_generation(channel_id)
@@ -287,9 +327,7 @@ class TempBotManager:
             # Generate and send response (wrapped in task for cancellation support)
             job = GenerationJob(webhook_id=webhook_id)
             task = self.bot.loop.create_task(
-                self._generate_and_send(
-                    channel_id, webhook_id, bot_name, conversation, job, message.id, should_cleanup
-                )
+                self._generate_and_send(channel_id, webhook_id, bot_name, conversation, job, message.id, should_cleanup)
             )
             job.task = task
             self._active_generations[channel_id] = job
@@ -306,9 +344,7 @@ class TempBotManager:
             self._generating_webhooks.discard(webhook_id)
             return None
 
-    def _select_responding_bot(
-        self, message: discord.Message, temp_bots: list[dict]
-    ) -> dict | None:
+    def _select_responding_bot(self, message: discord.Message, temp_bots: list[dict]) -> dict | None:
         """Select which temp bot (if any) should respond to this message.
 
         Uses RESPONSE_PROBABILITY to determine if each bot wants to respond.
@@ -318,8 +354,7 @@ class TempBotManager:
         if message.author.bot and message.webhook_id:
             speaking_bot_webhook_id = message.webhook_id
             speaking_bot_name = next(
-                (b["name"] for b in temp_bots if b["webhook_id"] == speaking_bot_webhook_id),
-                "Unknown"
+                (b["name"] for b in temp_bots if b["webhook_id"] == speaking_bot_webhook_id), "Unknown"
             )
             available_bots = [bot for bot in temp_bots if bot["webhook_id"] != speaking_bot_webhook_id]
             _LOG.info(
@@ -343,9 +378,7 @@ class TempBotManager:
         _LOG.info(f"{len(willing_bots)}/{len(available_bots)} bots willing to respond, selected '{selected['name']}'")
         return selected
 
-    def _extract_current_turn(
-        self, message: discord.Message, history: list[ConversationTurn]
-    ) -> ModelTurn | None:
+    def _extract_current_turn(self, message: discord.Message, history: list[ConversationTurn]) -> ModelTurn | None:
         """Extract current turn from history."""
         if not history:
             return None
@@ -384,13 +417,11 @@ class TempBotManager:
             return [turn for turn in history if turn.message_id and turn.message_id > spawn_message_id]
 
         # Return only messages after the spawn message
-        return history[spawn_index + 1:]
+        return history[spawn_index + 1 :]
 
     # ==================== History Translation ====================
 
-    def _translate_history(
-        self, history: list[ConversationTurn], responding_webhook_id: int
-    ) -> list[ConversationTurn]:
+    def _translate_history(self, history: list[ConversationTurn], responding_webhook_id: int) -> list[ConversationTurn]:
         """Translate raw history to this temp bot's perspective.
 
         Temp bot sees:
@@ -441,12 +472,7 @@ class TempBotManager:
                 - conversation_summary: previous session summary
         """
         # Simple, clean personality section
-        personality_suffix = (
-            f"\n\n---\n"
-            f"Your name: {bot_name}\n"
-            f"Your personality: {spawn_prompt}\n"
-            f"---\n\n"
-        )
+        personality_suffix = f"\n\n---\nYour name: {bot_name}\nYour personality: {spawn_prompt}\n---\n\n"
 
         # Add recall context if this is a returning bot
         if recall_context:
@@ -454,7 +480,9 @@ class TempBotManager:
             previous_messages = recall_context.get("previous_messages", [])
             conversation_summary = recall_context.get("conversation_summary")
 
-            personality_suffix += f"You've returned after being away ({messages_missed} messages were sent while you were gone).\n"
+            personality_suffix += (
+                f"You've returned after being away ({messages_missed} messages were sent while you were gone).\n"
+            )
 
             if conversation_summary:
                 personality_suffix += f"What you remember: {conversation_summary}\n"
@@ -465,7 +493,7 @@ class TempBotManager:
                     content = msg.get("content", "")
                     # Strip the <Author>: prefix if present
                     if content.startswith(f"<{bot_name}>:"):
-                        content = content[len(f"<{bot_name}>:"):].strip()
+                        content = content[len(f"<{bot_name}>:") :].strip()
                     # Truncate long messages
                     if len(content) > 200:
                         content = content[:200] + "..."
@@ -532,9 +560,9 @@ class TempBotManager:
     def _strip_display_name_prefix(self, text: str) -> str:
         """Strip display name prefix from text (e.g., '<DisplayName>: text' -> 'text')."""
         # Match pattern: <anything>: text
-        match = re.match(r'^<[^>]+>:\s*', text)
+        match = re.match(r"^<[^>]+>:\s*", text)
         if match:
-            return text[match.end():]
+            return text[match.end() :]
         return text
 
     def _strip_arrival_announcement(self, text: str) -> str:
@@ -550,16 +578,16 @@ class TempBotManager:
         """
         # Pattern: *[SomeName arrives for N message(s)]*
         # Using .+? (non-greedy) to match bot name without consuming "arrives for"
-        arrival_pattern = r'\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*'
+        arrival_pattern = r"\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*"
         # Pattern: *[SomeName departs]*
-        depart_pattern = r'\*\[.+?\s+departs\]\*\s*'
+        depart_pattern = r"\*\[.+?\s+departs\]\*\s*"
         # Pattern: *[SomeName has depleted all replies and fades away]*
-        deplete_pattern = r'\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*'
+        deplete_pattern = r"\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*"
 
         cleaned = text
-        cleaned = re.sub(arrival_pattern, '', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(depart_pattern, '', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(deplete_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(arrival_pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(depart_pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(deplete_pattern, "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
 
     async def _build_turn_from_message(self, message: discord.Message) -> ConversationTurn | None:
@@ -732,7 +760,9 @@ class TempBotManager:
         if cancellation_count >= MAX_CANCELLATIONS_BEFORE_FORCE:
             _LOG.info(
                 "Channel %s has %d cancellations, forcing response through (limit: %d)",
-                channel_id, cancellation_count, MAX_CANCELLATIONS_BEFORE_FORCE
+                channel_id,
+                cancellation_count,
+                MAX_CANCELLATIONS_BEFORE_FORCE,
             )
             return False
 
@@ -741,7 +771,9 @@ class TempBotManager:
         if elapsed < MIN_GENERATION_TIME_BEFORE_CANCEL:
             _LOG.info(
                 "Channel %s generation only %.1fs old, skipping cancel (min: %.1fs)",
-                channel_id, elapsed, MIN_GENERATION_TIME_BEFORE_CANCEL
+                channel_id,
+                elapsed,
+                MIN_GENERATION_TIME_BEFORE_CANCEL,
             )
             return False
 
@@ -763,8 +795,7 @@ class TempBotManager:
         if job.webhook_id:
             new_count = increment_temp_bot_replies(job.webhook_id)
             _LOG.info(
-                "Refunded reply for cancelled generation (webhook %s), now has %d replies",
-                job.webhook_id, new_count
+                "Refunded reply for cancelled generation (webhook %s), now has %d replies", job.webhook_id, new_count
             )
 
         # Increment cancellation count for this channel
@@ -773,7 +804,8 @@ class TempBotManager:
         self._active_generations.pop(channel_id, None)
         _LOG.info(
             "Cancelled active temp bot generation in channel %s (cancellation #%d)",
-            channel_id, self._cancellation_counts[channel_id]
+            channel_id,
+            self._cancellation_counts[channel_id],
         )
         return True
 
@@ -821,13 +853,15 @@ class TempBotManager:
         # Debug logging
         _LOG.info(f"Temp bot calling Celery with {len(conversation)} turns")
         for i, turn in enumerate(conversation):
-            text_preview = turn.get('text', '')[:100].replace('\n', '\\n')
-            _LOG.info(f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}")
+            text_preview = turn.get("text", "")[:100].replace("\n", "\\n")
+            _LOG.info(
+                f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}"
+            )
 
         # Check for role alternation issues
         for i in range(1, len(conversation)):
-            if conversation[i]['role'] == conversation[i-1]['role'] and conversation[i]['role'] != 'system':
-                _LOG.warning(f"Role alternation issue: turns {i-1} and {i} both have role={conversation[i]['role']}")
+            if conversation[i]["role"] == conversation[i - 1]["role"] and conversation[i]["role"] != "system":
+                _LOG.warning(f"Role alternation issue: turns {i - 1} and {i} both have role={conversation[i]['role']}")
 
         async_result = generate_llm_chat_response.apply_async(
             (provider, model, conversation),
@@ -874,13 +908,15 @@ class TempBotManager:
         # Debug logging
         _LOG.info(f"Temp bot calling Celery with {len(conversation)} turns")
         for i, turn in enumerate(conversation):
-            text_preview = turn.get('text', '')[:100].replace('\n', '\\n')
-            _LOG.info(f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}")
+            text_preview = turn.get("text", "")[:100].replace("\n", "\\n")
+            _LOG.info(
+                f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}"
+            )
 
         # Check for role alternation issues
         for i in range(1, len(conversation)):
-            if conversation[i]['role'] == conversation[i-1]['role'] and conversation[i]['role'] != 'system':
-                _LOG.warning(f"Role alternation issue: turns {i-1} and {i} both have role={conversation[i]['role']}")
+            if conversation[i]["role"] == conversation[i - 1]["role"] and conversation[i]["role"] != "system":
+                _LOG.warning(f"Role alternation issue: turns {i - 1} and {i} both have role={conversation[i]['role']}")
 
         async_result = generate_llm_chat_response.apply_async(
             (provider, model, conversation),
@@ -916,9 +952,7 @@ class TempBotManager:
 
     # ==================== Cleanup ====================
 
-    async def _generate_conversation_summary(
-        self, channel_id: int, bot_name: str, spawn_prompt: str
-    ) -> str | None:
+    async def _generate_conversation_summary(self, channel_id: int, bot_name: str, spawn_prompt: str) -> str | None:
         """Generate a conversation summary for a temp bot using Haiku.
 
         Args:
@@ -972,7 +1006,7 @@ class TempBotManager:
                     continue
                 # Strip the <Author>: prefix if present
                 if content.startswith(f"<{author}>:"):
-                    content = content[len(f"<{author}>:"):].strip()
+                    content = content[len(f"<{author}>:") :].strip()
                 # Truncate long messages
                 if len(content) > 500:
                     content = content[:500] + "..."
@@ -1014,9 +1048,7 @@ Be concise and capture the essence of the bot's time in the chat."""
             _LOG.exception(f"Failed to generate summary for bot '{bot_name}'")
             return None
 
-    async def _save_conversation_summary(
-        self, webhook_id: int, summary: str, append: bool = False
-    ) -> None:
+    async def _save_conversation_summary(self, webhook_id: int, summary: str, append: bool = False) -> None:
         """Save or append a conversation summary to the temp_bots table.
 
         Args:
@@ -1090,9 +1122,7 @@ Be concise and capture the essence of the bot's time in the chat."""
         # Generate and save conversation summary before marking inactive
         if channel_id:
             _LOG.info(f"Generating conversation summary for '{bot_name}'...")
-            summary = await self._generate_conversation_summary(
-                channel_id, bot_name, spawn_prompt
-            )
+            summary = await self._generate_conversation_summary(channel_id, bot_name, spawn_prompt)
             if summary:
                 await self._save_conversation_summary(webhook_id, summary, append=is_recall)
 
@@ -1120,9 +1150,7 @@ Be concise and capture the essence of the bot's time in the chat."""
 
                 # Check if this was a recalled bot (has existing summary)
                 is_recall = bool(bot_info.get("conversation_summary"))
-                await self._cleanup_temp_bot(
-                    webhook_id, bot_name, send_depletion_message=True, is_recall=is_recall
-                )
+                await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True, is_recall=is_recall)
 
         except Exception:
             _LOG.exception("Error in temp bot cleanup task")
@@ -1160,7 +1188,7 @@ Be concise and capture the essence of the bot's time in the chat."""
 
             conversation = [
                 {"role": "system", "text": "You generate creative character identities.", "images": []},
-                {"role": "user", "text": identity_prompt, "images": []}
+                {"role": "user", "text": identity_prompt, "images": []},
             ]
 
             _LOG.info(f"Generating bot identity for topic: {topic[:50]}...")
@@ -1198,11 +1226,11 @@ Be concise and capture the essence of the bot's time in the chat."""
             bot_name = None
             avatar_prompt = None
 
-            for line in response_text.split('\n'):
+            for line in response_text.split("\n"):
                 line = line.strip()
-                if line.upper().startswith('NAME:'):
+                if line.upper().startswith("NAME:"):
                     bot_name = line[5:].strip()
-                elif line.upper().startswith('AVATAR:'):
+                elif line.upper().startswith("AVATAR:"):
                     avatar_prompt = line[7:].strip()
 
             # Validate name
@@ -1210,7 +1238,9 @@ Be concise and capture the essence of the bot's time in the chat."""
                 _LOG.warning(f"Invalid generated name: '{bot_name}', using fallback")
                 bot_name = generate_bot_name()
 
-            _LOG.info(f"Generated bot identity: name='{bot_name}', avatar_prompt={avatar_prompt[:50] if avatar_prompt else None}...")
+            _LOG.info(
+                f"Generated bot identity: name='{bot_name}', avatar_prompt={avatar_prompt[:50] if avatar_prompt else None}..."
+            )
             return bot_name, avatar_prompt
 
         except Exception:
@@ -1279,7 +1309,9 @@ Be concise and capture the essence of the bot's time in the chat."""
         # Temp bots should only see messages from their spawn point forward
         spawn_message_id = ctx.message.id
         if existing_bots:
-            _LOG.info(f"Spawning additional temp bot '{bot_name}' with context from spawn point ({len(existing_bots)} bots already active)")
+            _LOG.info(
+                f"Spawning additional temp bot '{bot_name}' with context from spawn point ({len(existing_bots)} bots already active)"
+            )
         else:
             _LOG.info(f"Spawning first temp bot '{bot_name}' with context from spawn point")
 
@@ -1407,9 +1439,7 @@ Be concise and capture the essence of the bot's time in the chat."""
             )
 
             # Build conversation
-            conversation = self._build_conversation_payload(
-                translated_history, current_turn, system_prompt
-            )
+            conversation = self._build_conversation_payload(translated_history, current_turn, system_prompt)
 
             # Generate response
             response_text = await self._generate_response(conversation)
@@ -1477,10 +1507,7 @@ Be concise and capture the essence of the bot's time in the chat."""
                 await webhook.delete(reason=f"Manual despawn by {ctx.author}")
                 delete_temp_bot(webhook_id)
                 despawned.append(bot_name)
-                _LOG.info(
-                    f"Despawned temp bot '{bot_name}' (webhook_id={webhook_id}) "
-                    f"from channel {ctx.channel.id}"
-                )
+                _LOG.info(f"Despawned temp bot '{bot_name}' (webhook_id={webhook_id}) from channel {ctx.channel.id}")
             except discord.NotFound:
                 delete_temp_bot(webhook_id)
                 despawned.append(bot_name)

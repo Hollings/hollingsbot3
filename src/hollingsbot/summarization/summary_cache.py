@@ -33,11 +33,11 @@ class MessageGroup:
     channel_id: int
     level: int
     start_message_id: int  # First message ID in this group
-    end_message_id: int    # Last message ID in this group
+    end_message_id: int  # Last message ID in this group
     summary_text: str | None  # None until summarized
     message_count: int
     start_timestamp: int | None = None  # Timestamp of first message
-    end_timestamp: int | None = None    # Timestamp of last message
+    end_timestamp: int | None = None  # Timestamp of last message
     created_at: int | None = None
 
     def __post_init__(self):
@@ -127,9 +127,7 @@ class SummaryCache:
             )
             return cursor.fetchone()[0]
 
-    def get_all_messages_ordered(
-        self, channel_id: int, include_old: bool = False
-    ) -> list[CachedMessage]:
+    def get_all_messages_ordered(self, channel_id: int, include_old: bool = False) -> list[CachedMessage]:
         """Get all cached messages for a channel, ordered by message_id (chronological).
 
         Args:
@@ -158,9 +156,7 @@ class SummaryCache:
                 )
             return [self._row_to_cached_message(row) for row in cursor.fetchall()]
 
-    def get_messages_by_ids(
-        self, channel_id: int, start_id: int, end_id: int
-    ) -> list[CachedMessage]:
+    def get_messages_by_ids(self, channel_id: int, start_id: int, end_id: int) -> list[CachedMessage]:
         """Get cached messages between two message IDs (inclusive)."""
         with self._get_connection(row_factory=True) as conn:
             cursor = conn.execute(
@@ -302,9 +298,7 @@ class SummaryCache:
             row = cursor.fetchone()
             return self._row_to_message_group(row) if row else None
 
-    def group_exists(
-        self, channel_id: int, level: int, start_message_id: int
-    ) -> bool:
+    def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
         """Check if a group already exists."""
         with self._get_connection() as conn:
             cursor = conn.execute(
@@ -463,9 +457,7 @@ class SummaryCache:
 
     # ==================== Summarization Logic Helpers ====================
 
-    def get_messages_needing_level1_summary(
-        self, channel_id: int
-    ) -> list[list[CachedMessage]]:
+    def get_messages_needing_level1_summary(self, channel_id: int) -> list[list[CachedMessage]]:
         """Get groups of 5 messages that need level-1 summaries.
 
         Returns message groups that:
@@ -489,15 +481,11 @@ class SummaryCache:
 
         # Build set of already-covered message ranges
         existing_groups = self.get_groups_by_level(channel_id, 1)
-        covered_ranges = {
-            (g.start_message_id, g.end_message_id) for g in existing_groups
-        }
+        covered_ranges = {(g.start_message_id, g.end_message_id) for g in existing_groups}
 
         return self._find_uncovered_chunks(available, covered_ranges)
 
-    def get_level1_groups_needing_level2(
-        self, channel_id: int
-    ) -> list[list[MessageGroup]]:
+    def get_level1_groups_needing_level2(self, channel_id: int) -> list[list[MessageGroup]]:
         """Get groups of 5 level-1 summaries that need level-2 summarization.
 
         Returns:
@@ -515,7 +503,7 @@ class SummaryCache:
         # Group level-1 summaries into chunks of GROUP_SIZE
         groups_to_summarize = []
         for i in range(0, len(level_1_groups) - GROUP_SIZE + 1, GROUP_SIZE):
-            chunk = level_1_groups[i:i + GROUP_SIZE]
+            chunk = level_1_groups[i : i + GROUP_SIZE]
             if len(chunk) == GROUP_SIZE:
                 start_id = chunk[0].start_message_id
                 if start_id not in covered_start_ids:
@@ -539,7 +527,7 @@ class SummaryCache:
         """
         chunks = []
         for i in range(0, len(messages) - GROUP_SIZE + 1, GROUP_SIZE):
-            chunk = messages[i:i + GROUP_SIZE]
+            chunk = messages[i : i + GROUP_SIZE]
             if len(chunk) == GROUP_SIZE:
                 start_id = chunk[0].message_id
                 end_id = chunk[-1].message_id

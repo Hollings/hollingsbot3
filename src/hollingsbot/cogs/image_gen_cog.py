@@ -191,17 +191,13 @@ class ImageGenCog(commands.Cog):
         init_db()
 
         env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
-        self._allowed_channel_ids: set[int] = {
-            int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()
-        }
+        self._allowed_channel_ids: set[int] = {int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()}
 
         # Optional separate allowlist for the "edit:" command specifically.
         # If set, messages starting with "edit:" are also allowed in these channels
         # in addition to any general image channels above.
         edit_ids = os.getenv("EDIT_CHANNEL_IDS", "")
-        self._edit_channel_ids: set[int] = {
-            int(cid.strip()) for cid in edit_ids.split(",") if cid.strip().isdigit()
-        }
+        self._edit_channel_ids: set[int] = {int(cid.strip()) for cid in edit_ids.split(",") if cid.strip().isdigit()}
 
         allow_str = os.getenv("STABLE_DIFFUSION_ALLOW_DMS", "1").strip().lower()
         self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
@@ -490,7 +486,7 @@ class ImageGenCog(commands.Cog):
         for prefix in sorted(self._prefix_map, key=len, reverse=True):
             if content_l.startswith(prefix.lower()):
                 spec = self._prefix_map[prefix]
-                return content[len(prefix):].lstrip(), spec
+                return content[len(prefix) :].lstrip(), spec
         return None
 
     async def _generate_outpaint_prompt(self, image_bytes: bytes) -> str:
@@ -540,9 +536,7 @@ class ImageGenCog(commands.Cog):
             ]
 
             # Generate prompt using LLM
-            prompt = await asyncio.wait_for(
-                generator.generate(messages), timeout=_DEFAULT_OUTPAINT_PROMPT_TIMEOUT
-            )
+            prompt = await asyncio.wait_for(generator.generate(messages), timeout=_DEFAULT_OUTPAINT_PROMPT_TIMEOUT)
 
             _log.info("Generated outpaint prompt: %s", prompt)
             return prompt.strip()
@@ -668,9 +662,7 @@ class ImageGenCog(commands.Cog):
         suffix = raw_prompt[m_list.end() :]
         return [f"{prefix}{item}{suffix}".strip() for item in items]
 
-    async def _collect_images_for_editing(
-        self, message: discord.Message
-    ) -> tuple[list[bytes], discord.Message | None]:
+    async def _collect_images_for_editing(self, message: discord.Message) -> tuple[list[bytes], discord.Message | None]:
         """
         Collect images from the message, its reply reference, and recent history.
 
@@ -705,9 +697,7 @@ class ImageGenCog(commands.Cog):
         history_source: discord.Message | None = None
         if not images and not reply_images:
             try:
-                async for prev_msg in message.channel.history(
-                    limit=_HISTORY_SEARCH_LIMIT, before=message
-                ):
+                async for prev_msg in message.channel.history(limit=_HISTORY_SEARCH_LIMIT, before=message):
                     history_images = await self._gather_attachment_images(prev_msg)
                     if history_images:
                         history_source = prev_msg
@@ -756,7 +746,6 @@ class ImageGenCog(commands.Cog):
             _log.exception("Failed to prepare outpaint images: %s", exc)
             await self._send_error_message(message, f"Failed to prepare outpaint images: {exc}")
             return None
-
 
     def _load_generation_result(self, item: str) -> bytes:
         """
@@ -877,9 +866,7 @@ class ImageGenCog(commands.Cog):
 
             # Try harder compression if still too large
             if len(processed) > limit_bytes:
-                processed, new_ext = compress_image_to_fit(
-                    processed, int(limit_bytes * _COMPRESSION_SAFETY_FACTOR)
-                )
+                processed, new_ext = compress_image_to_fit(processed, int(limit_bytes * _COMPRESSION_SAFETY_FACTOR))
 
             # Skip if still too large
             if len(processed) > limit_bytes:
@@ -936,14 +923,11 @@ class ImageGenCog(commands.Cog):
 
             prompt_text, images_bytes = result
             try:
-                files = self._prepare_discord_files(
-                    images_bytes, prompt_text, spec, seed, limit_bytes, skip_caption
-                )
+                files = self._prepare_discord_files(images_bytes, prompt_text, spec, seed, limit_bytes, skip_caption)
 
                 if not files:
                     raise RuntimeError(
-                        f"All generated images exceed Discord limit (>{limit_bytes} bytes) "
-                        "even after compression."
+                        f"All generated images exceed Discord limit (>{limit_bytes} bytes) even after compression."
                     )
 
                 # Send files
@@ -1073,9 +1057,7 @@ class ImageGenCog(commands.Cog):
         aspect_ratio_override: str | None = None
         model_lower = spec.model.lower()
         supports_dynamic_aspect = (
-            "gpt-image" in model_lower or
-            "black-forest-labs/" in model_lower or
-            "flux" in model_lower
+            "gpt-image" in model_lower or "black-forest-labs/" in model_lower or "flux" in model_lower
         )
         if supports_dynamic_aspect and not (do_edit or do_outpaint):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
@@ -1132,10 +1114,10 @@ class ImageGenCog(commands.Cog):
                 # and the channel is in EDIT_CHANNEL_IDS.
                 cleaned_lower = cleaned.lower()
                 is_edit_cmd = (
-                    cleaned_lower.startswith("edit:") or
-                    cleaned_lower.startswith("edit high:") or
-                    cleaned_lower.startswith("edit pro:") or
-                    cleaned_lower.startswith("zoom out")
+                    cleaned_lower.startswith("edit:")
+                    or cleaned_lower.startswith("edit high:")
+                    or cleaned_lower.startswith("edit pro:")
+                    or cleaned_lower.startswith("zoom out")
                 )
                 if not (is_edit_cmd and message.channel.id in self._edit_channel_ids):
                     return
@@ -1153,8 +1135,17 @@ class ImageGenCog(commands.Cog):
             potential_command = cleaned[1:].split()[0].lower() if len(cleaned) > 1 else ""
             # List of known bot commands that should not trigger image generation
             bot_commands = {
-                "usage", "balance", "grant", "set_price", "set_budget",
-                "reset", "ping", "help", "model", "system", "models"
+                "usage",
+                "balance",
+                "grant",
+                "set_price",
+                "set_budget",
+                "reset",
+                "ping",
+                "help",
+                "model",
+                "system",
+                "models",
             }
             if potential_command in bot_commands:
                 return  # Let the command system handle it

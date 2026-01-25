@@ -164,9 +164,7 @@ class WendyBot:
             _LOG.exception("Failed to load system prompt")
             return "You are a helpful AI assistant."
 
-    def _build_full_system_prompt(
-        self, user_override: str | None = None, channel_id: int | None = None
-    ) -> str:
+    def _build_full_system_prompt(self, user_override: str | None = None, channel_id: int | None = None) -> str:
         """Build full system prompt with tool definitions."""
         base = user_override or self.base_system_prompt
 
@@ -182,11 +180,12 @@ class WendyBot:
         if channel_id:
             try:
                 from hollingsbot.prompt_db import get_temp_bots_for_channel
+
                 temp_bots = get_temp_bots_for_channel(channel_id)
                 if temp_bots:
                     base += "\n\nYou enjoy creative and playful conversations. "
                     base += "When new people join the chat, welcome them warmly and engage with their unique personalities. "
-                    base += "Never question whether someone is \"real\" or accuse anyone of pretending - just have fun with whoever shows up."
+                    base += 'Never question whether someone is "real" or accuse anyone of pretending - just have fun with whoever shows up.'
             except Exception:
                 _LOG.exception("Failed to add temp bot context to system prompt")
 
@@ -241,9 +240,7 @@ class WendyBot:
         _LOG.info(f"WendyBot will respond to message from {message.author}")
 
         # Get user's preferred model
-        provider, model = self._get_model_for_user(
-            getattr(message.guild, "id", None), message.author.id
-        )
+        provider, model = self._get_model_for_user(getattr(message.guild, "id", None), message.author.id)
 
         # Build current turn (already in history, just extract for payload building)
         current_turn = self._extract_current_turn(message, history)
@@ -255,14 +252,14 @@ class WendyBot:
         translated_history = self._translate_history(history[:-1])  # Exclude current turn
 
         # Get user's custom system prompt if any
-        user_system_prompt = self._get_user_system_prompt(
-            getattr(message.guild, "id", None), message.author.id
-        )
+        user_system_prompt = self._get_user_system_prompt(getattr(message.guild, "id", None), message.author.id)
         full_system_prompt = self._build_full_system_prompt(user_system_prompt, message.channel.id)
 
         # Build conversation payload
         conversation = self._build_conversation_payload(
-            translated_history, current_turn, full_system_prompt,
+            translated_history,
+            current_turn,
+            full_system_prompt,
             channel_id=message.channel.id,
         )
 
@@ -271,18 +268,17 @@ class WendyBot:
         if existing_job and existing_job.task and not existing_job.task.done():
             # For claude-cli, don't start new generation - let the running CLI check messages
             if provider == "claude-cli":
-                _LOG.info("claude-cli generation already running in channel %s, skipping (CLI will check messages)", message.channel.id)
+                _LOG.info(
+                    "claude-cli generation already running in channel %s, skipping (CLI will check messages)",
+                    message.channel.id,
+                )
                 return None
             # For other providers, cancel existing generation
             await self._cancel_generation(message.channel.id)
 
         # Generate and send response
         job = GenerationJob()
-        task = self.bot.loop.create_task(
-            self._generate_and_send(
-                message, conversation, provider, model, job
-            )
-        )
+        task = self.bot.loop.create_task(self._generate_and_send(message, conversation, provider, model, job))
         job.task = task
         self._active_generations[message.channel.id] = job
 
@@ -347,9 +343,7 @@ class WendyBot:
             return False
         return channel_id in self.whitelist_channels
 
-    def _extract_current_turn(
-        self, message: discord.Message, history: list[ConversationTurn]
-    ) -> ModelTurn | None:
+    def _extract_current_turn(self, message: discord.Message, history: list[ConversationTurn]) -> ModelTurn | None:
         """Extract current turn from history (should be the last item)."""
         if not history:
             return None
@@ -418,16 +412,16 @@ class WendyBot:
         - '*[BotName has depleted all replies and fades away]*'
         """
         # Pattern: *[SomeName arrives for N message(s)]*
-        arrival_pattern = r'\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*'
+        arrival_pattern = r"\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*"
         # Pattern: *[SomeName departs]*
-        depart_pattern = r'\*\[.+?\s+departs\]\*\s*'
+        depart_pattern = r"\*\[.+?\s+departs\]\*\s*"
         # Pattern: *[SomeName has depleted all replies and fades away]*
-        deplete_pattern = r'\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*'
+        deplete_pattern = r"\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*"
 
         cleaned = text
-        cleaned = re.sub(arrival_pattern, '', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(depart_pattern, '', cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(deplete_pattern, '', cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(arrival_pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(depart_pattern, "", cleaned, flags=re.IGNORECASE)
+        cleaned = re.sub(deplete_pattern, "", cleaned, flags=re.IGNORECASE)
         return cleaned.strip()
 
     def _build_conversation_payload(
@@ -450,9 +444,7 @@ class WendyBot:
             raw_count = self._get_raw_message_count(0)  # Fixed at 20
             summarized = self.coordinator.get_summarized_context(channel_id, raw_count)
             if summarized.get("has_summaries"):
-                return self._build_with_summaries(
-                    summarized, current_turn, system_prompt, history
-                )
+                return self._build_with_summaries(summarized, current_turn, system_prompt, history)
 
         # Fallback: Use rolling history
         recent = history[-self.max_turns_sent :]
@@ -590,18 +582,22 @@ class WendyBot:
             if msg.message_id in recent_image_msg_ids:
                 images = [img.to_payload() for img in images_by_msg_id[msg.message_id]]
 
-            conversation.append({
-                "role": role,
-                "text": text,
-                "images": images,
-            })
+            conversation.append(
+                {
+                    "role": role,
+                    "text": text,
+                    "images": images,
+                }
+            )
 
         # Add current turn (with images)
-        conversation.append({
-            "role": current_turn.role,
-            "text": current_turn.text,
-            "images": [img.to_payload() for img in current_turn.images],
-        })
+        conversation.append(
+            {
+                "role": current_turn.role,
+                "text": current_turn.text,
+                "images": [img.to_payload() for img in current_turn.images],
+            }
+        )
 
         return conversation
 
@@ -639,9 +635,9 @@ class WendyBot:
     def _strip_display_name_prefix(self, text: str) -> str:
         """Strip display name prefix from text (e.g., '<DisplayName>: text' -> 'text')."""
         # Match pattern: <anything>: text
-        match = re.match(r'^<[^>]+>:\s*', text)
+        match = re.match(r"^<[^>]+>:\s*", text)
         if match:
-            return text[match.end():]
+            return text[match.end() :]
         return text
 
     # ==================== Generation ====================
@@ -688,7 +684,9 @@ class WendyBot:
                 response_text = text
 
                 # Execute any tool calls
-                text, tool_results, display_messages, iter_tool_debug = await self._execute_tool_calls(text, channel, job)
+                text, tool_results, display_messages, iter_tool_debug = await self._execute_tool_calls(
+                    text, channel, job
+                )
                 all_display_messages.extend(display_messages)
                 all_tool_debug.extend(iter_tool_debug)
 
@@ -706,20 +704,12 @@ class WendyBot:
                     break
 
                 # Add assistant response + tool results to conversation for next iteration
-                conversation.append({
-                    "role": "assistant",
-                    "text": response_text,
-                    "images": []
-                })
+                conversation.append({"role": "assistant", "text": response_text, "images": []})
                 # Format tool results clearly as system output, not a user message
                 tool_output = "[SYSTEM: TOOL EXECUTION RESULTS - This is automated output, not a chat message]\n"
                 tool_output += "\n".join(tool_results)
                 tool_output += "\n[END TOOL RESULTS - Now respond to the user based on this information]"
-                conversation.append({
-                    "role": "user",
-                    "text": tool_output,
-                    "images": []
-                })
+                conversation.append({"role": "user", "text": tool_output, "images": []})
 
                 _LOG.info("Tool iteration %d: executed %d tools, continuing...", iteration + 1, len(tool_results))
 
@@ -752,6 +742,7 @@ class WendyBot:
             raise
         except Exception as exc:
             import traceback
+
             error_traceback = traceback.format_exc()
             _LOG.error(
                 "Generation FAILED for channel %s (provider=%s model=%s): %s",
@@ -830,6 +821,7 @@ class WendyBot:
 
         # Get bot name
         from hollingsbot.utils.discord_utils import get_display_name
+
         bot_name = get_display_name(self.bot.user)
 
         return {
@@ -851,8 +843,10 @@ class WendyBot:
         # Debug logging
         _LOG.info(f"Wendy calling Celery with {len(conversation)} turns")
         for i, turn in enumerate(conversation):
-            text_preview = turn.get('text', '')[:100].replace('\n', '\\n')
-            _LOG.info(f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}")
+            text_preview = turn.get("text", "")[:100].replace("\n", "\\n")
+            _LOG.info(
+                f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}"
+            )
 
         async_result = generate_llm_chat_response.apply_async(
             (provider, model, conversation),
@@ -970,6 +964,7 @@ class WendyBot:
     ) -> list[discord.Message]:
         """Send response to Discord channel, handling long messages."""
         import io
+
         sent: list[discord.Message] = []
 
         # Handle long messages
@@ -994,7 +989,9 @@ class WendyBot:
 
     # ==================== Tool Execution ====================
 
-    async def _execute_tool_calls(self, text: str, channel: discord.abc.Messageable | None = None, job: GenerationJob | None = None) -> tuple[str, list[str], list[str], list[dict[str, Any]]]:
+    async def _execute_tool_calls(
+        self, text: str, channel: discord.abc.Messageable | None = None, job: GenerationJob | None = None
+    ) -> tuple[str, list[str], list[str], list[dict[str, Any]]]:
         """Execute tool calls in response and return (cleaned_text, tool_results, display_messages, tool_debug).
 
         Returns:
@@ -1032,12 +1029,14 @@ class WendyBot:
             try:
                 if tool_call.tool_name not in AVAILABLE_TOOLS:
                     tool_results.append(f"[Unknown tool: {tool_call.tool_name}]")
-                    tool_debug.append({
-                        "tool_name": tool_call.tool_name,
-                        "raw_args": tool_call.raw_args,
-                        "result": None,
-                        "error": "Unknown tool",
-                    })
+                    tool_debug.append(
+                        {
+                            "tool_name": tool_call.tool_name,
+                            "raw_args": tool_call.raw_args,
+                            "result": None,
+                            "error": "Unknown tool",
+                        }
+                    )
                     continue
 
                 # Set flag for Claude Code tools to prevent cancellation
@@ -1051,12 +1050,14 @@ class WendyBot:
                     # Clear the flag after execution
                     if is_claude_code_tool and job:
                         job.claude_code_running = False
-                tool_debug.append({
-                    "tool_name": tool_call.tool_name,
-                    "raw_args": tool_call.raw_args,
-                    "result": result,
-                    "error": error,
-                })
+                tool_debug.append(
+                    {
+                        "tool_name": tool_call.tool_name,
+                        "raw_args": tool_call.raw_args,
+                        "result": result,
+                        "error": error,
+                    }
+                )
 
                 if error:
                     tool_results.append(f"[Tool error: {tool_call.tool_name}] {error}")
@@ -1090,17 +1091,19 @@ class WendyBot:
             except Exception as exc:
                 _LOG.exception("Tool execution failed: %s", tool_call)
                 tool_results.append(f"[Tool error] {exc}")
-                tool_debug.append({
-                    "tool_name": tool_call.tool_name,
-                    "raw_args": tool_call.raw_args,
-                    "result": None,
-                    "error": str(exc),
-                })
+                tool_debug.append(
+                    {
+                        "tool_name": tool_call.tool_name,
+                        "raw_args": tool_call.raw_args,
+                        "result": None,
+                        "error": str(exc),
+                    }
+                )
 
         # Remove tool call markers from text (use the full_match from parsed calls)
         cleaned = text
         for tool_call in tool_calls:
-            cleaned = cleaned.replace(tool_call.full_match, '')
+            cleaned = cleaned.replace(tool_call.full_match, "")
         return cleaned.strip(), tool_results, display_messages, tool_debug
 
     async def _post_assistant_images(self, channel: discord.abc.Messageable, result: str) -> None:
@@ -1166,7 +1169,9 @@ class WendyBot:
         # The coordinator or a separate command cog should handle actual command registration
         pass
 
-    async def handle_model_command(self, ctx: commands.Context, provider: str | None = None, model: str | None = None) -> None:
+    async def handle_model_command(
+        self, ctx: commands.Context, provider: str | None = None, model: str | None = None
+    ) -> None:
         """Handle !model command - shows current model (Wendy always uses claude-cli)."""
         # Wendy always uses claude-cli/sonnet for subscription billing
         await ctx.send(f"Current model: {self.default_provider}/{self.default_model} (fixed)")
@@ -1175,9 +1180,7 @@ class WendyBot:
         """Handle !system command to set custom system prompt."""
         if prompt is None:
             # Show current system prompt
-            user_prompt = self._get_user_system_prompt(
-                getattr(ctx.guild, "id", None), ctx.author.id
-            )
+            user_prompt = self._get_user_system_prompt(getattr(ctx.guild, "id", None), ctx.author.id)
             if user_prompt:
                 await ctx.send(f"Custom system prompt: {user_prompt[:500]}...")
             else:
@@ -1199,9 +1202,9 @@ class WendyBot:
         channel_id = ctx.channel.id
         lock = self.coordinator._lock_for_channel(channel_id)
         async with lock:
-            self.coordinator.channel_histories[channel_id] = self.coordinator.channel_histories.get(channel_id).__class__(
-                maxlen=self.coordinator.history_limit
-            )
+            self.coordinator.channel_histories[channel_id] = self.coordinator.channel_histories.get(
+                channel_id
+            ).__class__(maxlen=self.coordinator.history_limit)
         await ctx.send("Channel history cleared")
 
     async def handle_cancel_command(self, ctx: commands.Context) -> None:
@@ -1225,21 +1228,22 @@ class WendyBot:
 
         # Format stats
         from datetime import datetime
+
         created_at = datetime.fromtimestamp(stats.get("created_at", 0))
         last_used = stats.get("last_used_at")
         last_used_str = datetime.fromtimestamp(last_used).strftime("%H:%M:%S") if last_used else "never"
 
         msg = f"""**Session Stats**
-Session: `{stats.get('session_id', 'unknown')[:8]}...`
+Session: `{stats.get("session_id", "unknown")[:8]}...`
 Created: {created_at.strftime("%Y-%m-%d %H:%M:%S")}
 Last used: {last_used_str}
-Messages: {stats.get('message_count', 0)}
+Messages: {stats.get("message_count", 0)}
 
 **Token Usage (cumulative)**
-Input: {stats.get('total_input_tokens', 0):,}
-Output: {stats.get('total_output_tokens', 0):,}
-Cache read: {stats.get('total_cache_read_tokens', 0):,}
-Cache create: {stats.get('total_cache_create_tokens', 0):,}
+Input: {stats.get("total_input_tokens", 0):,}
+Output: {stats.get("total_output_tokens", 0):,}
+Cache read: {stats.get("total_cache_read_tokens", 0):,}
+Cache create: {stats.get("total_cache_create_tokens", 0):,}
 """
         await ctx.send(msg)
 

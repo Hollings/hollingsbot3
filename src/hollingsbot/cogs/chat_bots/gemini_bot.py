@@ -173,6 +173,7 @@ class GeminiBot:
         """Load base system prompt from GeminiBot-specific file."""
         try:
             from pathlib import Path
+
             gemini_prompt_file = Path("config/gemini_bot_system_prompt.txt")
             if gemini_prompt_file.exists():
                 return gemini_prompt_file.read_text(encoding="utf-8").strip()
@@ -238,9 +239,7 @@ class GeminiBot:
         _LOG.info(f"GeminiBot will respond to message from {message.author}")
 
         # Get user's preferred model
-        provider, model = self._get_model_for_user(
-            getattr(message.guild, "id", None), message.author.id
-        )
+        provider, model = self._get_model_for_user(getattr(message.guild, "id", None), message.author.id)
 
         # Build current turn (already in history, just extract for payload building)
         current_turn = self._extract_current_turn(message, history)
@@ -252,26 +251,18 @@ class GeminiBot:
         translated_history = self._translate_history(history[:-1])  # Exclude current turn
 
         # Get user's custom system prompt if any
-        user_system_prompt = self._get_user_system_prompt(
-            getattr(message.guild, "id", None), message.author.id
-        )
+        user_system_prompt = self._get_user_system_prompt(getattr(message.guild, "id", None), message.author.id)
         full_system_prompt = self._build_full_system_prompt(user_system_prompt)
 
         # Build conversation payload
-        conversation = self._build_conversation_payload(
-            translated_history, current_turn, full_system_prompt
-        )
+        conversation = self._build_conversation_payload(translated_history, current_turn, full_system_prompt)
 
         # Cancel any existing generation in this channel
         await self._cancel_generation(message.channel.id)
 
         # Generate and send response
         job = GenerationJob()
-        task = self.bot.loop.create_task(
-            self._generate_and_send(
-                message, conversation, provider, model, job
-            )
-        )
+        task = self.bot.loop.create_task(self._generate_and_send(message, conversation, provider, model, job))
         job.task = task
         self._active_generations[message.channel.id] = job
 
@@ -336,9 +327,7 @@ class GeminiBot:
             return False
         return channel_id in self.whitelist_channels
 
-    def _extract_current_turn(
-        self, message: discord.Message, history: list[ConversationTurn]
-    ) -> ModelTurn | None:
+    def _extract_current_turn(self, message: discord.Message, history: list[ConversationTurn]) -> ModelTurn | None:
         """Extract current turn from history (should be the last item)."""
         if not history:
             return None
@@ -365,10 +354,7 @@ class GeminiBot:
         translated = []
         for turn in history:
             # Check if this is from GeminiBot itself (has one of our webhook IDs)
-            is_own_message = (
-                turn.webhook_id and
-                any(str(turn.webhook_id) in wh_url for wh_url in gemini_webhook_ids)
-            )
+            is_own_message = turn.webhook_id and any(str(turn.webhook_id) in wh_url for wh_url in gemini_webhook_ids)
 
             if is_own_message:
                 # This is from GeminiBot -> "assistant"
@@ -438,9 +424,9 @@ class GeminiBot:
     def _strip_display_name_prefix(self, text: str) -> str:
         """Strip display name prefix from text (e.g., '<DisplayName>: text' -> 'text')."""
         # Match pattern: <anything>: text
-        match = re.match(r'^<[^>]+>:\s*', text)
+        match = re.match(r"^<[^>]+>:\s*", text)
         if match:
-            return text[match.end():]
+            return text[match.end() :]
         return text
 
     # ==================== Generation ====================
@@ -475,6 +461,7 @@ class GeminiBot:
             raise
         except Exception as exc:
             import traceback
+
             error_traceback = traceback.format_exc()
             _LOG.error(
                 "Generation FAILED for channel %s (provider=%s model=%s): %s",
@@ -562,15 +549,17 @@ class GeminiBot:
         # Debug logging
         _LOG.info(f"GeminiBot calling Celery with {len(conversation)} turns")
         for i, turn in enumerate(conversation):
-            text_preview = turn.get('text', '')[:100].replace('\n', '\\n')
-            _LOG.info(f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}")
+            text_preview = turn.get("text", "")[:100].replace("\n", "\\n")
+            _LOG.info(
+                f"Turn {i}: role={turn.get('role')}, text_preview={text_preview}, images={len(turn.get('images', []))}"
+            )
 
         # Check for role alternation issues
         alternation_issues = 0
         for i in range(1, len(conversation)):
-            if conversation[i]['role'] == conversation[i-1]['role'] and conversation[i]['role'] != 'system':
+            if conversation[i]["role"] == conversation[i - 1]["role"] and conversation[i]["role"] != "system":
                 alternation_issues += 1
-                _LOG.warning(f"Role alternation issue: turns {i-1} and {i} both have role={conversation[i]['role']}")
+                _LOG.warning(f"Role alternation issue: turns {i - 1} and {i} both have role={conversation[i]['role']}")
 
         if alternation_issues > 0:
             _LOG.warning(f"Found {alternation_issues} role alternation issues - this may cause empty responses!")
@@ -664,6 +653,7 @@ class GeminiBot:
     ) -> list[discord.Message]:
         """Send response to Discord channel via webhook (with custom name) or regular message."""
         import io
+
         sent: list[discord.Message] = []
 
         # Try to get webhook for this channel
@@ -770,12 +760,12 @@ class GeminiBot:
         """Register bot commands."""
         pass
 
-    async def handle_model_command(self, ctx: commands.Context, provider: str | None = None, model: str | None = None) -> None:
+    async def handle_model_command(
+        self, ctx: commands.Context, provider: str | None = None, model: str | None = None
+    ) -> None:
         """Handle !model command to set user's preferred model."""
         if provider is None or model is None:
-            current_provider, current_model = self._get_model_for_user(
-                getattr(ctx.guild, "id", None), ctx.author.id
-            )
+            current_provider, current_model = self._get_model_for_user(getattr(ctx.guild, "id", None), ctx.author.id)
             await ctx.send(f"Current model: {current_provider}/{current_model}")
             return
 
@@ -789,9 +779,7 @@ class GeminiBot:
     async def handle_system_command(self, ctx: commands.Context, *, prompt: str | None = None) -> None:
         """Handle !system command to set custom system prompt."""
         if prompt is None:
-            user_prompt = self._get_user_system_prompt(
-                getattr(ctx.guild, "id", None), ctx.author.id
-            )
+            user_prompt = self._get_user_system_prompt(getattr(ctx.guild, "id", None), ctx.author.id)
             if user_prompt:
                 await ctx.send(f"Custom system prompt: {user_prompt[:500]}...")
             else:
@@ -811,9 +799,9 @@ class GeminiBot:
         channel_id = ctx.channel.id
         lock = self.coordinator._lock_for_channel(channel_id)
         async with lock:
-            self.coordinator.channel_histories[channel_id] = self.coordinator.channel_histories.get(channel_id).__class__(
-                maxlen=self.coordinator.history_limit
-            )
+            self.coordinator.channel_histories[channel_id] = self.coordinator.channel_histories.get(
+                channel_id
+            ).__class__(maxlen=self.coordinator.history_limit)
         await ctx.send("Channel history cleared")
 
     async def handle_cancel_command(self, ctx: commands.Context) -> None:

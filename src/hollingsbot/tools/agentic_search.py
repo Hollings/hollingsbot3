@@ -58,9 +58,9 @@ def _run_sql_query(query: str) -> str:
                 data = {c: row[c] for c in cols}
                 if "content" in data and data["content"] and len(str(data["content"])) > 150:
                     data["content"] = str(data["content"])[:150] + "..."
-                lines.append(f"{i+1}. {json.dumps(data, default=str)}")
+                lines.append(f"{i + 1}. {json.dumps(data, default=str)}")
             if len(rows) > 30:
-                lines.append(f"... +{len(rows)-30} more")
+                lines.append(f"... +{len(rows) - 30} more")
             return "\n".join(lines)
     except Exception as e:
         return f"SQL Error: {e}"
@@ -79,6 +79,7 @@ def search_history_agent(thought: str = "", question: str = "") -> str:
     # Support both parameter names
     query = thought or question
     from hollingsbot.tools.parser import get_current_context
+
     context = get_current_context()
     channel_id = context.get("channel_id") if context else None
 
@@ -121,12 +122,14 @@ Example bad response: "I found it! That happened!" (NO - this doesn't answer any
     try:
         # Write prompt to temp file (avoids shell escaping issues)
         import tempfile
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False) as f:
+
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
             f.write(prompt)
             prompt_file = f.name
 
         # Make readable by claude user
         import os
+
         os.chmod(prompt_file, 0o644)
 
         try:
@@ -134,9 +137,12 @@ Example bad response: "I found it! That happened!" (NO - this doesn't answer any
             # Use JSON output to capture full agent trace
             result = subprocess.run(
                 [
-                    "su", "-s", "/bin/bash", "-c",
+                    "su",
+                    "-s",
+                    "/bin/bash",
+                    "-c",
                     f'claude -p "$(cat {prompt_file})" --output-format json --dangerously-skip-permissions --model sonnet',
-                    "claude"
+                    "claude",
                 ],
                 capture_output=True,
                 text=True,
@@ -174,7 +180,9 @@ Example bad response: "I found it! That happened!" (NO - this doesn't answer any
                             if isinstance(block, dict):
                                 block_type = block.get("type", "")
                                 if block_type == "tool_use":
-                                    _LOG.info(f"  [{i}] {role} -> TOOL: {block.get('name')} | input: {json.dumps(block.get('input', {}))[:200]}")
+                                    _LOG.info(
+                                        f"  [{i}] {role} -> TOOL: {block.get('name')} | input: {json.dumps(block.get('input', {}))[:200]}"
+                                    )
                                 elif block_type == "tool_result":
                                     _LOG.info(f"  [{i}] {role} -> TOOL_RESULT: {str(block.get('content', ''))[:200]}")
                                 elif block_type == "text":
@@ -240,8 +248,8 @@ def _fallback_search(thought: str, channel_id: int | None) -> str:
             with sqlite3.connect(DB_PATH) as conn:
                 conn.row_factory = sqlite3.Row
                 # Escape any existing % or _ in keyword and wrap with %
-                escaped_kw = kw.replace('%', r'\%').replace('_', r'\_')
-                rows = conn.execute(sql, (channel_id, f'%{escaped_kw}%')).fetchall()
+                escaped_kw = kw.replace("%", r"\%").replace("_", r"\_")
+                rows = conn.execute(sql, (channel_id, f"%{escaped_kw}%")).fetchall()
 
                 if not rows:
                     continue
@@ -252,7 +260,7 @@ def _fallback_search(thought: str, channel_id: int | None) -> str:
                     data = {c: row[c] for c in cols}
                     if "content" in data and data["content"] and len(str(data["content"])) > 150:
                         data["content"] = str(data["content"])[:150] + "..."
-                    lines.append(f"{i+1}. {json.dumps(data, default=str)}")
+                    lines.append(f"{i + 1}. {json.dumps(data, default=str)}")
                 results.append(f"'{kw}':\n" + "\n".join(lines))
         except Exception as e:
             _LOG.warning("Fallback search error for keyword '%s': %s", kw, e)

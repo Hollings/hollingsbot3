@@ -5,6 +5,7 @@ Usage: python check_messages.py <channel_id> [--since <message_id>] [--limit <n>
 
 Returns JSON array of recent messages, newest first.
 """
+
 import argparse
 import json
 import os
