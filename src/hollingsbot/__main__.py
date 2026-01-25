@@ -14,13 +14,14 @@ Configuration is done via environment variables. See docs/CONFIGURATION.md for
 the complete reference.
 """
 
-import os
-import time
-from dotenv import load_dotenv
-import discord
-from discord.ext import commands, tasks
 import asyncio
 import logging
+import os
+import time
+
+import discord
+from discord.ext import commands, tasks
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -105,7 +106,7 @@ if __name__ == "__main__":
         try:
             asyncio.run(main())
             break  # Normal exit
-        except Exception as e:  # noqa: BLE001
+        except Exception as e:
             # Log and retry with backoff; discord.py sometimes raises during initial connect
             logger.exception("Bot crashed during startup/connect; retrying in 5s: %s", e)
             time.sleep(5)

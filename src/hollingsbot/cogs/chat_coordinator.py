@@ -1,13 +1,13 @@
 """Chat coordinator - maintains history and broadcasts events to bots."""
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
-import re
 import time
 from collections import deque
-from typing import Callable, Deque
+from collections.abc import Callable
 
 import discord
 from discord.ext import commands
@@ -15,16 +15,16 @@ from discord.ext import commands
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn
 from hollingsbot.cogs.typing_tracker import TypingTracker
-from hollingsbot.utils.discord_utils import get_display_name
 
 # Summarization imports
 from hollingsbot.summarization import (
-    SummaryCache,
     CachedMessage,
     Summarizer,
+    SummaryCache,
     SummaryWorker,
 )
 from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
+from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ class ChatCoordinator(commands.Cog):
 
         # History management
         history_limit = int(os.getenv("LLM_HISTORY_LIMIT", "50"))
-        self.channel_histories: dict[int, Deque[ConversationTurn]] = {}
+        self.channel_histories: dict[int, deque[ConversationTurn]] = {}
         self.history_limit = history_limit
         self._history_locks: dict[int, asyncio.Lock] = {}
         self._warmed_channels: set[int] = set()
@@ -116,10 +116,8 @@ class ChatCoordinator(commands.Cog):
         if old_task and not old_task.done():
             _LOG.info(f"Cancelling previous message processing in channel {channel_id}")
             old_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
                 await asyncio.wait_for(old_task, timeout=0.1)
-            except (asyncio.CancelledError, asyncio.TimeoutError):
-                pass
 
         # Ask each bot to cancel its generation for this channel
         for bot_instance in self.bots:
@@ -131,7 +129,7 @@ class ChatCoordinator(commands.Cog):
 
     # ==================== History Management ====================
 
-    def _history_for_channel(self, channel_id: int) -> Deque[ConversationTurn]:
+    def _history_for_channel(self, channel_id: int) -> deque[ConversationTurn]:
         """Get or create history deque for a channel."""
         if channel_id not in self.channel_histories:
             self.channel_histories[channel_id] = deque(maxlen=self.history_limit)
@@ -383,7 +381,7 @@ class ChatCoordinator(commands.Cog):
         base_text = chat_utils.clean_mentions(message, self.bot).strip()
 
         # Collect text attachments (full content + placeholders)
-        text_blocks, placeholders = await chat_utils.collect_text_attachments_full(message)
+        _text_blocks, placeholders = await chat_utils.collect_text_attachments_full(message)
 
         # Build message text
         prefixed = chat_utils.build_user_message_text(display, hint, base_text)
@@ -605,10 +603,10 @@ async def setup(bot: commands.Bot) -> None:
 
     # Import and register bots
     # from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot  # Moved to wendy-bot service
-    from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
+    from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
     from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
-    from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
+    from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
 
     # Initialize bots with typing tracker
     # wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)  # Moved to wendy-bot service

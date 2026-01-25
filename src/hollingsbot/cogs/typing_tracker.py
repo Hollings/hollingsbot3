@@ -2,7 +2,6 @@
 
 import logging
 from datetime import datetime, timedelta, timezone
-from typing import Dict, Tuple
 
 import discord
 
@@ -19,7 +18,7 @@ class TypingTracker:
     def __init__(self):
         """Initialize the typing tracker."""
         # Maps channel_id -> (user_id, timestamp)
-        self._typing_state: Dict[int, Tuple[int, datetime]] = {}
+        self._typing_state: dict[int, tuple[int, datetime]] = {}
         # Typing indicators last ~10 seconds on Discord
         self._typing_timeout = timedelta(seconds=10)
 

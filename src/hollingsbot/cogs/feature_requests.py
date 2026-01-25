@@ -1,6 +1,7 @@
 """Feature request automation cog using Claude Code CLI."""
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
@@ -430,12 +431,10 @@ Please proceed with the implementation.
 
         except Exception as e:
             _LOG.exception(f"Error implementing feature request #{request_id}")
-            try:
+            with contextlib.suppress(BaseException):
                 await channel.send(
                     f"**Feature Request #{request_id}**: An error occurred during implementation: {e}"
                 )
-            except:
-                pass
             prompt_db.update_feature_request(request_id, status="failed")
 
     async def _send_log_file(

@@ -26,7 +26,7 @@ import re
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
-from typing import Awaitable, Callable, Mapping
+from typing import TYPE_CHECKING
 
 import discord
 import emoji
@@ -34,11 +34,14 @@ from discord.ext import commands
 
 from hollingsbot.caption import add_caption
 from hollingsbot.cost_tracking import CostTracker
-from hollingsbot.utils.image_utils import compress_image_to_fit
-from hollingsbot.utils.outpaint_utils import create_outpaint_images
 from hollingsbot.prompt_db import bulk_add_prompts, init_db
 from hollingsbot.tasks import generate_image  # celery task
 from hollingsbot.text_generators import get_text_generator
+from hollingsbot.utils.image_utils import compress_image_to_fit
+from hollingsbot.utils.outpaint_utils import create_outpaint_images
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable, Mapping
 
 __all__ = ["ImageGenCog"]
 
@@ -831,7 +834,7 @@ class ImageGenCog(commands.Cog):
                 return exc
 
         return await asyncio.gather(
-            *(_launch_single(pid, p) for pid, p in zip(prompt_ids, prompts)),
+            *(_launch_single(pid, p) for pid, p in zip(prompt_ids, prompts, strict=False)),
             return_exceptions=True,
         )
 
@@ -860,7 +863,7 @@ class ImageGenCog(commands.Cog):
         """
         files: list[discord.File] = []
         base_name = self._build_filename(prompt, spec, seed)
-        root, _orig_ext = (base_name.rsplit(".", 1) + ["png"])[:2]
+        root, _orig_ext = ([*base_name.rsplit(".", 1), "png"])[:2]
 
         for idx, img_bytes in enumerate(images_bytes, start=1):
             # Add caption unless skipped
@@ -925,7 +928,7 @@ class ImageGenCog(commands.Cog):
         limit_bytes = int(guild_limit) if guild_limit else _DEFAULT_FILESIZE_LIMIT
         limit_bytes = max(1, limit_bytes)
 
-        for prompt_variant, result in zip(prompts, results):
+        for prompt_variant, result in zip(prompts, results, strict=False):
             if isinstance(result, Exception):
                 overall_success = False
                 _log.exception("Generation failed for %r: %s", prompt_variant, result)

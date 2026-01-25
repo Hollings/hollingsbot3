@@ -16,7 +16,6 @@ import argparse
 import json
 import sqlite3
 import sys
-from datetime import datetime
 
 DB_PATH = "/data/hollingsbot.db"
 

@@ -140,13 +140,12 @@ async def fetch_twitter_syndication_data(url: str) -> URLMetadata | None:
 
     try:
         timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            async with session.get(syndication_url) as response:
-                if response.status != 200:
-                    _LOG.warning("Syndication API returned HTTP %d for tweet %s", response.status, tweet_id)
-                    return None
+        async with aiohttp.ClientSession(timeout=timeout) as session, session.get(syndication_url) as response:
+            if response.status != 200:
+                _LOG.warning("Syndication API returned HTTP %d for tweet %s", response.status, tweet_id)
+                return None
 
-                data = await response.json()
+            data = await response.json()
 
         # Extract data from syndication response
         metadata = URLMetadata(url=url)
@@ -178,7 +177,7 @@ async def fetch_twitter_syndication_data(url: str) -> URLMetadata | None:
 
         return metadata
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.warning("Failed to fetch Twitter syndication data for %s: %s", url, exc)
         return None
 
@@ -250,7 +249,7 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
     except aiohttp.ClientError as exc:
         _LOG.warning("Failed to fetch URL %s: %s", url, exc)
         return None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.exception("Unexpected error fetching URL %s: %s", url, exc)
         return None
 
@@ -420,7 +419,7 @@ async def download_and_process_image(image_url: str, index: int = 1) -> ImageAtt
             size=len(jpeg_bytes),
         )
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _LOG.exception("Failed to download/process image from %s: %s", image_url, exc)
         return None
 

@@ -1,15 +1,16 @@
 # text_generators/grok.py
 from __future__ import annotations
 
-from typing import Dict, Sequence, TypedDict, Union, List
-import os
 import logging
+import os
+from collections.abc import Sequence
+from typing import TypedDict, Union
 
-from openai import AsyncOpenAI, APIError, APIConnectionError, RateLimitError
+from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 
 from .base import TextGeneratorAPI
 
-_CLIENT_CACHE: Dict[str, AsyncOpenAI] = {}
+_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -48,7 +49,7 @@ class GrokTextGenerator(TextGeneratorAPI):
         """Generate text using Grok via xAI's OpenAI-compatible API."""
         # Normalize input into a list of messages
         if isinstance(prompt, str):
-            messages: List[_Message] = [{"role": "user", "content": prompt}]
+            messages: list[_Message] = [{"role": "user", "content": prompt}]
         elif isinstance(prompt, Sequence):
             if not all(isinstance(m, dict) and "role" in m and "content" in m for m in prompt):
                 raise TypeError("Each message must be a dict with 'role' and 'content' keys")

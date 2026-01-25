@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 from io import BytesIO
-from typing import Tuple
 
 from PIL import Image
 
@@ -32,7 +31,7 @@ def compress_image_to_fit(
     *,
     target_margin: float = 0.98,
     prefer_jpeg: bool = True,
-) -> Tuple[bytes, str]:
+) -> tuple[bytes, str]:
     """
     Compress image bytes to fit under Discord's per-file size limit.
 

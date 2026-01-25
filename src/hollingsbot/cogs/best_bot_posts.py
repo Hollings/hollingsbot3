@@ -206,7 +206,7 @@ def _filename_exists(filename: str) -> bool:
     return result is not None
 
 
-def _insert_post(name: str, filename: str, post_type: str = "image", text_content: str = None) -> int:
+def _insert_post(name: str, filename: str, post_type: str = "image", text_content: str | None = None) -> int:
     """Insert a new post and return its ID."""
     with sqlite3.connect(DB_PATH) as conn:
         cursor = conn.execute(
@@ -377,7 +377,7 @@ def ingest_image(img_path: Path, use_ocr: bool = True) -> int | None:
     return post_id
 
 
-def ingest_text_post(text: str, name: str = None) -> int:
+def ingest_text_post(text: str, name: str | None = None) -> int:
     """Ingest a text post into the ELO database."""
     display_name = name or (text[:50] + "..." if len(text) > 50 else text)
     post_id = _insert_post(name=display_name, filename=None, post_type="text", text_content=text)
@@ -394,7 +394,7 @@ def _render_text_card(text: str) -> Image.Image:
 
     try:
         font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
-    except (OSError, IOError):
+    except OSError:
         font = ImageFont.load_default()
 
     wrapped = textwrap.fill(text, width=35)

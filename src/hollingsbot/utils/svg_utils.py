@@ -1,10 +1,10 @@
 # /mnt/data/svg_utils.py
 from __future__ import annotations
-import io
-import re
-import logging
-from typing import List, Tuple
+
 import html
+import io
+import logging
+import re
 
 # Try to enable SVG rendering; degrade gracefully if native Cairo is missing.
 try:
@@ -137,7 +137,7 @@ def _sanitize_svg(svg_xml: str) -> str:
     return svg_xml
 
 
-def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]:
+def _render_with_recovery(svg_xml: str) -> tuple[bool, bytes | None, str | None]:
     """
     Try to render as-is, then try a sanitized version, then give up.
     Returns (ok, png_bytes_or_none, error_message_or_none).
@@ -157,7 +157,7 @@ def _render_with_recovery(svg_xml: str) -> Tuple[bool, bytes | None, str | None]
             try:
                 if "<svg" not in svg_xml.lower():
                     # Wrap standalone fragments in a minimal svg shell
-                    wrapped = '<svg xmlns="http://www.w3.org/2000/svg">%s</svg>' % svg_xml
+                    wrapped = f'<svg xmlns="http://www.w3.org/2000/svg">{svg_xml}</svg>'
                 else:
                     wrapped = svg_xml
                 wrapped = _sanitize_svg(wrapped)
@@ -175,7 +175,7 @@ def _attach_bytes(name: str, data: bytes) -> io.BytesIO:
     return buf
 
 
-def extract_render_and_strip_svgs(text: str) -> Tuple[str, List[Tuple[str, io.BytesIO]]]:
+def extract_render_and_strip_svgs(text: str) -> tuple[str, list[tuple[str, io.BytesIO]]]:
     """
     Find any SVG fragments and render each to a PNG when possible.
     Strategy:
@@ -186,7 +186,7 @@ def extract_render_and_strip_svgs(text: str) -> Tuple[str, List[Tuple[str, io.By
       cleaned_text: original text with svg fragments replaced by short notes
       svg_files: list of (filename, BytesIO) for sending as attachments (PNG if possible, otherwise raw .svg)
     """
-    svg_files: List[Tuple[str, io.BytesIO]] = []
+    svg_files: list[tuple[str, io.BytesIO]] = []
     idx = 0
 
     def _process_svg_fragment(svg_xml: str) -> str:

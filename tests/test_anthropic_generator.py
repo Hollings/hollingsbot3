@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
 
 from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
@@ -179,9 +180,8 @@ class TestErrorHandling:
             side_effect=RateLimitError("Rate limit exceeded", response=MagicMock(), body=None)
         )
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
-            with pytest.raises(RateLimitError):
-                await generator.generate("Hello")
+        with patch.object(generator, '_get_client', return_value=mock_client), pytest.raises(RateLimitError):
+            await generator.generate("Hello")
 
     @pytest.mark.asyncio
     async def test_connection_error_propagates(self, generator, mock_client):
@@ -215,9 +215,8 @@ class TestErrorHandling:
 
         mock_client.messages.create = AsyncMock(side_effect=error)
 
-        with patch.object(generator, '_get_client', return_value=mock_client):
-            with pytest.raises(APIStatusError):
-                await generator.generate("Hello")
+        with patch.object(generator, '_get_client', return_value=mock_client), pytest.raises(APIStatusError):
+            await generator.generate("Hello")
 
 
 class TestCaching:

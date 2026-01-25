@@ -4,13 +4,17 @@ import asyncio
 import logging
 import os
 import random
-from typing import Awaitable, Callable
+from typing import TYPE_CHECKING
 
-import discord
 from celery.exceptions import TimeoutError as CeleryTimeoutError
 from discord.ext import commands
 
 from hollingsbot.tasks import generate_text
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    import discord
 
 logger = logging.getLogger(__name__)
 
@@ -159,10 +163,7 @@ class GPT2Chat(commands.Cog):
             return False
         if self._is_bot_message(message):
             return False
-        if not self._is_target_channel(message):
-            return False
-
-        return True
+        return self._is_target_channel(message)
 
     # Text generation
 

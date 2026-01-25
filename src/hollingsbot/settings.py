@@ -6,10 +6,9 @@ environment variables. Secrets (API keys, tokens) must remain in .env.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
-from typing import Optional
-
 
 # --------------------- System prompt (LLM chat) ---------------------
 
@@ -61,14 +60,14 @@ _FALLBACK_SYSTEM_PROMPT: str = (
 )
 
 
-_SYSTEM_PROMPT_CACHE: Optional[str] = None
-_SYSTEM_PROMPT_MTIME: Optional[float] = None
-_SYSTEM_PROMPT_PATH: Optional[Path] = None
+_SYSTEM_PROMPT_CACHE: str | None = None
+_SYSTEM_PROMPT_MTIME: float | None = None
+_SYSTEM_PROMPT_PATH: Path | None = None
 
 
 def clear_system_prompt_cache() -> None:
     """Clear the cached system prompt to force a reload."""
-    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH  # noqa: PLW0603
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH
     _SYSTEM_PROMPT_CACHE = None
     _SYSTEM_PROMPT_MTIME = None
     _SYSTEM_PROMPT_PATH = None
@@ -96,14 +95,10 @@ def _candidate_prompt_paths() -> list[Path]:
         p = Path(env_val).expanduser()
         candidates.append(p)
         if not p.is_absolute():
-            try:
+            with contextlib.suppress(Exception):
                 candidates.append(_project_root() / p)
-            except Exception:
-                pass
-    try:
+    with contextlib.suppress(Exception):
         candidates.append(_project_root() / "config" / "system_prompt.txt")
-    except Exception:
-        pass
     return candidates
 
 
@@ -116,13 +111,13 @@ def get_default_system_prompt() -> str:
 
     Uses a simple mtime cache to avoid re-reading unchanged files.
     """
-    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH  # noqa: PLW0603
+    global _SYSTEM_PROMPT_CACHE, _SYSTEM_PROMPT_MTIME, _SYSTEM_PROMPT_PATH
 
     for path in _candidate_prompt_paths():
         try:
             if path.exists() and path.is_file():
                 mtime = path.stat().st_mtime
-                if _SYSTEM_PROMPT_PATH == path and _SYSTEM_PROMPT_CACHE is not None and _SYSTEM_PROMPT_MTIME == mtime:
+                if path == _SYSTEM_PROMPT_PATH and _SYSTEM_PROMPT_CACHE is not None and mtime == _SYSTEM_PROMPT_MTIME:
                     return _SYSTEM_PROMPT_CACHE
                 text = path.read_text(encoding="utf-8")
                 _SYSTEM_PROMPT_CACHE = text

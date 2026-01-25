@@ -23,26 +23,26 @@ Usage:
 See docs/INTEGRATIONS.md for details on each provider.
 """
 
-from .base import TextGeneratorAPI
-from .huggingface import HuggingFaceTextGenerator
 from .anthropic import AnthropicTextGenerator
-from .openai_chatgpt import OpenAIChatTextGenerator
-from .grok import GrokTextGenerator
-from .openrouter import OpenRouterTextGenerator, OpenRouterCompletionsGenerator, OpenRouterLoomGenerator
-from .gemini import GeminiTextGenerator
+from .base import TextGeneratorAPI
 from .claude_cli import ClaudeCliTextGenerator
+from .gemini import GeminiTextGenerator
+from .grok import GrokTextGenerator
+from .huggingface import HuggingFaceTextGenerator
+from .openai_chatgpt import OpenAIChatTextGenerator
+from .openrouter import OpenRouterCompletionsGenerator, OpenRouterLoomGenerator, OpenRouterTextGenerator
 
 __all__ = [
-    "TextGeneratorAPI",
-    "HuggingFaceTextGenerator",
     "AnthropicTextGenerator",
-    "OpenAIChatTextGenerator",
+    "ClaudeCliTextGenerator",
+    "GeminiTextGenerator",
     "GrokTextGenerator",
-    "OpenRouterTextGenerator",
+    "HuggingFaceTextGenerator",
+    "OpenAIChatTextGenerator",
     "OpenRouterCompletionsGenerator",
     "OpenRouterLoomGenerator",
-    "GeminiTextGenerator",
-    "ClaudeCliTextGenerator",
+    "OpenRouterTextGenerator",
+    "TextGeneratorAPI",
 ]
 
 

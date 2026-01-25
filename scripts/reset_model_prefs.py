@@ -7,6 +7,7 @@ may be locked if the bot is actively using it.
 import sqlite3
 from pathlib import Path
 
+
 def reset_model_prefs():
     """Clear all user model preferences from the database."""
     db_path = Path(__file__).parent.parent / "src" / "hollingsbot" / "prompts.db"

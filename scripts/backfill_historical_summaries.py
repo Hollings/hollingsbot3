@@ -14,20 +14,19 @@ Run inside Docker:
 import argparse
 import asyncio
 import sqlite3
-import time
-from pathlib import Path
 
 # Add src to path for imports
 import sys
+import time
+from pathlib import Path
+
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from hollingsbot.prompt_db import DB_PATH
-from hollingsbot.text_generators import AnthropicTextGenerator
 from hollingsbot.summarization.summary_cache import (
     SUMMARIZATION_CUTOFF_TIMESTAMP,
-    SummaryCache,
-    MessageGroup,
 )
+from hollingsbot.text_generators import AnthropicTextGenerator
 
 CHUNK_SIZE = 250
 MODEL = "claude-haiku-4-5"
@@ -233,7 +232,7 @@ async def main():
                         )
                         print(f"    Saved as group ID {group_id}")
                     else:
-                        print(f"    [DRY RUN] Would save summary")
+                        print("    [DRY RUN] Would save summary")
 
                     chunks_processed += 1
                     total_messages += msg_count

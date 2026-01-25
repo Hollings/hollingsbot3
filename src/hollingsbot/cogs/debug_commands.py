@@ -267,7 +267,7 @@ class DebugCommands(commands.Cog):
             return None
 
         try:
-            with open(MESSAGE_LOG_FILE, "r") as f:
+            with open(MESSAGE_LOG_FILE) as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -290,7 +290,7 @@ class DebugCommands(commands.Cog):
 
         previous = None
         try:
-            with open(MESSAGE_LOG_FILE, "r") as f:
+            with open(MESSAGE_LOG_FILE) as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -326,7 +326,7 @@ class DebugCommands(commands.Cog):
             start_ms = (start_ts // 1_000_000) if start_ts else 0
             end_ms = end_ts // 1_000_000
 
-            with open(STREAM_LOG_FILE, "r") as f:
+            with open(STREAM_LOG_FILE) as f:
                 for line in f:
                     line = line.strip()
                     if not line:

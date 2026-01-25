@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

@@ -6,10 +6,10 @@ them into an animated GIF.
 """
 from __future__ import annotations
 
+import contextlib
 import io
 import logging
 import os
-from typing import List, Set
 
 import discord
 from discord.ext import commands
@@ -74,7 +74,7 @@ class GifReplyChainCog(commands.Cog):
 
         # Load configuration from environment
         env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
-        self._allowed_channel_ids: Set[int] = {
+        self._allowed_channel_ids: set[int] = {
             int(x.strip())
             for x in env_ids.split(",")
             if x.strip().isdigit()
@@ -109,10 +109,8 @@ class GifReplyChainCog(commands.Cog):
             message: Message to react to
             emoji: Emoji to add as reaction
         """
-        try:
+        with contextlib.suppress(Exception):
             await message.add_reaction(emoji)
-        except Exception:
-            pass
 
     async def _remove_reaction(self, message: discord.Message, emoji: str) -> None:
         """Remove a reaction from a message, ignoring errors.
@@ -186,8 +184,8 @@ class GifReplyChainCog(commands.Cog):
     async def _collect_ancestor_messages(
         self,
         start: discord.Message,
-        seen: Set[int]
-    ) -> List[discord.Message]:
+        seen: set[int]
+    ) -> list[discord.Message]:
         """Collect all ancestor messages by traversing reply references backward.
 
         Args:
@@ -218,8 +216,8 @@ class GifReplyChainCog(commands.Cog):
     async def _collect_descendant_messages(
         self,
         start: discord.Message,
-        seen: Set[int]
-    ) -> List[discord.Message]:
+        seen: set[int]
+    ) -> list[discord.Message]:
         """Collect all descendant messages by traversing replies forward.
 
         Args:
@@ -229,7 +227,7 @@ class GifReplyChainCog(commands.Cog):
         Returns:
             List of descendant messages in order from start to leaf
         """
-        descendants: List[discord.Message] = []
+        descendants: list[discord.Message] = []
         current = start
 
         while True:
@@ -243,7 +241,7 @@ class GifReplyChainCog(commands.Cog):
 
         return descendants
 
-    async def _collect_chain_images(self, start: discord.Message) -> List[bytes]:
+    async def _collect_chain_images(self, start: discord.Message) -> list[bytes]:
         """Collect all image attachments from a reply chain.
 
         Traverses both backward (ancestors) and forward (descendants) from the
@@ -256,7 +254,7 @@ class GifReplyChainCog(commands.Cog):
         Returns:
             List of raw image bytes from attachments in chain order
         """
-        seen: Set[int] = set()
+        seen: set[int] = set()
 
         # Collect backward to root
         ancestors = await self._collect_ancestor_messages(start, seen)
@@ -268,7 +266,7 @@ class GifReplyChainCog(commands.Cog):
         chain = ancestors + descendants
 
         # Extract images from chain
-        images: List[bytes] = []
+        images: list[bytes] = []
         for message in chain:
             if len(images) >= self._max_frames:
                 break
@@ -289,7 +287,7 @@ class GifReplyChainCog(commands.Cog):
 
         return images
 
-    def _decode_images(self, image_blobs: List[bytes]) -> List[Image.Image]:
+    def _decode_images(self, image_blobs: list[bytes]) -> list[Image.Image]:
         """Decode raw image bytes into PIL Image objects.
 
         Args:
@@ -308,7 +306,7 @@ class GifReplyChainCog(commands.Cog):
 
         return decoded
 
-    def _scale_images(self, images: List[Image.Image]) -> List[Image.Image]:
+    def _scale_images(self, images: list[Image.Image]) -> list[Image.Image]:
         """Scale images to fit within maximum dimension constraints.
 
         Args:
@@ -330,15 +328,15 @@ class GifReplyChainCog(commands.Cog):
             else:
                 scale = 1.0
 
-            new_width = max(1, int(round(width * scale)))
-            new_height = max(1, int(round(height * scale)))
+            new_width = max(1, round(width * scale))
+            new_height = max(1, round(height * scale))
 
             scaled_image = image.resize((new_width, new_height), Image.LANCZOS)
             scaled.append(scaled_image)
 
         return scaled
 
-    def _create_uniform_canvas(self, images: List[Image.Image]) -> List[Image.Image]:
+    def _create_uniform_canvas(self, images: list[Image.Image]) -> list[Image.Image]:
         """Center all images on uniform-sized canvases.
 
         Creates canvases sized to the maximum width/height across all images,
@@ -370,7 +368,7 @@ class GifReplyChainCog(commands.Cog):
 
         return canvases
 
-    def _prepare_frames(self, image_blobs: List[bytes]) -> List[Image.Image]:
+    def _prepare_frames(self, image_blobs: list[bytes]) -> list[Image.Image]:
         """Decode and prepare images as uniform GIF frames.
 
         Decodes raw image bytes, scales them to fit constraints, and places
@@ -393,9 +391,9 @@ class GifReplyChainCog(commands.Cog):
 
     def _resize_frames(
         self,
-        frames: List[Image.Image],
+        frames: list[Image.Image],
         scale: float
-    ) -> List[Image.Image]:
+    ) -> list[Image.Image]:
         """Resize all frames by a scale factor.
 
         Args:
@@ -417,7 +415,7 @@ class GifReplyChainCog(commands.Cog):
             for frame in frames
         ]
 
-    def _encode_gif(self, frames: List[Image.Image], palette_size: int) -> bytes:
+    def _encode_gif(self, frames: list[Image.Image], palette_size: int) -> bytes:
         """Encode frames as an animated GIF with palette quantization.
 
         Args:
@@ -447,7 +445,7 @@ class GifReplyChainCog(commands.Cog):
         buffer.seek(0)
         return buffer.getvalue()
 
-    async def _build_gif_bytes(self, frames: List[Image.Image]) -> bytes:
+    async def _build_gif_bytes(self, frames: list[Image.Image]) -> bytes:
         """Build a GIF from frames, trying compression strategies to fit size limit.
 
         Attempts multiple combinations of scaling, frame dropping, and palette
@@ -518,10 +516,7 @@ class GifReplyChainCog(commands.Cog):
         if (message.content or "").strip().lower() != "gif":
             return False
 
-        if not message.reference:
-            return False
-
-        return True
+        return message.reference
 
     async def _get_target_message(
         self,
@@ -590,13 +585,11 @@ class GifReplyChainCog(commands.Cog):
 
         except Exception as exc:
             _log.exception("GIF chain creation failed: %s", exc)
-            try:
+            with contextlib.suppress(Exception):
                 await message.reply(
                     "Error creating GIF from reply chain.",
                     mention_author=False
                 )
-            except Exception:
-                pass
         finally:
             await self._remove_reaction(message, THINKING_EMOJI)
 

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
-import os
-from dataclasses import dataclass, field
 import logging
-from typing import Any, AsyncIterator, Final, Sequence, BinaryIO
+import os
+from collections.abc import AsyncIterator, Sequence
+from dataclasses import dataclass, field
 from tempfile import NamedTemporaryFile
+from typing import Any, BinaryIO, Final
 
 import aiohttp
 import replicate
@@ -77,7 +79,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         self._client = replicate.Client(api_token=self.api_token)
         self._session: aiohttp.ClientSession | None = None
 
-    async def __aenter__(self) -> "ReplicateImageGenerator":  # type: ignore[override]
+    async def __aenter__(self) -> ReplicateImageGenerator:  # type: ignore[override]
         return self
 
     async def __aexit__(self, exc_type, exc, tb) -> None:  # type: ignore[override]
@@ -246,7 +248,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         bytearray,
         replicate.helpers.FileOutput
         if hasattr(replicate.helpers, "FileOutput")
-        else tuple(),
+        else (),
     )
 
     async def _normalise_output(self, data: Any) -> bytes:
@@ -486,7 +488,5 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 fh.close()
             finally:
                 if path:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(path)
-                    except OSError:
-                        pass

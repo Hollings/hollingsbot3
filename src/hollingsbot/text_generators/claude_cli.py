@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import json
 import logging
 import os
@@ -18,9 +19,12 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Sequence, Union
+from typing import TYPE_CHECKING, Any, Union
 
 from .base import TextGeneratorAPI
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _LOG = logging.getLogger(__name__)
 
@@ -92,23 +96,23 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         self.cli_path = self._find_cli_path()
         self.timeout = int(os.getenv("CLAUDE_CLI_TIMEOUT", "300"))
         self._temp_dir: Path | None = None
-        self._temp_files: List[Path] = []
+        self._temp_files: list[Path] = []
 
-    def _load_session_state(self) -> Dict[str, Any]:
+    def _load_session_state(self) -> dict[str, Any]:
         """Load session state from file."""
         if SESSION_STATE_FILE.exists():
             try:
                 return json.loads(SESSION_STATE_FILE.read_text())
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 pass
         return {}
 
-    def _save_session_state(self, state: Dict[str, Any]) -> None:
+    def _save_session_state(self, state: dict[str, Any]) -> None:
         """Save session state to file."""
         SESSION_STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         SESSION_STATE_FILE.write_text(json.dumps(state, indent=2))
 
-    def _get_channel_session(self, channel_id: int) -> Dict[str, Any] | None:
+    def _get_channel_session(self, channel_id: int) -> dict[str, Any] | None:
         """Get session info for a channel."""
         state = self._load_session_state()
         return state.get(str(channel_id))
@@ -130,7 +134,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         _LOG.info("Created new session %s for channel %d", session_id, channel_id)
         return session_id
 
-    def _update_session_stats(self, channel_id: int, usage: Dict[str, Any]) -> None:
+    def _update_session_stats(self, channel_id: int, usage: dict[str, Any]) -> None:
         """Update session stats after a run."""
         state = self._load_session_state()
         channel_key = str(channel_id)
@@ -157,7 +161,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         try:
             # Read all messages
             messages = []
-            with open(session_file, "r") as f:
+            with open(session_file) as f:
                 for line in f:
                     line = line.strip()
                     if line:
@@ -233,7 +237,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         except Exception as e:
             _LOG.error("Failed to truncate session %s: %s", session_id[:8], e)
 
-    def get_session_stats(self, channel_id: int) -> Dict[str, Any] | None:
+    def get_session_stats(self, channel_id: int) -> dict[str, Any] | None:
         """Get session stats for a channel (used by !context command)."""
         return self._get_channel_session(channel_id)
 
@@ -311,7 +315,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
             self._temp_dir = Path(tempfile.mkdtemp(prefix="claude_cli_"))
         return self._temp_dir
 
-    def _save_images_to_temp(self, images: List[Dict[str, Any]]) -> List[Path]:
+    def _save_images_to_temp(self, images: list[dict[str, Any]]) -> list[Path]:
         """Save base64 images to Wendy's images folder."""
         paths = []
         # Save to persistent location
@@ -350,7 +354,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
 
         return paths
 
-    def _format_image_references(self, images: List[Dict[str, Any]]) -> str:
+    def _format_image_references(self, images: list[dict[str, Any]]) -> str:
         """Format image references for the prompt."""
         paths = self._save_images_to_temp(images)
         if not paths:
@@ -360,7 +364,7 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
         return "\n".join(refs)
 
     def _format_conversation(
-        self, conversation: List[Dict[str, Any]]
+        self, conversation: list[dict[str, Any]]
     ) -> tuple[str, str]:
         """Convert conversation to (system_prompt, user_prompt) for CLI.
 
@@ -402,10 +406,8 @@ class ClaudeCliTextGenerator(TextGeneratorAPI):
     def _cleanup_temp_files(self) -> None:
         """Clean up temporary image files."""
         for path in self._temp_files:
-            try:
+            with contextlib.suppress(Exception):
                 path.unlink(missing_ok=True)
-            except Exception:
-                pass
         self._temp_files.clear()
 
         # Remove temp directory if empty
@@ -576,7 +578,7 @@ Key tables:
 
         return result_text
 
-    def _save_debug_log(self, events: List[Dict], channel_id: int | None) -> None:
+    def _save_debug_log(self, events: list[dict], channel_id: int | None) -> None:
         """Save CLI events to debug log file."""
         try:
             debug_dir = Path("/data/wendy/debug_logs")
@@ -605,7 +607,7 @@ Key tables:
         except Exception as e:
             _LOG.error("Failed to save debug log: %s", e)
 
-    def _summarize_events(self, events: List[Dict]) -> Dict:
+    def _summarize_events(self, events: list[dict]) -> dict:
         """Extract summary info from events for quick debugging."""
         summary = {
             "tool_uses": [],
@@ -638,7 +640,7 @@ Key tables:
 
         return summary
 
-    def _append_to_stream_log(self, event: Dict, channel_id: int | None) -> None:
+    def _append_to_stream_log(self, event: dict, channel_id: int | None) -> None:
         """Append a single event to the rolling stream log file."""
         try:
             STREAM_LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -664,7 +666,7 @@ Key tables:
                 return
 
             # Count lines
-            with open(STREAM_LOG_FILE, "r") as f:
+            with open(STREAM_LOG_FILE) as f:
                 lines = f.readlines()
 
             if len(lines) > MAX_STREAM_LOG_LINES:
@@ -677,7 +679,7 @@ Key tables:
 
     async def generate(
         self,
-        prompt: Union[str, Sequence[Dict[str, Any]]],
+        prompt: Union[str, Sequence[dict[str, Any]]],
         temperature: float = 1.0,
         channel_id: int | None = None,
         **kwargs,
@@ -873,10 +875,8 @@ Key tables:
         except asyncio.TimeoutError as e:
             _LOG.error("Claude CLI timed out after %ds", self.timeout)
             if proc:
-                try:
+                with contextlib.suppress(Exception):
                     proc.kill()
-                except Exception:
-                    pass
             raise ClaudeCliError(f"Timed out after {self.timeout}s") from e
         finally:
             self._cleanup_temp_files()
@@ -892,7 +892,7 @@ Key tables:
                 _LOG.warning("Failed to read system prompt file: %s", e)
         return ""
 
-    def _parse_stream_json_with_usage(self, output: str, channel_id: int | None = None) -> tuple[str, Dict[str, Any]]:
+    def _parse_stream_json_with_usage(self, output: str, channel_id: int | None = None) -> tuple[str, dict[str, Any]]:
         """Parse stream-json output and return (result_text, usage_dict)."""
         events = []
         result_text = ""

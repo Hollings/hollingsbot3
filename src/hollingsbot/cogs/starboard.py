@@ -134,9 +134,7 @@ class Starboard(commands.Cog):
         """
         if channel.id in self.ignore_channel_ids:
             return False
-        if self.whitelist_channel_ids and channel.id not in self.whitelist_channel_ids:
-            return False
-        return True
+        return not (self.whitelist_channel_ids and channel.id not in self.whitelist_channel_ids)
 
     async def _fetch_message_safely(
         self, channel: GuildChannel, message_id: int
@@ -167,9 +165,7 @@ class Starboard(commands.Cog):
         """
         if not message.author.bot:
             return False
-        if message.id in self._seen_message_ids:
-            return False
-        return True
+        return message.id not in self._seen_message_ids
 
     def _validate_starboard_channel(
         self, channel: GuildChannel | None, guild_id: int
@@ -191,9 +187,7 @@ class Starboard(commands.Cog):
                 self.starboard_channel_id,
             )
             return False
-        if getattr(channel.guild, "id", None) != guild_id:
-            return False
-        return True
+        return getattr(channel.guild, "id", None) == guild_id
 
     async def _send_to_starboard(
         self, starboard_channel: Messageable, message: discord.Message
@@ -250,7 +244,7 @@ class Starboard(commands.Cog):
                 content=message.content,
                 attachment_urls=attachments_serialized,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             _LOG.exception("Failed to record starboard entry for message %s", message.id)
 
     @commands.Cog.listener("on_raw_reaction_add")

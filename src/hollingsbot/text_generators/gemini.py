@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, List, Sequence, TypedDict, Union
+from typing import TYPE_CHECKING, Any, TypedDict, Union
 
 from .base import TextGeneratorAPI
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 _LOG = logging.getLogger(__name__)
 
@@ -50,7 +53,7 @@ class GeminiTextGenerator(TextGeneratorAPI):
         return _CLIENT_CACHE["default"]
 
     def _convert_messages_to_contents(
-        self, messages: List[dict[str, Any]]
+        self, messages: list[dict[str, Any]]
     ) -> tuple[str | None, list[Any]]:
         """Convert internal message format to Gemini content format.
 

@@ -5,9 +5,11 @@ import json
 import math
 import re
 import sys
+
 sys.path.insert(0, 'src')
 
 import aiohttp
+
 
 def extract_tweet_id(url):
     match = re.search(r"/status/(\d+)", url)
@@ -43,9 +45,8 @@ async def debug_syndication():
     print(f"Token: {token}")
     print(f"Syndication URL: {syndication_url}\n")
 
-    async with aiohttp.ClientSession() as session:
-        async with session.get(syndication_url) as response:
-            data = await response.json()
+    async with aiohttp.ClientSession() as session, session.get(syndication_url) as response:
+        data = await response.json()
 
     print("Full JSON response:")
     print("="*80)

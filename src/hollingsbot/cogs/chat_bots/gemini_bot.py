@@ -9,17 +9,19 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
-from typing import Any
 from contextlib import suppress
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import discord
-from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
+
+if TYPE_CHECKING:
+    from discord.ext import commands
 
 _LOG = logging.getLogger(__name__)
 

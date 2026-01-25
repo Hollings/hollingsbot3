@@ -25,14 +25,18 @@ Schema (message_history table):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import os
 import sqlite3
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-import discord
 from discord.ext import commands
+
+if TYPE_CHECKING:
+    import discord
 
 _LOG = logging.getLogger(__name__)
 
@@ -74,10 +78,8 @@ class MessageLoggerCog(commands.Cog):
     def cog_unload(self) -> None:
         """Clean up database connection when cog is unloaded."""
         if self._conn is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._conn.close()
-            except Exception:
-                pass
             self._conn = None
 
     def _parse_guild_ids(self) -> set[int]:

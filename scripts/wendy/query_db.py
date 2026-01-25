@@ -53,9 +53,8 @@ def authorizer(action, arg1, arg2, db_name, trigger_name):
     # Allow read operations
     if action in ALLOWED_OPERATIONS:
         # Extra check for PRAGMA
-        if action == sqlite3.SQLITE_PRAGMA and arg1:
-            if arg1.lower() in DANGEROUS_PRAGMAS:
-                return sqlite3.SQLITE_DENY
+        if action == sqlite3.SQLITE_PRAGMA and arg1 and arg1.lower() in DANGEROUS_PRAGMAS:
+            return sqlite3.SQLITE_DENY
         return sqlite3.SQLITE_OK
 
     # Deny everything else (INSERT, UPDATE, DELETE, CREATE, DROP, etc.)

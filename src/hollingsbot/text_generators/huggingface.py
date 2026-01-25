@@ -3,15 +3,15 @@ from __future__ import annotations
 
 import asyncio
 import threading
-from typing import Any, Dict
+from typing import Any
 
 from .base import TextGeneratorAPI
 
 # --------------------------------------------------------------------------- #
 # Model-wide cache so multiple tasks/processes don’t reload the same pipeline #
 # --------------------------------------------------------------------------- #
-_PIPELINE_CACHE: Dict[str, Any] = {}
-_LOCKS: Dict[str, threading.Lock] = {}
+_PIPELINE_CACHE: dict[str, Any] = {}
+_LOCKS: dict[str, threading.Lock] = {}
 
 
 class HuggingFaceTextGenerator(TextGeneratorAPI):
@@ -27,7 +27,7 @@ class HuggingFaceTextGenerator(TextGeneratorAPI):
 
     # ------------------------------------------------------------------ helpers
 
-    def _ensure_pipeline(self) -> Any:  # noqa: D401 – “Ensure …”
+    def _ensure_pipeline(self) -> Any:
         """Load (or retrieve) the HF pipeline for ``self.model``."""
         if self.model in _PIPELINE_CACHE:
             return _PIPELINE_CACHE[self.model]
@@ -43,7 +43,7 @@ class HuggingFaceTextGenerator(TextGeneratorAPI):
             from transformers import pipeline  # type: ignore
 
             try:
-                import torch  # noqa: WPS433 – optional, improves device selection
+                import torch
 
                 device = 0 if torch.cuda.is_available() else -1
             except ModuleNotFoundError:

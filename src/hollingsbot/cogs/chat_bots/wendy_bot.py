@@ -10,19 +10,22 @@ import os
 import re
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import discord
-from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ImageAttachment, ModelTurn
 from hollingsbot.settings import get_default_system_prompt
-from hollingsbot.summarization import MessageGroup
 from hollingsbot.tasks import generate_llm_chat_response
 from hollingsbot.tools import get_tool_definitions_text
 from hollingsbot.tools.parser import execute_tool_call_async, parse_tool_calls
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
+
+if TYPE_CHECKING:
+    from discord.ext import commands
+
+    from hollingsbot.summarization import MessageGroup
 
 _LOG = logging.getLogger(__name__)
 
@@ -1001,7 +1004,7 @@ class WendyBot:
             tool_debug: Debug information for each tool call
         """
         from hollingsbot.tools import AVAILABLE_TOOLS
-        from hollingsbot.tools.parser import set_current_context, parse_arguments
+        from hollingsbot.tools.parser import parse_arguments, set_current_context
 
         # Tools that use Claude Code subprocess and must not be interrupted
         CLAUDE_CODE_TOOLS = {"assistant"}

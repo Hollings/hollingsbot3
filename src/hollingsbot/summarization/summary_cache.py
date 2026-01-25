@@ -6,9 +6,10 @@ Tables are created by prompt_db.init_db() - this module just uses them.
 import os
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Iterator, Literal, Optional
+from typing import Literal
 
 from hollingsbot.prompt_db import DB_PATH
 
@@ -28,16 +29,16 @@ class MessageGroup:
     Level 3+: Each covers 5 groups from the level below
     """
 
-    id: Optional[int]
+    id: int | None
     channel_id: int
     level: int
     start_message_id: int  # First message ID in this group
     end_message_id: int    # Last message ID in this group
-    summary_text: Optional[str]  # None until summarized
+    summary_text: str | None  # None until summarized
     message_count: int
-    start_timestamp: Optional[int] = None  # Timestamp of first message
-    end_timestamp: Optional[int] = None    # Timestamp of last message
-    created_at: Optional[int] = None
+    start_timestamp: int | None = None  # Timestamp of first message
+    end_timestamp: int | None = None    # Timestamp of last message
+    created_at: int | None = None
 
     def __post_init__(self):
         if self.created_at is None:
@@ -254,7 +255,7 @@ class SummaryCache:
         self,
         channel_id: int,
         level: int,
-        summary_filter: Optional[Literal["summarized", "unsummarized"]],
+        summary_filter: Literal["summarized", "unsummarized"] | None,
     ) -> list[MessageGroup]:
         """Query message groups with optional summary filter.
 
@@ -286,7 +287,7 @@ class SummaryCache:
             )
             return [self._row_to_message_group(row) for row in cursor.fetchall()]
 
-    def get_latest_group(self, channel_id: int, level: int) -> Optional[MessageGroup]:
+    def get_latest_group(self, channel_id: int, level: int) -> MessageGroup | None:
         """Get the most recent message group at a specific level."""
         with self._get_connection(row_factory=True) as conn:
             cursor = conn.execute(
@@ -325,8 +326,8 @@ class SummaryCache:
             end_message_id=row["end_message_id"],
             summary_text=row["summary_text"],
             message_count=row["message_count"],
-            start_timestamp=row["start_timestamp"] if "start_timestamp" in row.keys() else None,
-            end_timestamp=row["end_timestamp"] if "end_timestamp" in row.keys() else None,
+            start_timestamp=row.get("start_timestamp", None),
+            end_timestamp=row.get("end_timestamp", None),
             created_at=row["created_at"],
         )
 
@@ -391,7 +392,7 @@ class SummaryCache:
         groups: list[MessageGroup],
         exclude_end_ids: set[int],
         limit: int,
-        min_start_id: Optional[int] = None,
+        min_start_id: int | None = None,
     ) -> list[MessageGroup]:
         """Extract message groups that pass filtering criteria.
 
@@ -443,7 +444,7 @@ class SummaryCache:
                 (channel_id, message_id, int(time.time())),
             )
 
-    def get_clear_point(self, channel_id: int) -> Optional[int]:
+    def get_clear_point(self, channel_id: int) -> int | None:
         """Get the clear point message ID for a channel.
 
         Args:

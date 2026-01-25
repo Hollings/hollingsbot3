@@ -6,7 +6,7 @@ import logging
 import os
 import re
 import textwrap
-from typing import Deque
+from collections import deque
 
 import discord
 from PIL import Image
@@ -112,9 +112,8 @@ def is_text_attachment(attachment: discord.Attachment) -> bool:
 
 def is_image_attachment(attachment: discord.Attachment) -> bool:
     """Check if attachment is an image file."""
-    if attachment.content_type:
-        if attachment.content_type.lower().startswith("image/"):
-            return True
+    if attachment.content_type and attachment.content_type.lower().startswith("image/"):
+        return True
     _, ext = os.path.splitext(attachment.filename)
     return ext.lower() in _IMAGE_EXTENSIONS
 
@@ -254,7 +253,7 @@ def image_from_bytes(name: str, data: bytes) -> ImageAttachment:
 
 
 def images_from_history(
-    channel_histories: dict[int, Deque[ConversationTurn]],
+    channel_histories: dict[int, deque[ConversationTurn]],
     channel_id: int,
     message_id: int | None,
 ) -> list[ImageAttachment]:
@@ -334,7 +333,7 @@ async def fetch_referenced_message(message: discord.Message) -> discord.Message 
 async def build_reply_hint(
     message: discord.Message,
     bot: discord.Client,
-    channel_histories: dict[int, Deque[ConversationTurn]],
+    channel_histories: dict[int, deque[ConversationTurn]],
 ) -> tuple[str | None, list[ImageAttachment]]:
     """Build reply hint text and collect images from referenced message."""
     ref_message = await fetch_referenced_message(message)

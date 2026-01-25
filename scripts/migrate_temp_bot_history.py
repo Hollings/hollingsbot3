@@ -17,14 +17,12 @@ import argparse
 import re
 import sqlite3
 import sys
-from datetime import datetime
 from pathlib import Path
 
 # Add src to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 from hollingsbot.prompt_db import DB_PATH, init_db
-
 
 # Patterns for detecting temp bot messages
 ARRIVAL_PATTERN = re.compile(
@@ -58,7 +56,7 @@ def find_temp_bot_events(conn: sqlite3.Connection) -> list[dict]:
     """)
 
     for row in cur.fetchall():
-        msg_id, channel_id, guild_id, timestamp, author_id, nickname, content, is_webhook = row
+        msg_id, channel_id, _guild_id, timestamp, author_id, _nickname, content, _is_webhook = row
 
         if not content:
             continue

@@ -1,6 +1,7 @@
 """Summary generation logic for hierarchical message-count summarization."""
 
 from typing import Protocol
+
 from .summary_cache import CachedMessage, MessageGroup
 
 

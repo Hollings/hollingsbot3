@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING
 
-from .tokens import give_token, check_tokens
+from .tokens import check_tokens, give_token
 
-__all__ = ["Tool", "AVAILABLE_TOOLS", "get_tool_definitions_text"]
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+__all__ = ["AVAILABLE_TOOLS", "Tool", "get_tool_definitions_text"]
 
 
 @dataclass
@@ -77,7 +80,7 @@ def get_tool_definitions_text() -> str:
 
         # Example usage
         if tool.parameters:
-            example_params = ", ".join(f"{p}=..." for p in tool.parameters.keys())
+            example_params = ", ".join(f"{p}=..." for p in tool.parameters)
             lines.append(f"Example: TOOL_CALL: {tool.name}({example_params})")
         else:
             lines.append(f"Example: TOOL_CALL: {tool.name}()")

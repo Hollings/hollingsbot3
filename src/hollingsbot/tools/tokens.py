@@ -2,15 +2,16 @@
 
 from __future__ import annotations
 
+import logging
 import random
 import re
-import logging
 
 from hollingsbot.prompt_db import (
-    give_user_token,
     get_user_token_balance,
+    give_user_token,
     resolve_user_by_display_name,
 )
+
 from .parser import get_current_context
 
 _LOG = logging.getLogger(__name__)

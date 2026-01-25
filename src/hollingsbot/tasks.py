@@ -8,8 +8,8 @@ from celery import Celery
 from celery.utils.log import get_task_logger
 
 from hollingsbot.image_generators import get_image_generator
+from hollingsbot.prompt_db import log_llm_api_call, update_status
 from hollingsbot.text_generators import get_text_generator
-from hollingsbot.prompt_db import update_status, log_llm_api_call
 
 logger = get_task_logger(__name__)
 
@@ -37,7 +37,7 @@ OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     autoretry_for=(Exception,),
     retry_backoff=True,
 )
-def generate_image(  # noqa: C901
+def generate_image(
     self,
     prompt_id: int,
     api: str,
@@ -186,7 +186,7 @@ def generate_text(
             text = asyncio.run(generator.generate(prompt, temperature=temperature))
         else:
             text = asyncio.run(generator.generate(prompt))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         duration = time.monotonic() - start
         logger.exception("generate_text FAILED after %.2fs | %s", duration, exc)
         raise
@@ -353,9 +353,7 @@ def generate_llm_chat_response(
     error_traceback = None
 
     try:
-        if api_normalized in {"openai", "chatgpt", "openrouter"}:
-            payload = _build_messages_for_generator(api_normalized, conversation)
-        elif api_normalized == "anthropic":
+        if api_normalized in {"openai", "chatgpt", "openrouter"} or api_normalized == "anthropic":
             payload = _build_messages_for_generator(api_normalized, conversation)
         elif api_normalized == "claude-cli":
             # Pass conversation directly - claude_cli.py handles its own formatting
@@ -371,7 +369,7 @@ def generate_llm_chat_response(
         text = asyncio.run(generator.generate(_conversation_to_text(conversation)))
         response_text = text
         status = "success"
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         duration = time.monotonic() - start
         error_message = str(exc)
         error_traceback = traceback.format_exc()
@@ -445,8 +443,8 @@ def repair_wendy(self, channel_id: int) -> dict:
     3. Attempts to fix the issue
     4. Sends a summary to the channel via send_message.sh
     """
-    import subprocess
     import shutil
+    import subprocess
 
     logger.info("repair_wendy START for channel %d", channel_id)
     start = time.monotonic()

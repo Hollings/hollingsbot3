@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sqlite3
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Iterable, Mapping
 
 DEFAULT_DB = Path(os.getenv("PROMPT_DB_PATH", Path(__file__).resolve().parents[1] / "src/hollingsbot/prompts.db"))
 
@@ -87,10 +88,8 @@ def import_archive(json_path: Path, db_path: Path, update_existing: bool) -> tup
     messages: Iterable[Mapping[str, object]] = data.get("messages", [])  # type: ignore[assignment]
 
     conn = sqlite3.connect(db_path)
-    try:
+    with contextlib.suppress(sqlite3.OperationalError):
         conn.execute("PRAGMA journal_mode=WAL")
-    except sqlite3.OperationalError:
-        pass
 
     inserted = 0
     updated = 0

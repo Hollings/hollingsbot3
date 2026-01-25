@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from dataclasses import dataclass, field
 from io import BytesIO
-from typing import Any, Optional
+from typing import Any
 
 import aiohttp
 import replicate
@@ -86,7 +87,7 @@ class RealESRGANUpscaler:
         self,
         image_bytes: bytes,
         *,
-        target_bytes: Optional[int] = None,
+        target_bytes: int | None = None,
         scale: int | None = None,
         face_enhance: bool = False,
     ) -> bytes:
@@ -129,16 +130,12 @@ class RealESRGANUpscaler:
             finally:
                 # Always close file handle first
                 if fh is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         fh.close()
-                    except OSError:
-                        pass
                 # Then delete the temp file
                 if tmp_path is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         os.unlink(tmp_path)
-                    except OSError:
-                        pass
 
             # Normalize output: could be a URL string, bytes-like, blob with .url(), or list
             if isinstance(out, (bytes, bytearray)):
@@ -148,7 +145,7 @@ class RealESRGANUpscaler:
             # Blob-like object with .url property or method
             try:
                 if hasattr(out, "url"):
-                    u = out.url() if callable(getattr(out, "url")) else out.url  # type: ignore[misc]
+                    u = out.url() if callable(out.url) else out.url  # type: ignore[misc]
                     if isinstance(u, str) and u.startswith(("http://", "https://")):
                         return await self._download(u)
             except Exception:

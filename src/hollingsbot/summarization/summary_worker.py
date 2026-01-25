@@ -9,8 +9,8 @@ import asyncio
 import logging
 from typing import Union
 
-from .summary_cache import CachedMessage, MessageGroup, SummaryCache
 from .summarizer import Summarizer
+from .summary_cache import CachedMessage, MessageGroup, SummaryCache
 
 _LOG = logging.getLogger(__name__)
 

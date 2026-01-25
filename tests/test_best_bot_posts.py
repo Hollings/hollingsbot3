@@ -5,8 +5,7 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
-import random
+from unittest.mock import patch
 
 import pytest
 
@@ -26,6 +25,7 @@ def setup_best_bot_posts(temp_db):
     with patch.dict('os.environ', {'PROMPT_DB_PATH': temp_db}):
         # Re-import to pick up new DB_PATH
         import importlib
+
         import hollingsbot.cogs.best_bot_posts as bbp
         importlib.reload(bbp)
 
@@ -39,7 +39,7 @@ class TestInitDb:
 
     def test_creates_elo_posts_table(self, setup_best_bot_posts):
         """Test that elo_posts table is created."""
-        bbp, db_path = setup_best_bot_posts
+        _bbp, db_path = setup_best_bot_posts
         with sqlite3.connect(db_path) as conn:
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='elo_posts'"
@@ -49,7 +49,7 @@ class TestInitDb:
 
     def test_creates_match_history_table(self, setup_best_bot_posts):
         """Test that match_history table is created."""
-        bbp, db_path = setup_best_bot_posts
+        _bbp, db_path = setup_best_bot_posts
         with sqlite3.connect(db_path) as conn:
             cursor = conn.execute(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='match_history'"
@@ -82,9 +82,9 @@ class TestEloCalc:
         """Test that upset wins result in larger rating changes."""
         bbp, _ = setup_best_bot_posts
         # Underdog (800) beats favorite (1200)
-        upset_winner_new, upset_loser_new = bbp._elo_calc(800, 1200)
+        upset_winner_new, _upset_loser_new = bbp._elo_calc(800, 1200)
         # Favorite (1200) beats underdog (800)
-        expected_winner_new, expected_loser_new = bbp._elo_calc(1200, 800)
+        expected_winner_new, _expected_loser_new = bbp._elo_calc(1200, 800)
 
         # Upset should cause larger change
         upset_change = upset_winner_new - 800
@@ -94,8 +94,8 @@ class TestEloCalc:
     def test_k_factor_affects_magnitude(self, setup_best_bot_posts):
         """Test that K factor affects rating change magnitude."""
         bbp, _ = setup_best_bot_posts
-        high_k_winner, high_k_loser = bbp._elo_calc(1000, 1000, k=100)
-        low_k_winner, low_k_loser = bbp._elo_calc(1000, 1000, k=25)
+        high_k_winner, _high_k_loser = bbp._elo_calc(1000, 1000, k=100)
+        low_k_winner, _low_k_loser = bbp._elo_calc(1000, 1000, k=25)
 
         assert high_k_winner - 1000 > low_k_winner - 1000
 

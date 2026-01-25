@@ -225,7 +225,7 @@ def migrate(backup_db_path: str, dry_run: bool = False) -> int:
         target_conn.commit()
         imported += len(batch)
 
-    print(f"\nMigration complete!")
+    print("\nMigration complete!")
     print(f"  Imported: {imported}")
     print(f"  Skipped (already existed): {skipped}")
 

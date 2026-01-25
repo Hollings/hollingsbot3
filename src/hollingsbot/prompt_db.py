@@ -1,9 +1,9 @@
 # prompt_db.py
 import os
 import sqlite3
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
 
 DEFAULT_DB = Path("/data/hollingsbot.db")
 DB_PATH = Path(os.getenv("PROMPT_DB_PATH", str(DEFAULT_DB))).expanduser()
@@ -314,7 +314,7 @@ def bulk_add_prompts(
         If inserting the supplied prompts would exceed ``daily_limit``.
     """
 
-    prompts = [p for p in prompts]
+    prompts = list(prompts)
     if not prompts:
         return []
 
@@ -1080,7 +1080,7 @@ def search_message_history(
             ORDER BY timestamp DESC
             LIMIT ?
             """,
-            params + [limit],
+            [*params, limit],
         )
 
         results = []
@@ -1210,7 +1210,7 @@ def update_feature_request(
 
             conn.execute(
                 f"UPDATE feature_requests SET {', '.join(updates)} WHERE id = ?",
-                params + [request_id],
+                [*params, request_id],
             )
             conn.commit()
 

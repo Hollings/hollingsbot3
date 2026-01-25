@@ -2,20 +2,17 @@
 
 from __future__ import annotations
 
-import io
-from unittest.mock import patch, MagicMock
-
-import pytest
+from unittest.mock import patch
 
 from hollingsbot.utils.svg_utils import (
-    svg_rendering_available,
-    _sanitize_svg,
+    INLINE_SVG_RE,
+    SVG_BLOCK_RE,
     _ensure_svg_root_has_namespaces,
     _fix_common_entities,
+    _sanitize_svg,
     _strip_doctype_and_scripts,
     extract_render_and_strip_svgs,
-    SVG_BLOCK_RE,
-    INLINE_SVG_RE,
+    svg_rendering_available,
 )
 
 
@@ -207,7 +204,7 @@ class TestExtractRenderAndStripSvgs:
     def test_strips_svg_from_text(self):
         """Test that SVG is stripped from returned text."""
         text = 'Before ```svg\n<svg><rect/></svg>\n``` After'
-        cleaned, files = extract_render_and_strip_svgs(text)
+        cleaned, _files = extract_render_and_strip_svgs(text)
         assert '<svg>' not in cleaned
         assert 'Before' in cleaned
         assert 'After' in cleaned

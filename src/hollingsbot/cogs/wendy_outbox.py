@@ -66,7 +66,7 @@ class WendyOutbox(commands.Cog):
             if not MESSAGE_LOG_FILE.exists():
                 return
 
-            with open(MESSAGE_LOG_FILE, "r") as f:
+            with open(MESSAGE_LOG_FILE) as f:
                 lines = f.readlines()
 
             if len(lines) > MAX_MESSAGE_LOG_LINES:

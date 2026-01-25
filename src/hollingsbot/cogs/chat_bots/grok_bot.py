@@ -9,18 +9,20 @@ import logging
 import os
 import re
 import time
-from pathlib import Path
-from typing import Any
 from contextlib import suppress
+from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import discord
-from discord.ext import commands
 
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
 from hollingsbot.tools.parser import execute_tool_call, parse_tool_calls
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
+
+if TYPE_CHECKING:
+    from discord.ext import commands
 
 _LOG = logging.getLogger(__name__)
 
@@ -750,7 +752,7 @@ class GrokBot:
             tool_debug: Debug information for each tool call
         """
         from hollingsbot.tools import AVAILABLE_TOOLS
-        from hollingsbot.tools.parser import set_current_context, parse_arguments
+        from hollingsbot.tools.parser import parse_arguments, set_current_context
 
         try:
             tool_calls = parse_tool_calls(text)

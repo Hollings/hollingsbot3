@@ -12,7 +12,7 @@ import os
 from discord.ext import commands
 
 from hollingsbot.cost_tracking import CostTracker
-from hollingsbot.prompt_db import get_user_token_balance, deduct_user_tokens
+from hollingsbot.prompt_db import deduct_user_tokens, get_user_token_balance
 
 __all__ = ["CreditsCog"]
 
@@ -81,7 +81,7 @@ class CreditsCog(commands.Cog):
             await ctx.send("Failed to retrieve usage information. Please try again later.")
 
     @commands.command(name="redeem")
-    async def redeem_command(self, ctx: commands.Context, amount: int = None) -> None:
+    async def redeem_command(self, ctx: commands.Context, amount: int | None = None) -> None:
         """Redeem Wendy tokens for image generation credits.
 
         Usage: !redeem <amount>

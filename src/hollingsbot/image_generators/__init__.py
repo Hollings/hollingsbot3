@@ -8,8 +8,8 @@ __all__ = [
     "ImageGeneratorAPI",
     "ReplicateImageGenerator",
     "SvgGPTImageGenerator",
-    "get_image_generator",
     "generate_avatar",
+    "get_image_generator",
 ]
 
 _LOG = logging.getLogger(__name__)

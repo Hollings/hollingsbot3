@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import re
 import logging
+import re
 from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)

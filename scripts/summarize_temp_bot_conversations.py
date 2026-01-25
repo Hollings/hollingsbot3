@@ -217,7 +217,7 @@ def main():
             # Get conversation messages
             messages = get_conversation_messages(conn, channel_id, bot_name)
             if not messages:
-                print(f"  No messages found, skipping")
+                print("  No messages found, skipping")
                 skipped += 1
                 continue
 
@@ -226,7 +226,7 @@ def main():
             # Format conversation
             conversation = format_conversation_for_summary(messages, bot_name)
             if len(conversation) < 50:
-                print(f"  Conversation too short, skipping")
+                print("  Conversation too short, skipping")
                 skipped += 1
                 continue
 
@@ -241,9 +241,9 @@ def main():
 
                 if not args.dry_run:
                     save_summary(conn, bot_id, summary)
-                    print(f"  Saved!")
+                    print("  Saved!")
                 else:
-                    print(f"  [DRY RUN] Would save summary")
+                    print("  [DRY RUN] Would save summary")
 
                 summarized += 1
 
