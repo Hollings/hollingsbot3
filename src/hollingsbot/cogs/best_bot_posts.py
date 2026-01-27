@@ -56,6 +56,22 @@ ROUND_NAMES = {
     4: "Final",
 }
 
+# Bracket image layout constants
+BRACKET_THUMB = 48
+BRACKET_SLOT_H = 55
+BRACKET_MARGIN_TOP = 60
+BRACKET_MARGIN_LEFT = 60
+BRACKET_ROUND_SPACING = 300
+BRACKET_CANVAS_W = 1500
+BRACKET_CANVAS_H = BRACKET_MARGIN_TOP + 16 * BRACKET_SLOT_H + 60
+BRACKET_BG = (47, 49, 54)        # #2f3136
+BRACKET_LINE_COLOR = (85, 85, 85)  # #555
+BRACKET_WIN_COLOR = (255, 255, 80)    # Yellow for winners
+BRACKET_TEXT_COLOR = (255, 255, 255)   # White for non-decided entrants
+BRACKET_LOSE_COLOR = (102, 102, 102)  # #666
+BRACKET_TBD_COLOR = (120, 120, 120)
+BRACKET_CHAMPION_THUMB = 160
+
 # Placement for losers by round eliminated
 PLACEMENT_BY_ROUND = {
     1: 9,   # Lost in Round of 16 -> 9th
@@ -357,6 +373,325 @@ def _build_matchup_image(post_a, post_b):
     combined.paste(img2, (img1.width + 50, 0))
     buf = io.BytesIO()
     combined.save(buf, "PNG")
+    buf.seek(0)
+    return buf
+
+
+def _get_thumbnail(post, size=BRACKET_THUMB) -> Image.Image:
+    """Load a post image, center-crop to square, resize to size x size."""
+    try:
+        img = _get_post_image(post)
+    except Exception:
+        # Fallback: gray square
+        return Image.new("RGB", (size, size), (80, 80, 80))
+
+    # Center-crop to square
+    w, h = img.size
+    side = min(w, h)
+    left = (w - side) // 2
+    top = (h - side) // 2
+    img = img.crop((left, top, left + side, top + side))
+    img = img.resize((size, size), Image.LANCZOS)
+    return img
+
+
+def _dim_thumbnail(thumb: Image.Image) -> Image.Image:
+    """Apply a dark overlay to indicate a loser."""
+    dimmed = thumb.copy()
+    overlay = Image.new("RGBA", dimmed.size, (0, 0, 0, 160))
+    dimmed = dimmed.convert("RGBA")
+    dimmed = Image.alpha_composite(dimmed, overlay)
+    return dimmed.convert("RGB")
+
+
+def _load_bracket_font(size=13):
+    """Load DejaVuSans at the given size, falling back to default."""
+    try:
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size
+        )
+    except (OSError, IOError):
+        return ImageFont.load_default()
+
+
+def _load_bracket_font_bold(size=16):
+    """Load DejaVuSans-Bold at the given size, falling back to regular."""
+    try:
+        return ImageFont.truetype(
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
+        )
+    except (OSError, IOError):
+        return _load_bracket_font(size)
+
+
+def _truncate_name(name: str, max_len=20) -> str:
+    if len(name) <= max_len:
+        return name
+    return name[: max_len - 3] + "..."
+
+
+def _build_bracket_image(tournament_id, db_path=None) -> io.BytesIO:
+    """Render a full tournament bracket as a PNG image.
+
+    Returns a BytesIO buffer containing the PNG data.
+    """
+    _db = db_path or DB_PATH
+    conn = sqlite3.connect(_db)
+    conn.row_factory = sqlite3.Row
+
+    tournament = conn.execute(
+        "SELECT * FROM tournaments WHERE id = ?", (tournament_id,)
+    ).fetchone()
+
+    matches = conn.execute(
+        """SELECT tm.*, ea.name as name_a, eb.name as name_b,
+                  ea.post_type as type_a, eb.post_type as type_b,
+                  ea.text_content as text_a, eb.text_content as text_b,
+                  ea.filename as file_a, eb.filename as file_b
+           FROM tournament_matches tm
+           LEFT JOIN elo_posts ea ON tm.post_a_id = ea.id
+           LEFT JOIN elo_posts eb ON tm.post_b_id = eb.id
+           WHERE tm.tournament_id = ?
+           ORDER BY tm.round ASC, tm.match_index ASC""",
+        (tournament_id,),
+    ).fetchall()
+
+    conn.close()
+
+    # Organize matches by round
+    rounds = {}
+    for m in matches:
+        rnd = m["round"]
+        if rnd not in rounds:
+            rounds[rnd] = []
+        rounds[rnd].append(m)
+
+    # Create canvas
+    canvas = Image.new("RGB", (BRACKET_CANVAS_W, BRACKET_CANVAS_H), BRACKET_BG)
+    draw = ImageDraw.Draw(canvas)
+    font = _load_bracket_font(13)
+    font_bold = _load_bracket_font_bold(16)
+    title_font = _load_bracket_font_bold(22)
+
+    # Title
+    label = (
+        "CHAMPIONS TOURNAMENT"
+        if tournament and tournament["is_champions"]
+        else "Tournament"
+    )
+    t_num = tournament["tournament_number"] if tournament else "?"
+    title = f"{label} #{t_num}"
+    title_bbox = draw.textbbox((0, 0), title, font=title_font)
+    title_w = title_bbox[2] - title_bbox[0]
+    draw.text(
+        ((BRACKET_CANVAS_W - title_w) // 2, 15),
+        title,
+        font=title_font,
+        fill=BRACKET_WIN_COLOR,
+    )
+
+    # Round headers
+    for rnd_num in range(1, 5):
+        rx = BRACKET_MARGIN_LEFT + (rnd_num - 1) * BRACKET_ROUND_SPACING
+        rnd_name = ROUND_NAMES.get(rnd_num, f"Round {rnd_num}")
+        draw.text((rx, 40), rnd_name, font=font, fill=BRACKET_TBD_COLOR)
+
+    # Champion header
+    champ_x = BRACKET_MARGIN_LEFT + 4 * BRACKET_ROUND_SPACING
+    draw.text((champ_x, 40), "Champion", font=font, fill=BRACKET_TBD_COLOR)
+
+    # Compute Y positions for each slot in each round
+    # Round 1: 16 slots (8 matches * 2 entrants), evenly spaced
+    slot_positions = {}  # (round, match_index, 'a'|'b') -> y_center
+    match_centers = {}   # (round, match_index) -> y_center (midpoint of the two slots)
+
+    for match_idx in range(8):
+        slot_a = match_idx * 2
+        slot_b = match_idx * 2 + 1
+        ya = BRACKET_MARGIN_TOP + slot_a * BRACKET_SLOT_H + BRACKET_SLOT_H // 2
+        yb = BRACKET_MARGIN_TOP + slot_b * BRACKET_SLOT_H + BRACKET_SLOT_H // 2
+        slot_positions[(1, match_idx, "a")] = ya
+        slot_positions[(1, match_idx, "b")] = yb
+        match_centers[(1, match_idx)] = (ya + yb) // 2
+
+    # Later rounds: centered between the two feeder matches
+    for rnd_num in range(2, 5):
+        num_matches = 8 >> (rnd_num - 1)
+        for mi in range(num_matches):
+            feeder_a = mi * 2
+            feeder_b = mi * 2 + 1
+            y_a = match_centers[(rnd_num - 1, feeder_a)]
+            y_b = match_centers[(rnd_num - 1, feeder_b)]
+            mid = (y_a + y_b) // 2
+            slot_positions[(rnd_num, mi, "a")] = y_a
+            slot_positions[(rnd_num, mi, "b")] = y_b
+            match_centers[(rnd_num, mi)] = mid
+
+    # Helper to build a fake post dict for thumbnail loading
+    def _make_post_dict(m, side):
+        """Build a minimal post dict from a match row for a given side ('a' or 'b')."""
+        pid = m[f"post_{side}_id"]
+        if pid is None:
+            return None
+        return {
+            "id": pid,
+            "name": m[f"name_{side}"] or "TBD",
+            "post_type": m[f"type_{side}"] or "image",
+            "text_content": m[f"text_{side}"],
+            "filename": m[f"file_{side}"],
+        }
+
+    # Draw each round
+    champion_post = None
+    for rnd_num in range(1, 5):
+        rx = BRACKET_MARGIN_LEFT + (rnd_num - 1) * BRACKET_ROUND_SPACING
+        rnd_matches = rounds.get(rnd_num, [])
+
+        for m in rnd_matches:
+            mi = m["match_index"]
+            is_completed = m["status"] == "completed"
+            winner_id = m["winner_id"]
+
+            for side in ("a", "b"):
+                key = (rnd_num, mi, side)
+                if key not in slot_positions:
+                    continue
+                y = slot_positions[key]
+                post_dict = _make_post_dict(m, side)
+                pid = m[f"post_{side}_id"]
+                name = m[f"name_{side}"] or "TBD"
+
+                # Determine if this entrant is winner/loser/pending
+                is_winner = is_completed and pid == winner_id
+                is_loser = is_completed and pid is not None and pid != winner_id
+                is_tbd = pid is None
+
+                # Draw thumbnail
+                thumb_y = y - BRACKET_THUMB // 2
+                if is_tbd:
+                    # Empty slot with dashed border
+                    draw.rectangle(
+                        [rx, thumb_y, rx + BRACKET_THUMB, thumb_y + BRACKET_THUMB],
+                        outline=BRACKET_TBD_COLOR,
+                    )
+                    # Dashed effect: draw small dashes
+                    for dy in range(0, BRACKET_THUMB, 8):
+                        draw.line(
+                            [(rx, thumb_y + dy), (rx, thumb_y + min(dy + 4, BRACKET_THUMB))],
+                            fill=BRACKET_TBD_COLOR,
+                        )
+                elif post_dict:
+                    try:
+                        thumb = _get_thumbnail(post_dict, BRACKET_THUMB)
+                        if is_loser:
+                            thumb = _dim_thumbnail(thumb)
+                        canvas.paste(thumb, (rx, thumb_y))
+                    except Exception:
+                        draw.rectangle(
+                            [rx, thumb_y, rx + BRACKET_THUMB, thumb_y + BRACKET_THUMB],
+                            fill=(80, 80, 80),
+                        )
+
+                # Draw name label
+                label_x = rx + BRACKET_THUMB + 6
+                truncated = _truncate_name(name)
+                if is_tbd:
+                    text_color = BRACKET_TBD_COLOR
+                    truncated = "TBD"
+                elif is_loser:
+                    text_color = BRACKET_LOSE_COLOR
+                elif is_winner:
+                    text_color = BRACKET_WIN_COLOR
+                else:
+                    text_color = BRACKET_TEXT_COLOR
+
+                draw.text(
+                    (label_x, y - 7),
+                    truncated,
+                    font=font,
+                    fill=text_color,
+                )
+
+                # Track champion
+                if rnd_num == 4 and is_winner and post_dict:
+                    champion_post = post_dict
+
+            # Draw connector lines to next round
+            if rnd_num < 4:
+                ya = slot_positions.get((rnd_num, mi, "a"))
+                yb = slot_positions.get((rnd_num, mi, "b"))
+                if ya is not None and yb is not None:
+                    # Horizontal lines from each slot to a merge point
+                    merge_x = rx + BRACKET_ROUND_SPACING - 40
+                    mid_y = (ya + yb) // 2
+
+                    # Line from slot A
+                    draw.line(
+                        [(rx + BRACKET_THUMB + 80, ya), (merge_x, ya)],
+                        fill=BRACKET_LINE_COLOR,
+                        width=1,
+                    )
+                    # Line from slot B
+                    draw.line(
+                        [(rx + BRACKET_THUMB + 80, yb), (merge_x, yb)],
+                        fill=BRACKET_LINE_COLOR,
+                        width=1,
+                    )
+                    # Vertical connector
+                    draw.line(
+                        [(merge_x, ya), (merge_x, yb)],
+                        fill=BRACKET_LINE_COLOR,
+                        width=1,
+                    )
+                    # Horizontal line to next round
+                    next_rx = BRACKET_MARGIN_LEFT + rnd_num * BRACKET_ROUND_SPACING
+                    draw.line(
+                        [(merge_x, mid_y), (next_rx - 4, mid_y)],
+                        fill=BRACKET_LINE_COLOR,
+                        width=1,
+                    )
+
+    # Draw champion section
+    if champion_post:
+        cy = match_centers.get((4, 0), BRACKET_CANVAS_H // 2)
+        cx = BRACKET_MARGIN_LEFT + 4 * BRACKET_ROUND_SPACING
+
+        # Draw connector from final to champion
+        final_rx = BRACKET_MARGIN_LEFT + 3 * BRACKET_ROUND_SPACING
+        final_label_end = final_rx + BRACKET_THUMB + 160
+        draw.line(
+            [(final_label_end, cy), (cx - 4, cy)],
+            fill=BRACKET_LINE_COLOR,
+            width=2,
+        )
+
+        # Champion name above thumbnail
+        champ_name = _truncate_name(champion_post["name"], 25)
+        name_bbox = draw.textbbox((0, 0), champ_name, font=font_bold)
+        name_w = name_bbox[2] - name_bbox[0]
+        # Center the name above the thumbnail
+        name_x = cx + (BRACKET_CHAMPION_THUMB - name_w) // 2
+        name_y = cy - BRACKET_CHAMPION_THUMB // 2 - 24
+        draw.text(
+            (name_x, name_y),
+            champ_name,
+            font=font_bold,
+            fill=(255, 215, 0),  # Gold
+        )
+
+        # Large thumbnail
+        thumb_y = cy - BRACKET_CHAMPION_THUMB // 2
+        try:
+            big_thumb = _get_thumbnail(champion_post, BRACKET_CHAMPION_THUMB)
+            canvas.paste(big_thumb, (cx, thumb_y))
+        except Exception:
+            draw.rectangle(
+                [cx, thumb_y, cx + BRACKET_CHAMPION_THUMB, thumb_y + BRACKET_CHAMPION_THUMB],
+                fill=(80, 80, 80),
+            )
+
+    buf = io.BytesIO()
+    canvas.save(buf, "PNG")
     buf.seek(0)
     return buf
 
@@ -908,6 +1243,15 @@ class BestBotPosts(commands.Cog):
 
         await channel.send("\n".join(lines))
 
+        # Send bracket image
+        try:
+            buf = _build_bracket_image(tournament_id)
+            await channel.send(
+                file=discord.File(fp=buf, filename="bracket.png"),
+            )
+        except Exception:
+            _LOG.warning("Failed to build bracket image for completed tournament")
+
     async def _poll_winner(self, msg):
         """Poll until same winner twice in a row, requiring at least one human vote."""
         prev_winner = None
@@ -1015,7 +1359,7 @@ class BestBotPosts(commands.Cog):
 
     @commands.command(name="bracket")
     async def bracket_cmd(self, ctx):
-        """Show current tournament bracket status."""
+        """Show current tournament bracket as an image."""
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
 
@@ -1027,6 +1371,27 @@ class BestBotPosts(commands.Cog):
                 await ctx.send("No tournaments yet.")
                 return
 
+        tid = tournament["id"]
+        conn.close()
+
+        try:
+            buf = _build_bracket_image(tid)
+            await ctx.send(
+                file=discord.File(fp=buf, filename="bracket.png"),
+            )
+        except Exception:
+            _LOG.exception("Failed to build bracket image, falling back to text")
+            await self._bracket_text_fallback(ctx, tid)
+
+    async def _bracket_text_fallback(self, ctx, tournament_id):
+        """Text-only bracket fallback if image generation fails."""
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+
+        tournament = conn.execute(
+            "SELECT * FROM tournaments WHERE id = ?", (tournament_id,)
+        ).fetchone()
+
         label = (
             "CHAMPIONS TOURNAMENT"
             if tournament["is_champions"]
@@ -1037,14 +1402,13 @@ class BestBotPosts(commands.Cog):
         ]
 
         matches = conn.execute(
-            """SELECT tm.*, ea.name as name_a, eb.name as name_b, ew.name as winner_name
+            """SELECT tm.*, ea.name as name_a, eb.name as name_b
                FROM tournament_matches tm
                LEFT JOIN elo_posts ea ON tm.post_a_id = ea.id
                LEFT JOIN elo_posts eb ON tm.post_b_id = eb.id
-               LEFT JOIN elo_posts ew ON tm.winner_id = ew.id
                WHERE tm.tournament_id = ?
                ORDER BY tm.round ASC, tm.match_index ASC""",
-            (tournament["id"],),
+            (tournament_id,),
         ).fetchall()
 
         conn.close()
