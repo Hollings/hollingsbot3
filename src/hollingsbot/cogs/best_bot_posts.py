@@ -360,10 +360,22 @@ def _get_post_image(post) -> Image.Image:
     return Image.open(IMAGES_FOLDER / f"{post['id']}.png")
 
 
+MATCHUP_MAX_DIM = 1024  # Max width/height per image in matchup
+
+
+def _cap_image_size(img: Image.Image, max_dim: int = MATCHUP_MAX_DIM) -> Image.Image:
+    """Downscale an image so neither dimension exceeds max_dim."""
+    if img.width <= max_dim and img.height <= max_dim:
+        return img
+    ratio = min(max_dim / img.width, max_dim / img.height)
+    new_size = (int(img.width * ratio), int(img.height * ratio))
+    return img.resize(new_size, Image.LANCZOS)
+
+
 def _build_matchup_image(post_a, post_b):
-    """Combine two posts side by side."""
-    img1 = _get_post_image(post_a)
-    img2 = _get_post_image(post_b)
+    """Combine two posts side by side, capping each to MATCHUP_MAX_DIM."""
+    img1 = _cap_image_size(_get_post_image(post_a))
+    img2 = _cap_image_size(_get_post_image(post_b))
     combined = Image.new(
         "RGB",
         (img1.width + img2.width + 50, max(img1.height, img2.height)),
