@@ -8,13 +8,14 @@
   },
   "$": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
-    "quality": "low",
+    "model": "black-forest-labs/flux-2-dev",
+    "safety_tolerance": 5,
     "price_per_image": 0.02
   },
   "$$": {
     "api": "replicate",
-    "model": "google/imagen-4",
+    "model": "black-forest-labs/flux-2-pro",
+    "safety_tolerance": 5,
     "price_per_image": 0.04
   },
   "$$$": {
