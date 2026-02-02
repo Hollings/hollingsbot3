@@ -22,9 +22,11 @@ class RealESRGANUpscaler:
     """
 
     # Use a pinned model version to avoid 404 and ensure consistent outputs
-    model: str = os.getenv(
-        "REALESRGAN_MODEL",
-        "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
+    model: str = field(
+        default_factory=lambda: os.getenv(
+            "REALESRGAN_MODEL",
+            "nightmareai/real-esrgan:f121d640bd286e1fdc67f9799164c1d5be36ff74576ee11c803ae5b665dd46aa",
+        )
     )
     api_token: str = field(default_factory=lambda: os.getenv("REPLICATE_API_TOKEN", ""))
     # Internal client/session are explicit fields to be compatible with slots
@@ -137,7 +139,7 @@ class RealESRGANUpscaler:
                         os.unlink(tmp_path)
 
             # Normalize output: could be a URL string, bytes-like, blob with .url(), or list
-            if isinstance(out, (bytes, bytearray)):
+            if isinstance(out, bytes | bytearray):
                 return bytes(out)
             if isinstance(out, str) and out.startswith(("http://", "https://")):
                 return await self._download(out)
@@ -150,11 +152,11 @@ class RealESRGANUpscaler:
             except Exception:
                 pass
             # Some versions return simple lists (e.g., single URL)
-            if isinstance(out, (list, tuple)) and out:
+            if isinstance(out, list | tuple) and out:
                 first = out[0]
                 if isinstance(first, str) and first.startswith(("http://", "https://")):
                     return await self._download(first)
-                if isinstance(first, (bytes, bytearray)):
+                if isinstance(first, bytes | bytearray):
                     return bytes(first)
             # Fallback: encode original to JPEG moderately if model format unknown
             return img

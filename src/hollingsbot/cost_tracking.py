@@ -139,7 +139,7 @@ class CostTracker:
             ValueError: If cost is negative or not a valid number
         """
         # Validate cost input
-        if not isinstance(cost, (int, float)) or cost < 0:
+        if not isinstance(cost, int | float) or cost < 0:
             raise ValueError(f"Cost must be a non-negative number, got: {cost}")
 
         with sqlite3.connect(self.db_path) as conn:
@@ -200,7 +200,7 @@ class CostTracker:
             ValueError: If cost is negative or not a valid number
         """
         # Validate cost input
-        if not isinstance(cost, (int, float)) or cost < 0:
+        if not isinstance(cost, int | float) or cost < 0:
             raise ValueError(f"Cost must be a non-negative number, got: {cost}")
 
         today = self._get_today_string()

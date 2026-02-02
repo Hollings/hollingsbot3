@@ -219,7 +219,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         """Scale images to 1024px max dimension for gpt-image models."""
         scaled = []
         for item in images:
-            if isinstance(item, (bytes, bytearray)):
+            if isinstance(item, bytes | bytearray):
                 scaled.append(_scale_image_to_max_dimension(bytes(item), _MAX_GPT_IMAGE_DIMENSION))
             elif isinstance(item, str) and item.startswith("data:"):
                 # Decode data URL and scale
@@ -248,11 +248,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
     )
 
     async def _normalise_output(self, data: Any) -> bytes:
-        if isinstance(data, (list, tuple)) and data and all(isinstance(x, (bytes, bytearray)) for x in data):
+        if isinstance(data, list | tuple) and data and all(isinstance(x, bytes | bytearray) for x in data):
             return b"".join(data)
 
         if isinstance(data, self._StreamTypes):
-            if not isinstance(data, (bytes, bytearray)):
+            if not isinstance(data, bytes | bytearray):
                 return await self._download(str(data))
             return bytes(data)
 
@@ -260,7 +260,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             async for chunk in data:
                 return await self._normalise_output(chunk)
 
-        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+        if isinstance(data, Sequence) and not isinstance(data, str | bytes | bytearray):
             if not data:
                 raise RuntimeError("Model returned an empty sequence.")
             return await self._normalise_output(data[0])
@@ -279,7 +279,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         out: list[bytes] = []
 
         # Bytes directly
-        if isinstance(data, (bytes, bytearray)):
+        if isinstance(data, bytes | bytearray):
             out.append(bytes(data))
             return out
 
@@ -288,7 +288,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             out.append(await self._download(data))
             return out
 
-        if isinstance(data, self._StreamTypes) and not isinstance(data, (bytes, bytearray)):
+        if isinstance(data, self._StreamTypes) and not isinstance(data, bytes | bytearray):
             out.append(await self._download(str(data)))
             return out
 
@@ -299,7 +299,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return out
 
         # Sequences (lists/tuples)
-        if isinstance(data, Sequence) and not isinstance(data, (str, bytes, bytearray)):
+        if isinstance(data, Sequence) and not isinstance(data, str | bytes | bytearray):
             for item in data:
                 out.extend(await self._collect_all(item))
             return out
@@ -449,7 +449,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             if isinstance(item, str) and item.startswith(("http://", "https://", "data:")):
                 prepared.append(item)
                 continue
-            if isinstance(item, (bytes, bytearray)):
+            if isinstance(item, bytes | bytearray):
                 tmp = NamedTemporaryFile(prefix="nb_", suffix=".png", delete=False)
                 tmp.write(item)
                 tmp.flush()

@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 try:
     import pytesseract
+
     HAS_OCR = True
 except ImportError:
     HAS_OCR = False
@@ -45,8 +46,14 @@ MIN_MARGIN_HEIGHT = 10
 
 # Standard seeded bracket matchups for Round 1 (seed pairs, 1-indexed)
 SEEDED_BRACKET = [
-    (1, 16), (8, 9), (4, 13), (5, 12),
-    (2, 15), (7, 10), (3, 14), (6, 11),
+    (1, 16),
+    (8, 9),
+    (4, 13),
+    (5, 12),
+    (2, 15),
+    (7, 10),
+    (3, 14),
+    (6, 11),
 ]
 
 ROUND_NAMES = {
@@ -64,20 +71,20 @@ BRACKET_MARGIN_LEFT = 60
 BRACKET_ROUND_SPACING = 300
 BRACKET_CANVAS_W = 1500
 BRACKET_CANVAS_H = BRACKET_MARGIN_TOP + 16 * BRACKET_SLOT_H + 60
-BRACKET_BG = (47, 49, 54)        # #2f3136
+BRACKET_BG = (47, 49, 54)  # #2f3136
 BRACKET_LINE_COLOR = (85, 85, 85)  # #555
-BRACKET_WIN_COLOR = (255, 255, 80)    # Yellow for winners
-BRACKET_TEXT_COLOR = (255, 255, 255)   # White for non-decided entrants
+BRACKET_WIN_COLOR = (255, 255, 80)  # Yellow for winners
+BRACKET_TEXT_COLOR = (255, 255, 255)  # White for non-decided entrants
 BRACKET_LOSE_COLOR = (102, 102, 102)  # #666
 BRACKET_TBD_COLOR = (120, 120, 120)
 BRACKET_CHAMPION_THUMB = 160
 
 # Placement for losers by round eliminated
 PLACEMENT_BY_ROUND = {
-    1: 9,   # Lost in Round of 16 -> 9th
-    2: 5,   # Lost in Quarterfinals -> 5th
-    3: 3,   # Lost in Semifinals -> 3rd
-    4: 2,   # Lost in Final -> 2nd
+    1: 9,  # Lost in Round of 16 -> 9th
+    2: 5,  # Lost in Quarterfinals -> 5th
+    3: 3,  # Lost in Semifinals -> 3rd
+    4: 2,  # Lost in Final -> 2nd
 }
 
 
@@ -165,9 +172,7 @@ def _init_db():
         ("total_placement_points", "0"),
     ]:
         try:
-            conn.execute(
-                f"ALTER TABLE elo_posts ADD COLUMN {col} INTEGER DEFAULT {default}"
-            )
+            conn.execute(f"ALTER TABLE elo_posts ADD COLUMN {col} INTEGER DEFAULT {default}")
         except sqlite3.OperationalError:
             pass  # Column already exists
 
@@ -177,11 +182,10 @@ def _init_db():
 
 # --- Post Management ---
 
+
 def _filename_exists(filename: str) -> bool:
     conn = sqlite3.connect(DB_PATH)
-    result = conn.execute(
-        "SELECT 1 FROM elo_posts WHERE filename = ?", (filename,)
-    ).fetchone()
+    result = conn.execute("SELECT 1 FROM elo_posts WHERE filename = ?", (filename,)).fetchone()
     conn.close()
     return result is not None
 
@@ -205,6 +209,7 @@ def _insert_post(
 
 # --- OCR Caption Parsing ---
 
+
 def _get_header_height(img: Image.Image) -> int:
     gray = img.convert("L")
     width, height = gray.size
@@ -212,9 +217,7 @@ def _get_header_height(img: Image.Image) -> int:
     sample_positions = [int(width * i / num_samples) for i in range(1, num_samples)]
 
     for y in range(min(height, 150)):
-        dark_count = sum(
-            1 for x in sample_positions if gray.getpixel((x, y)) < WHITE_THRESHOLD
-        )
+        dark_count = sum(1 for x in sample_positions if gray.getpixel((x, y)) < WHITE_THRESHOLD)
         dark_ratio = dark_count / len(sample_positions)
         if dark_ratio > 0.5:
             return y if y >= MIN_MARGIN_HEIGHT else 0
@@ -321,14 +324,13 @@ def ingest_image(img_path: Path, use_ocr: bool = True) -> int | None:
 def ingest_text_post(text: str, name: str | None = None) -> int:
     """Ingest a text post into the database."""
     display_name = name or (text[:50] + "..." if len(text) > 50 else text)
-    post_id = _insert_post(
-        name=display_name, filename=None, post_type="text", text_content=text
-    )
+    post_id = _insert_post(name=display_name, filename=None, post_type="text", text_content=text)
     _LOG.info("Ingested text post %d: %s", post_id, display_name)
     return post_id
 
 
 # --- Image Rendering ---
+
 
 def _render_text_card(text: str) -> Image.Image:
     """Render text content as an image card."""
@@ -336,10 +338,8 @@ def _render_text_card(text: str) -> Image.Image:
     draw = ImageDraw.Draw(img)
 
     try:
-        font = ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24
-        )
-    except (OSError, IOError):
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 24)
+    except OSError:
         font = ImageFont.load_default()
 
     wrapped = textwrap.fill(text, width=35)
@@ -419,20 +419,16 @@ def _dim_thumbnail(thumb: Image.Image) -> Image.Image:
 def _load_bracket_font(size=13):
     """Load DejaVuSans at the given size, falling back to default."""
     try:
-        return ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size
-        )
-    except (OSError, IOError):
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", size)
+    except OSError:
         return ImageFont.load_default()
 
 
 def _load_bracket_font_bold(size=16):
     """Load DejaVuSans-Bold at the given size, falling back to regular."""
     try:
-        return ImageFont.truetype(
-            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size
-        )
-    except (OSError, IOError):
+        return ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", size)
+    except OSError:
         return _load_bracket_font(size)
 
 
@@ -451,9 +447,7 @@ def _build_bracket_image(tournament_id, db_path=None) -> io.BytesIO:
     conn = sqlite3.connect(_db)
     conn.row_factory = sqlite3.Row
 
-    tournament = conn.execute(
-        "SELECT * FROM tournaments WHERE id = ?", (tournament_id,)
-    ).fetchone()
+    tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
 
     matches = conn.execute(
         """SELECT tm.*, ea.name as name_a, eb.name as name_b,
@@ -486,11 +480,7 @@ def _build_bracket_image(tournament_id, db_path=None) -> io.BytesIO:
     title_font = _load_bracket_font_bold(22)
 
     # Title
-    label = (
-        "CHAMPIONS TOURNAMENT"
-        if tournament and tournament["is_champions"]
-        else "Tournament"
-    )
+    label = "CHAMPIONS TOURNAMENT" if tournament and tournament["is_champions"] else "Tournament"
     t_num = tournament["tournament_number"] if tournament else "?"
     title = f"{label} #{t_num}"
     title_bbox = draw.textbbox((0, 0), title, font=title_font)
@@ -515,7 +505,7 @@ def _build_bracket_image(tournament_id, db_path=None) -> io.BytesIO:
     # Compute Y positions for each slot in each round
     # Round 1: 16 slots (8 matches * 2 entrants), evenly spaced
     slot_positions = {}  # (round, match_index, 'a'|'b') -> y_center
-    match_centers = {}   # (round, match_index) -> y_center (midpoint of the two slots)
+    match_centers = {}  # (round, match_index) -> y_center (midpoint of the two slots)
 
     for match_idx in range(8):
         slot_a = match_idx * 2
@@ -710,33 +700,26 @@ def _build_bracket_image(tournament_id, db_path=None) -> io.BytesIO:
 
 # --- Tournament Logic ---
 
+
 def _get_post_by_id(conn, post_id):
     """Fetch a post row by ID."""
-    return conn.execute(
-        "SELECT * FROM elo_posts WHERE id = ?", (post_id,)
-    ).fetchone()
+    return conn.execute("SELECT * FROM elo_posts WHERE id = ?", (post_id,)).fetchone()
 
 
 def _get_active_tournament(conn):
     """Return the active tournament row, or None."""
-    return conn.execute(
-        "SELECT * FROM tournaments WHERE status = 'active' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    return conn.execute("SELECT * FROM tournaments WHERE status = 'active' ORDER BY id DESC LIMIT 1").fetchone()
 
 
 def _count_completed_regular(conn):
     """Count completed non-champions tournaments."""
-    row = conn.execute(
-        "SELECT COUNT(*) FROM tournaments WHERE status = 'completed' AND is_champions = 0"
-    ).fetchone()
+    row = conn.execute("SELECT COUNT(*) FROM tournaments WHERE status = 'completed' AND is_champions = 0").fetchone()
     return row[0]
 
 
 def _last_completed_tournament(conn):
     """Return the most recently completed tournament, or None."""
-    return conn.execute(
-        "SELECT * FROM tournaments WHERE status = 'completed' ORDER BY id DESC LIMIT 1"
-    ).fetchone()
+    return conn.execute("SELECT * FROM tournaments WHERE status = 'completed' ORDER BY id DESC LIMIT 1").fetchone()
 
 
 def _should_run_champions(conn):
@@ -746,16 +729,12 @@ def _should_run_champions(conn):
         return False
     # Don't run back-to-back champions
     last = _last_completed_tournament(conn)
-    if last and last["is_champions"]:
-        return False
-    return True
+    return not (last and last["is_champions"])
 
 
 def _select_regular_entrants(conn):
     """Select 16 entrants for a regular tournament, prioritizing least-seen posts."""
-    rows = conn.execute(
-        "SELECT id FROM elo_posts ORDER BY tournaments_played ASC, RANDOM() LIMIT 16"
-    ).fetchall()
+    rows = conn.execute("SELECT id FROM elo_posts ORDER BY tournaments_played ASC, RANDOM() LIMIT 16").fetchall()
     return [r[0] for r in rows]
 
 
@@ -796,8 +775,7 @@ def _select_champions_entrants(conn):
     # If still not enough, fill with top tournament winners overall
     if len(entrants) < 16:
         fillers = conn.execute(
-            "SELECT id FROM elo_posts WHERE tournament_wins > 0 "
-            "ORDER BY tournament_wins DESC, RANDOM()"
+            "SELECT id FROM elo_posts WHERE tournament_wins > 0 " "ORDER BY tournament_wins DESC, RANDOM()"
         ).fetchall()
         for f in fillers:
             if f["id"] not in seen and len(entrants) < 16:
@@ -809,9 +787,7 @@ def _select_champions_entrants(conn):
 
 def _create_tournament(conn, is_champions=False):
     """Create a new tournament with 16 entrants and 15 matches. Returns tournament id."""
-    row = conn.execute(
-        "SELECT COALESCE(MAX(tournament_number), 0) FROM tournaments"
-    ).fetchone()
+    row = conn.execute("SELECT COALESCE(MAX(tournament_number), 0) FROM tournaments").fetchone()
     tournament_number = row[0] + 1
 
     if is_champions:
@@ -820,9 +796,7 @@ def _create_tournament(conn, is_champions=False):
         entrant_ids = _select_regular_entrants(conn)
 
     if len(entrant_ids) < 16:
-        _LOG.warning(
-            "Only %d posts available, need 16 for tournament", len(entrant_ids)
-        )
+        _LOG.warning("Only %d posts available, need 16 for tournament", len(entrant_ids))
         return None
 
     cursor = conn.execute(
@@ -835,9 +809,7 @@ def _create_tournament(conn, is_champions=False):
     if is_champions:
         post_stats = []
         for pid in entrant_ids:
-            row = conn.execute(
-                "SELECT tournament_wins FROM elo_posts WHERE id = ?", (pid,)
-            ).fetchone()
+            row = conn.execute("SELECT tournament_wins FROM elo_posts WHERE id = ?", (pid,)).fetchone()
             post_stats.append((pid, row[0] if row else 0))
         post_stats.sort(key=lambda x: x[1], reverse=True)
         seeded_ids = [pid for pid, _ in post_stats]
@@ -878,7 +850,9 @@ def _create_tournament(conn, is_champions=False):
     label = "Champions " if is_champions else ""
     _LOG.info(
         "Created %sTournament #%d (id=%d) with 16 entrants",
-        label, tournament_number, tid,
+        label,
+        tournament_number,
+        tid,
     )
     return tid
 
@@ -971,6 +945,7 @@ def _finalize_tournament(conn, tournament_id):
 
 # --- Cog ---
 
+
 class BestBotPosts(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -993,9 +968,7 @@ class BestBotPosts(commands.Cog):
             # Recovery: reset any mid-vote matches back to pending
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
-            conn.execute(
-                "UPDATE tournament_matches SET status = 'pending' WHERE status = 'active'"
-            )
+            conn.execute("UPDATE tournament_matches SET status = 'pending' WHERE status = 'active'")
             conn.commit()
             conn.close()
 
@@ -1003,9 +976,7 @@ class BestBotPosts(commands.Cog):
             self.bot.loop.create_task(self._run_loop())
 
         if not self.good_bot_channel_ids:
-            _LOG.warning(
-                "GOOD_BOT_POSTS_CHANNEL_ID not set, auto-ingestion disabled"
-            )
+            _LOG.warning("GOOD_BOT_POSTS_CHANNEL_ID not set, auto-ingestion disabled")
 
     async def cog_unload(self):
         self.running = False
@@ -1019,10 +990,7 @@ class BestBotPosts(commands.Cog):
             return
 
         for attachment in message.attachments:
-            if (
-                not attachment.content_type
-                or not attachment.content_type.startswith("image/")
-            ):
+            if not attachment.content_type or not attachment.content_type.startswith("image/"):
                 continue
             try:
                 img_data = await attachment.read()
@@ -1072,31 +1040,20 @@ class BestBotPosts(commands.Cog):
                 if tid is None:
                     await asyncio.sleep(60)
                     return
-                tournament = conn.execute(
-                    "SELECT * FROM tournaments WHERE id = ?", (tid,)
-                ).fetchone()
+                tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tid,)).fetchone()
 
-                label = (
-                    "CHAMPIONS TOURNAMENT"
-                    if tournament["is_champions"]
-                    else "Tournament"
-                )
-                await channel.send(
-                    f"**{label} #{tournament['tournament_number']} has begun!**"
-                )
+                label = "CHAMPIONS TOURNAMENT" if tournament["is_champions"] else "Tournament"
+                await channel.send(f"**{label} #{tournament['tournament_number']} has begun!**")
 
             match = _get_next_pending_match(conn, tournament["id"])
             if match is None:
                 pending = conn.execute(
-                    "SELECT COUNT(*) FROM tournament_matches "
-                    "WHERE tournament_id = ? AND status != 'completed'",
+                    "SELECT COUNT(*) FROM tournament_matches " "WHERE tournament_id = ? AND status != 'completed'",
                     (tournament["id"],),
                 ).fetchone()[0]
                 if pending == 0:
                     _finalize_tournament(conn, tournament["id"])
-                    await self._announce_tournament_complete(
-                        channel, tournament["id"], conn
-                    )
+                    await self._announce_tournament_complete(channel, tournament["id"], conn)
                     return
                 await asyncio.sleep(5)
                 return
@@ -1145,11 +1102,7 @@ class BestBotPosts(commands.Cog):
         total_in_round = 8 >> (rnd - 1)  # 8, 4, 2, 1
         round_name = ROUND_NAMES.get(rnd, f"Round {rnd}")
 
-        label = (
-            "CHAMPIONS TOURNAMENT"
-            if tournament["is_champions"]
-            else "Tournament"
-        )
+        label = "CHAMPIONS TOURNAMENT" if tournament["is_champions"] else "Tournament"
         header = (
             f"**{label} #{tournament['tournament_number']} - "
             f"{round_name} (Match {match_idx + 1}/{total_in_round})**"
@@ -1164,11 +1117,7 @@ class BestBotPosts(commands.Cog):
                 f"**B: {post_b['name']}** ({b_wins} tournament wins)"
             )
         else:
-            msg_text = (
-                f"{header}\n"
-                f"**A: {post_a['name']}**\n"
-                f"**B: {post_b['name']}**"
-            )
+            msg_text = f"{header}\n" f"**A: {post_a['name']}**\n" f"**B: {post_b['name']}**"
 
         msg = await channel.send(
             content=msg_text,
@@ -1206,24 +1155,14 @@ class BestBotPosts(commands.Cog):
 
         if rnd < 4:
             next_round_name = ROUND_NAMES.get(rnd + 1, f"Round {rnd + 1}")
-            await channel.send(
-                f"**{winner_post['name']}** wins! Advances to {next_round_name}."
-            )
+            await channel.send(f"**{winner_post['name']}** wins! Advances to {next_round_name}.")
         else:
-            await channel.send(
-                f"**{winner_post['name']}** wins the tournament!"
-            )
+            await channel.send(f"**{winner_post['name']}** wins the tournament!")
 
     async def _announce_tournament_complete(self, channel, tournament_id, conn):
         """Announce the full tournament results."""
-        tournament = conn.execute(
-            "SELECT * FROM tournaments WHERE id = ?", (tournament_id,)
-        ).fetchone()
-        label = (
-            "CHAMPIONS TOURNAMENT"
-            if tournament["is_champions"]
-            else "Tournament"
-        )
+        tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
+        label = "CHAMPIONS TOURNAMENT" if tournament["is_champions"] else "Tournament"
 
         entrants = conn.execute(
             """SELECT te.placement, ep.name
@@ -1245,12 +1184,7 @@ class BestBotPosts(commands.Cog):
 
         for p in sorted(placement_groups.keys()):
             names = " / ".join(placement_groups[p])
-            suffix = (
-                "st" if p == 1
-                else "nd" if p == 2
-                else "rd" if p == 3
-                else "th"
-            )
+            suffix = "st" if p == 1 else "nd" if p == 2 else "rd" if p == 3 else "th"
             lines.append(f"{p}{suffix}: {names}")
 
         await channel.send("\n".join(lines))
@@ -1306,9 +1240,7 @@ class BestBotPosts(commands.Cog):
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
 
-        total_tournaments = conn.execute(
-            "SELECT COUNT(*) FROM tournaments WHERE status = 'completed'"
-        ).fetchone()[0]
+        total_tournaments = conn.execute("SELECT COUNT(*) FROM tournaments WHERE status = 'completed'").fetchone()[0]
 
         leaders = conn.execute(
             """SELECT name, tournament_wins, tournaments_played, total_placement_points
@@ -1324,24 +1256,13 @@ class BestBotPosts(commands.Cog):
         conn.close()
 
         if not leaders:
-            await ctx.send(
-                f"**{total_posts} posts in pool** - No tournaments completed yet."
-            )
+            await ctx.send(f"**{total_posts} posts in pool** - No tournaments completed yet.")
             return
 
-        lines = [
-            f"**Tournament Leaderboard ({total_tournaments} tournaments completed, {total_posts} posts)**"
-        ]
+        lines = [f"**Tournament Leaderboard ({total_tournaments} tournaments completed, {total_posts} posts)**"]
         for i, row in enumerate(leaders, 1):
-            avg = (
-                row["total_placement_points"] / row["tournaments_played"]
-                if row["tournaments_played"] > 0
-                else 0
-            )
-            lines.append(
-                f"{i}. {row['name']} - {row['tournament_wins']} wins "
-                f"(avg placement: {avg:.1f})"
-            )
+            avg = row["total_placement_points"] / row["tournaments_played"] if row["tournaments_played"] > 0 else 0
+            lines.append(f"{i}. {row['name']} - {row['tournament_wins']} wins " f"(avg placement: {avg:.1f})")
 
         if active:
             c2 = sqlite3.connect(DB_PATH)
@@ -1355,17 +1276,9 @@ class BestBotPosts(commands.Cog):
             ).fetchone()
             c2.close()
             if current_match:
-                round_name = ROUND_NAMES.get(
-                    current_match["round"], f"Round {current_match['round']}"
-                )
-                t_label = (
-                    "Champions Tournament"
-                    if active["is_champions"]
-                    else "Tournament"
-                )
-                lines.append(
-                    f"**Current: {t_label} #{active['tournament_number']} - {round_name}**"
-                )
+                round_name = ROUND_NAMES.get(current_match["round"], f"Round {current_match['round']}")
+                t_label = "Champions Tournament" if active["is_champions"] else "Tournament"
+                lines.append(f"**Current: {t_label} #{active['tournament_number']} - {round_name}**")
 
         await ctx.send("\n".join(lines))
 
@@ -1400,18 +1313,10 @@ class BestBotPosts(commands.Cog):
         conn = sqlite3.connect(DB_PATH)
         conn.row_factory = sqlite3.Row
 
-        tournament = conn.execute(
-            "SELECT * FROM tournaments WHERE id = ?", (tournament_id,)
-        ).fetchone()
+        tournament = conn.execute("SELECT * FROM tournaments WHERE id = ?", (tournament_id,)).fetchone()
 
-        label = (
-            "CHAMPIONS TOURNAMENT"
-            if tournament["is_champions"]
-            else "Tournament"
-        )
-        lines = [
-            f"**{label} #{tournament['tournament_number']}** ({tournament['status']})"
-        ]
+        label = "CHAMPIONS TOURNAMENT" if tournament["is_champions"] else "Tournament"
+        lines = [f"**{label} #{tournament['tournament_number']}** ({tournament['status']})"]
 
         matches = conn.execute(
             """SELECT tm.*, ea.name as name_a, eb.name as name_b
@@ -1429,9 +1334,7 @@ class BestBotPosts(commands.Cog):
         for m in matches:
             if m["round"] != current_round:
                 current_round = m["round"]
-                round_name = ROUND_NAMES.get(
-                    current_round, f"Round {current_round}"
-                )
+                round_name = ROUND_NAMES.get(current_round, f"Round {current_round}")
                 lines.append(f"\n**{round_name}:**")
 
             a_name = m["name_a"] or "TBD"
@@ -1462,14 +1365,16 @@ class BestBotPosts(commands.Cog):
             conn.execute("DELETE FROM elo_posts")
             conn.commit()
             conn.close()
-            await ctx.send(
-                f"Cleared database. Backfilling images from {IMAGES_FOLDER}..."
-            )
+            await ctx.send(f"Cleared database. Backfilling images from {IMAGES_FOLDER}...")
 
             candidates = []
             for img_path in IMAGES_FOLDER.glob("*"):
                 if img_path.suffix.lower() not in (
-                    ".png", ".jpg", ".jpeg", ".webp", ".gif",
+                    ".png",
+                    ".jpg",
+                    ".jpeg",
+                    ".webp",
+                    ".gif",
                 ):
                     continue
                 if img_path.name.startswith("temp_"):
@@ -1478,16 +1383,11 @@ class BestBotPosts(commands.Cog):
                     continue
                 candidates.append(img_path)
 
-            await ctx.send(
-                f"Found {len(candidates)} eligible images, ingesting in parallel..."
-            )
+            await ctx.send(f"Found {len(candidates)} eligible images, ingesting in parallel...")
 
             loop = asyncio.get_event_loop()
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                futures = [
-                    loop.run_in_executor(executor, ingest_image, img_path, use_ocr)
-                    for img_path in candidates
-                ]
+                futures = [loop.run_in_executor(executor, ingest_image, img_path, use_ocr) for img_path in candidates]
                 results = await asyncio.gather(*futures)
 
             count = sum(1 for r in results if r is not None)

@@ -160,7 +160,7 @@ class ChatCoordinator(commands.Cog):
         _LOG.info("Warming channel %s history", channel_id)
         self._warmed_channels.add(channel_id)
 
-        if not isinstance(channel, (discord.TextChannel, discord.Thread, discord.DMChannel)):
+        if not isinstance(channel, discord.TextChannel | discord.Thread | discord.DMChannel):
             return
 
         try:
