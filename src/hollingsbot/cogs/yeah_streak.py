@@ -16,13 +16,24 @@ _LOG = logging.getLogger(__name__)
 DEFAULT_DB_PATH = Path("/data/hollingsbot.db")
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
 
-# Obnoxious celebration messages
+# Obnoxious celebration messages (varying levels of obnoxiousness)
 STREAK_MESSAGES = [
-    "{streak}X YEAH STREAK CONGRATULATIONS {mention}!!!",
-    "HOLY MOLY {mention} JUST HIT A {streak}X YEAH STREAK!!!",
-    "WOW WOW WOW {streak} YEAHS IN A ROW FROM {mention}!!!",
-    "SOMEBODY STOP {mention}!!! {streak}X YEAH STREAK!!!",
-    "{mention} IS IN THE YEAH ZONE!!! {streak}X STREAK!!!",
+    # Maximum obnoxious
+    "STOP THE PRESSES!!! {mention} JUST DROPPED A {streak}X YEAH STREAK!!! THIS IS NOT A DRILL!!!",
+    "SOMEBODY CALL THE FIRE DEPARTMENT BECAUSE {mention} IS ON FIRE WITH A {streak}X YEAH STREAK!!!",
+    # Hype announcer
+    "LADIES AND GENTLEMEN... {mention} WITH THE {streak}X YEAH STREAK!!! INCREDIBLE!!!",
+    "AND THE CROWD GOES WILD!!! {mention} LANDS A {streak}X YEAH STREAK!!!",
+    # Casual impressed
+    "{mention} just casually dropped a {streak}x yeah streak. respect.",
+    "nice. {mention} with the {streak}x yeah streak.",
+    # Sarcastic/deadpan
+    "oh wow {mention} said yeah {streak} times in a row. groundbreaking.",
+    "alert: {mention} has achieved a {streak}x yeah streak. society will never be the same.",
+    # Wholesome
+    "{mention} you beautiful soul, you just hit a {streak}x yeah streak and we're all proud of you",
+    # Unhinged
+    "THE YEAH ZONE CLAIMS ANOTHER VICTIM... {mention} CONSUMED BY {streak} CONSECUTIVE YEAHS...",
 ]
 
 
