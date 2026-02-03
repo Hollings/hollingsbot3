@@ -20,10 +20,10 @@ ASSETS_DIR = Path(__file__).parent.parent / "assets"
 STREAK_MESSAGES = [
     "🚨 YEAH STREAK ALERT 🚨 {mention} just hit {streak}x !!! 🔥🔥🔥",
     "╔══════════════════╗\n   {streak}x YEAH STREAK\n      {mention}\n╚══════════════════╝",
-    "⚡ {streak} YEAHS ⚡ {mention} IS IN THE ZONE ⚡",
+    "⚡ {streak}x YEAH ⚡ {mention} IS IN THE ZONE ⚡",
     "👏 YEAH 👏 STREAK 👏 {streak} 👏 {mention} 👏",
     "|| {streak}x YEAH || {mention} CANNOT BE STOPPED ||",
-    "w h o a . . . {mention} just did {streak} yeahs in a row",
+    "w h o a . . . {mention} just said yeah {streak} times in a row",
     "✨ {mention} ✨ {streak}x yeah streak ✨ incredible ✨",
     "🏆 CERTIFIED YEAH MOMENT 🏆 {mention} x{streak}",
     ">>> {mention} YEAH STREAK LEVEL {streak} UNLOCKED <<<",
