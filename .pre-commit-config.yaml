@@ -57,6 +57,34 @@ repos:
         additional_dependencies: ["bandit[toml]"]
         exclude: ^tests/
 
+  # Pre-push hooks - run exact same checks as CI to prevent failed pushes
+  - repo: local
+    hooks:
+      - id: ci-lint-check
+        name: CI lint check (ruff check)
+        entry: ruff check src/ tests/ scripts/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: ci-format-check
+        name: CI format check (ruff format --check)
+        entry: ruff format --check src/ tests/ scripts/
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+
+      - id: ci-test
+        name: CI tests (pytest)
+        entry: bash -c 'PYTHONPATH=src pytest tests/ -v --tb=short'
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      # Note: bandit already runs in pre-commit stage with isolated env
+
 # CI configuration
 ci:
   autofix_commit_msg: |

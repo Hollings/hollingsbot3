@@ -775,7 +775,7 @@ def _select_champions_entrants(conn):
     # If still not enough, fill with top tournament winners overall
     if len(entrants) < 16:
         fillers = conn.execute(
-            "SELECT id FROM elo_posts WHERE tournament_wins > 0 " "ORDER BY tournament_wins DESC, RANDOM()"
+            "SELECT id FROM elo_posts WHERE tournament_wins > 0 ORDER BY tournament_wins DESC, RANDOM()"
         ).fetchall()
         for f in fillers:
             if f["id"] not in seen and len(entrants) < 16:
@@ -1048,7 +1048,7 @@ class BestBotPosts(commands.Cog):
             match = _get_next_pending_match(conn, tournament["id"])
             if match is None:
                 pending = conn.execute(
-                    "SELECT COUNT(*) FROM tournament_matches " "WHERE tournament_id = ? AND status != 'completed'",
+                    "SELECT COUNT(*) FROM tournament_matches WHERE tournament_id = ? AND status != 'completed'",
                     (tournament["id"],),
                 ).fetchone()[0]
                 if pending == 0:
@@ -1104,8 +1104,7 @@ class BestBotPosts(commands.Cog):
 
         label = "CHAMPIONS TOURNAMENT" if tournament["is_champions"] else "Tournament"
         header = (
-            f"**{label} #{tournament['tournament_number']} - "
-            f"{round_name} (Match {match_idx + 1}/{total_in_round})**"
+            f"**{label} #{tournament['tournament_number']} - {round_name} (Match {match_idx + 1}/{total_in_round})**"
         )
 
         if tournament["is_champions"]:
@@ -1117,7 +1116,7 @@ class BestBotPosts(commands.Cog):
                 f"**B: {post_b['name']}** ({b_wins} tournament wins)"
             )
         else:
-            msg_text = f"{header}\n" f"**A: {post_a['name']}**\n" f"**B: {post_b['name']}**"
+            msg_text = f"{header}\n**A: {post_a['name']}**\n**B: {post_b['name']}**"
 
         msg = await channel.send(
             content=msg_text,
@@ -1262,7 +1261,7 @@ class BestBotPosts(commands.Cog):
         lines = [f"**Tournament Leaderboard ({total_tournaments} tournaments completed, {total_posts} posts)**"]
         for i, row in enumerate(leaders, 1):
             avg = row["total_placement_points"] / row["tournaments_played"] if row["tournaments_played"] > 0 else 0
-            lines.append(f"{i}. {row['name']} - {row['tournament_wins']} wins " f"(avg placement: {avg:.1f})")
+            lines.append(f"{i}. {row['name']} - {row['tournament_wins']} wins (avg placement: {avg:.1f})")
 
         if active:
             c2 = sqlite3.connect(DB_PATH)
