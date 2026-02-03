@@ -86,6 +86,10 @@ class YeahStreakCog(commands.Cog):
         if not message.guild:
             return
 
+        # Ignore own messages
+        if message.author.id == self.bot.user.id:
+            return
+
         user_id = message.author.id
         has_yeah = "yeah" in message.content.lower()
 
