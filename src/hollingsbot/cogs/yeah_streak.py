@@ -36,8 +36,8 @@ class YeahStreakCog(commands.Cog):
         self.bot = bot
         self.db_path = Path(os.getenv("PROMPT_DB_PATH", str(DEFAULT_DB_PATH)))
         self._conn: sqlite3.Connection | None = None
-        # In-memory tracking of current streaks: {user_id: current_streak}
-        self.current_streaks: dict[int, int] = {}
+        # In-memory tracking of current streaks: {(channel_id, user_id): current_streak}
+        self.current_streaks: dict[tuple[int, int], int] = {}
         self._init_db()
 
     def _init_db(self) -> None:
@@ -90,19 +90,19 @@ class YeahStreakCog(commands.Cog):
         if message.author.id == self.bot.user.id:
             return
 
-        user_id = message.author.id
+        key = (message.channel.id, message.author.id)
         has_yeah = "yeah" in message.content.lower()
 
         if has_yeah:
             # Increment streak
-            self.current_streaks[user_id] = self.current_streaks.get(user_id, 0) + 1
+            self.current_streaks[key] = self.current_streaks.get(key, 0) + 1
         else:
-            # Check if they had a streak worth announcing (2+)
-            streak = self.current_streaks.get(user_id, 0)
-            if streak >= 2:
+            # Check if they had a streak worth announcing (4+)
+            streak = self.current_streaks.get(key, 0)
+            if streak >= 4:
                 await self._announce_streak_end(message.channel, message.author, streak)
             # Reset streak
-            self.current_streaks[user_id] = 0
+            self.current_streaks[key] = 0
 
     async def _announce_streak_end(self, channel: discord.abc.Messageable, user: discord.User, streak: int) -> None:
         """Announce streak end with obnoxious message and image."""
