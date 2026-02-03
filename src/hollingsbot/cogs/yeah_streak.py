@@ -112,7 +112,8 @@ class YeahStreakCog(commands.Cog):
         if is_new_record:
             msg += " NEW PERSONAL BEST!!!"
 
-        image_path = ASSETS_DIR / "theyeahzone.png"
+        image_choices = [ASSETS_DIR / "theyeahzone.png", ASSETS_DIR / "yeahzone2.png"]
+        image_path = random.choice(image_choices)
         try:
             if image_path.exists():
                 await channel.send(content=msg, file=discord.File(image_path))
