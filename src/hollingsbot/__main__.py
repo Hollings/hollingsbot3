@@ -96,6 +96,7 @@ async def main():
         await _ensure_loaded("hollingsbot.cogs.debug_commands")
         await _ensure_loaded("hollingsbot.cogs.feature_requests")
         await _ensure_loaded("hollingsbot.cogs.best_bot_posts")
+        await _ensure_loaded("hollingsbot.cogs.yeah_streak")
         logger.info("starting bot")
         await bot.start(token)
 
