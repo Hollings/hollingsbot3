@@ -1204,7 +1204,30 @@ class BestBotPosts(commands.Cog):
             await asyncio.sleep(POLL_INTERVAL)
             if not self.running:
                 return None
-            msg = await msg.channel.fetch_message(msg.id)
+
+            # Retry fetching message with exponential backoff (handle Discord API errors)
+            max_retries = 3
+            for attempt in range(max_retries):
+                try:
+                    msg = await msg.channel.fetch_message(msg.id)
+                    break
+                except discord.errors.DiscordServerError as e:
+                    if attempt < max_retries - 1:
+                        wait_time = 2**attempt
+                        _LOG.warning(
+                            "Discord API error (attempt %d/%d), retrying in %ds: %s",
+                            attempt + 1,
+                            max_retries,
+                            wait_time,
+                            e,
+                        )
+                        await asyncio.sleep(wait_time)
+                    else:
+                        _LOG.error("Discord API error after %d retries, skipping poll cycle: %s", max_retries, e)
+                        continue  # Skip this poll cycle, try again next interval
+                except Exception as e:
+                    _LOG.error("Unexpected error fetching message: %s", e)
+                    continue
 
             a_count = b_count = 1
             for r in msg.reactions:

@@ -4,40 +4,101 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a Discord bot (`hollingsbot3`) built with discord.py, running in Docker with Celery workers for asynchronous task processing. The bot provides LLM chat, image generation (including editing), starboard functionality, and various utilities.
+Discord bot (`hollingsbot3`) built with discord.py, running in Docker with Celery workers for async task processing. Provides LLM chat, image generation, starboard, and various utilities.
+
+## Development Commands
+
+```bash
+# Start bot (Docker)
+docker compose up -d
+
+# View logs
+docker compose logs -f bot          # Main bot
+docker compose logs -f celery_text  # Text worker
+docker compose logs -f celery_image # Image worker
+
+# Rebuild after dependency changes
+docker compose up --build -d
+
+# ARM/Orange Pi (CPU-only, no GPU)
+docker compose -f docker-compose.yml -f docker-compose.arm.yml up --build
+
+# Linting & formatting
+make lint                    # Check with ruff
+make format                  # Auto-fix with ruff
+
+# Testing (run locally, not in Docker)
+make test                    # Run all tests
+pytest tests/test_foo.py -k "test_name"  # Run specific test
+make test-cov                # With coverage
+
+# Type checking & security
+make typecheck               # mypy
+make security                # bandit
+make check                   # All checks (lint, typecheck, security, test)
+
+# Pre-commit hooks
+make pre-commit              # Install hooks
+make pre-commit-all          # Run on all files
+```
+
+## Deployment
+
+**Production deployment is automatic.** Pushing to `main` auto-deploys to the Orange Pi via CI.
+
+### SSH Access to Production (Orange Pi)
+
+```bash
+ssh ubuntu@100.120.250.100
+```
+
+Once connected:
+```bash
+cd /home/ubuntu/hollingsbot3
+
+# View logs
+docker compose logs -f bot          # Main bot
+docker compose logs -f celery_text  # Text worker
+docker compose logs -f celery_image # Image worker
+
+# Restart services
+docker compose down
+docker compose up -d --build
+
+# Check container status
+docker ps --filter name=hollingsbot
+```
+
+**Auto-deploy mechanism**: The Orange Pi runs `/home/ubuntu/hollingsbot3/scripts/auto_deploy.sh` periodically (via systemd timer/cron). It polls GitHub for new commits and automatically pulls + rebuilds if changes are detected.
 
 ## Architecture
 
 ### Service Architecture
-The bot runs as three separate Docker containers orchestrated by docker-compose:
-- **bot**: Main Discord bot (no GPU, uses watchfiles for auto-reload)
-- **celery_text**: Text generation worker (queue: `text`, concurrency: 1, no GPU)
+Docker containers orchestrated by docker-compose:
+- **bot**: Main Discord bot (auto-reloads on Python file changes via watchfiles)
+- **celery_text**: Text generation worker (queue: `text`, concurrency: 1)
 - **celery_image**: Image generation worker (queue: `image`, concurrency: 2, requires NVIDIA GPU)
 - **redis**: Message broker for Celery tasks
+- **wendy_proxy**: FastAPI proxy for Wendy deployments (no Discord token access)
 
-All services share the same codebase mounted at `/app`, with state persisted in Docker volumes (`prompt_db_data`).
+Codebase mounted at `/app`, state in `./data/` bind mount.
 
 ### Core Components
 
-**Cog System**: The bot uses discord.py's Cog pattern for modular functionality:
-- `general.py` - Basic commands (ping, help)
+**Cog System** (`src/hollingsbot/cogs/`): discord.py Cog pattern for modular features. Key cogs:
+- `chat_coordinator.py` - Routes messages to appropriate chat bots
+- `chat_bots/wendy_bot.py` - Main LLM chat with tool use and conversation history
 - `image_gen_cog.py` - Image generation/editing via Celery
-- `llm_chat.py` - LLM-powered chat with conversation history
-- `gpt2_chat.py` - Legacy GPT-2 chat
-- `admin.py` - Admin commands
-- `gif_chain.py` - GIF utilities
-- `starboard.py` - Message reposting on reactions (optional)
+- `starboard.py` - Message reposting on reactions
+- `temp_bot_commands.py` - Temporary webhook-based bots
 
-**Task Queue**: `tasks.py` defines Celery tasks with specific queue routing:
-- `generate_image` → `image` queue (GPU-accelerated)
-- `generate_text` → `text` queue
-- `generate_llm_chat_response` → `text` queue
+**Task Queue** (`tasks.py`): Celery tasks with queue routing:
+- `generate_image` -> `image` queue (GPU)
+- `generate_text`, `generate_llm_chat_response` -> `text` queue
 
-**Generator Pattern**: Both image and text generation use a factory pattern:
-- `image_generators/__init__.py::get_image_generator(api, model)` - Returns `ImageGeneratorAPI` instance
-  - Supports: `replicate` (ReplicateImageGenerator), `svg`/`openai-svg` (SvgGPTImageGenerator)
-- `text_generators/__init__.py::get_text_generator(api, model)` - Returns `TextGeneratorAPI` instance
-  - Supports: `huggingface`, `anthropic`, `openai`/`chatgpt`
+**Generator Pattern**: Factory functions for pluggable backends:
+- `image_generators/__init__.py::get_image_generator(api, model)` -> `ImageGeneratorAPI`
+- `text_generators/__init__.py::get_text_generator(api, model)` -> `TextGeneratorAPI`
 
 ### Image Generation Configuration
 
@@ -120,88 +181,43 @@ The bot uses dynamic prefixes to prevent conflicts between image generation and 
 - **Bang prefix (`!`)**: Disabled in image-gen channels (defined by `STABLE_DIFFUSION_CHANNEL_IDS`) to allow image prompts like `!a cat`
 - Image-gen cogs listen on `on_message` and check for configured prefixes directly
 
-## Development Workflow
-
-### Running the Bot
-
-**Start/Restart** (required after every code change):
-```bash
-docker compose down && docker compose up -d
-```
-
-**View logs**:
-```bash
-docker compose logs -f bot
-docker compose logs -f celery_text
-docker compose logs -f celery_image
-```
-
-**Build from scratch**:
-```bash
-docker compose up --build
-```
-
-**For ARM/Orange Pi** (uses CPU-only, no GPU):
-```bash
-docker compose -f docker-compose.yml -f docker-compose.arm.yml up --build
-```
-
-### Auto-reload
-
-The bot and celery workers use `watchfiles` to monitor Python files and auto-restart on changes. However, **you must still restart the containers** via `docker compose down && docker compose up -d` for code changes to take effect, as watchfiles only reloads within the running container.
-
-### Testing
-
-Tests run outside Docker and require local dependencies:
-```bash
-pip install -r requirements.txt
-pytest
-```
-
 ### State Persistence
 
-- **SQLite database** (`hollingsbot.db` in `/data` volume): Unified database storing all bot data including image generation tracking, cost tracking, message history, summaries, starboard posts, temp bots, and more
-- **State files** in `generated/`: LLM chat state (`llm_chat_new_state.json` with system prompts and model preferences)
-- **Generated images**: Written to `generated/` directory, mounted as volume
+- **SQLite database** (`./data/hollingsbot.db`): All bot data (image gen tracking, costs, summaries, starboard, temp bots)
+- **State files** in `generated/`: LLM chat state (`llm_chat_new_state.json`)
+- **Generated images**: `generated/` directory
 
-## Environment Variables
+## Key Environment Variables
 
-Key configuration (see `.env` file):
-- **Core**: `DISCORD_TOKEN`, `CELERY_BROKER_URL`, `CELERY_RESULT_BACKEND`
-- **LLM**: `DEFAULT_LLM_PROVIDER` (openai/anthropic), `DEFAULT_LLM_MODEL`, `TEXT_TIMEOUT` (default 180s)
-- **LLM History**: `LLM_HISTORY_LIMIT` (default 50), `LLM_MAX_TURNS_SENT` (default 8)
-- **Summarization**: `LLM_SUMMARY_ENABLED` (0/1), `LLM_SUMMARY_MODEL` (default claude-haiku-4-5), `LLM_SUMMARY_CHAR_LIMIT` (default 8000)
-- **Image Gen**: `IMAGE_TIMEOUT` (default 30s), `IMAGE_OUTPUT_DIR`
-- **Channel Allowlists**: `STABLE_DIFFUSION_CHANNEL_IDS` (comma-separated), `EDIT_CHANNEL_IDS`, `LLM_WHITELIST_CHANNELS`
-- **Starboard**: `ENABLE_STARBOARD`, `STARBOARD_CHANNEL_ID`, `STARBOARD_IGNORE_CHANNELS`, `STARBOARD_WHITELIST_CHANNEL_IDS`
-- **System Prompt**: `SYSTEM_PROMPT_FILE` (path to custom prompt file)
-- **Webhooks**: `WEBHOOK_URL` (for PR notifications)
-- **Database**: `PROMPT_DB_PATH` (default `/data/hollingsbot.db`) - unified database for all bot data
+See `.env` file for full list. Most important:
+- `DISCORD_TOKEN` - Bot token (required)
+- `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL` - LLM defaults
+- `STABLE_DIFFUSION_CHANNEL_IDS`, `LLM_WHITELIST_CHANNELS` - Channel allowlists (comma-separated)
+- `SYSTEM_PROMPT_FILE` - Path to system prompt (default: `config/system_prompt.txt`)
+- `PROMPT_DB_PATH` - SQLite database path (default: `/data/hollingsbot.db`)
 
 ## Adding New Features
 
+### Adding a New Cog
+1. Create file in `src/hollingsbot/cogs/` inheriting from `commands.Cog`
+2. Register in `__main__.py`: `await bot.load_extension("hollingsbot.cogs.your_cog")`
+
 ### Adding a New Image Generator
-1. Create a new class in `image_generators/` implementing `ImageGeneratorAPI`
+1. Create class in `image_generators/` implementing `ImageGeneratorAPI`
 2. Register in `image_generators/__init__.py::get_image_generator()`
-3. Add entry to `image_gen_config.json` with a unique prefix
+3. Add entry to `image_gen_config.json`
 
 ### Adding a New Text Generator
-1. Create a new class in `text_generators/` implementing `TextGeneratorAPI`
+1. Create class in `text_generators/` implementing `TextGeneratorAPI`
 2. Register in `text_generators/__init__.py::get_text_generator()`
-3. Update environment variables for default provider/model
-
-### Adding a New Cog
-1. Create a new file in `cogs/` inheriting from `commands.Cog`
-2. Register in `__main__.py` via `await bot.load_extension("hollingsbot.cogs.your_cog")`
-3. Restart the bot
 
 ## Important Notes
 
-- **GPU Requirement**: The `celery_image` worker requires an NVIDIA GPU with the NVIDIA Container Toolkit installed on the host
-- **Privacy Mode**: Set `STABLE_DIFFUSION_PRIVACY=1` to disable logging of message content
-- **Bot Restart Interval**: The bot auto-restarts every 6 hours by default (`BOT_RESTART_INTERVAL` in seconds)
-- **Conversation History**: LLM chat history is in-memory only and cleared on bot restart
-- **Model Availability**: Check `src/hollingsbot/available_models.json` for valid LLM models (loaded dynamically by `llm_chat.py`)
+- **GPU Requirement**: `celery_image` requires NVIDIA GPU with Container Toolkit
+- **Privacy Mode**: `STABLE_DIFFUSION_PRIVACY=1` disables message content logging
+- **Auto-restart**: Bot restarts every 6 hours (`BOT_RESTART_INTERVAL`)
+- **Available Models**: `src/hollingsbot/available_models.json`
+- **Unicode**: Avoid emojis in Python code due to `UnicodeEncodeError: 'charmap' codec can't encode character`
 
 ## Wendy Deployment System
 
