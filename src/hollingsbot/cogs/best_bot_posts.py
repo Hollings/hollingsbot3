@@ -176,6 +176,12 @@ def _init_db():
         except sqlite3.OperationalError:
             pass  # Column already exists
 
+    # Add discord_message_id to tournament_matches for crash recovery
+    try:
+        conn.execute("ALTER TABLE tournament_matches ADD COLUMN discord_message_id INTEGER")
+    except sqlite3.OperationalError:
+        pass  # Column already exists
+
     conn.commit()
     conn.close()
 
@@ -965,10 +971,14 @@ class BestBotPosts(commands.Cog):
         if not TOURNAMENT_CHANNEL_ID:
             _LOG.warning("TOURNAMENT_CHANNEL_ID not set, tournaments disabled")
         else:
-            # Recovery: reset any mid-vote matches back to pending
+            # Recovery: only reset active matches that never got a message posted.
+            # Matches with a discord_message_id will be resumed by _run_tournament_step
+            # instead of re-posted.
             conn = sqlite3.connect(DB_PATH)
             conn.row_factory = sqlite3.Row
-            conn.execute("UPDATE tournament_matches SET status = 'pending' WHERE status = 'active'")
+            conn.execute(
+                "UPDATE tournament_matches SET status = 'pending' WHERE status = 'active' AND discord_message_id IS NULL"
+            )
             conn.commit()
             conn.close()
 
@@ -1047,6 +1057,18 @@ class BestBotPosts(commands.Cog):
 
             match = _get_next_pending_match(conn, tournament["id"])
             if match is None:
+                # Check for an active match we can resume (posted before restart)
+                resumable = conn.execute(
+                    """SELECT * FROM tournament_matches
+                       WHERE tournament_id = ? AND status = 'active'
+                         AND discord_message_id IS NOT NULL
+                       ORDER BY round ASC, match_index ASC LIMIT 1""",
+                    (tournament["id"],),
+                ).fetchone()
+                if resumable:
+                    await self._resume_match(channel, resumable, tournament, conn)
+                    return
+
                 pending = conn.execute(
                     "SELECT COUNT(*) FROM tournament_matches WHERE tournament_id = ? AND status != 'completed'",
                     (tournament["id"],),
@@ -1122,6 +1144,13 @@ class BestBotPosts(commands.Cog):
             content=msg_text,
             file=discord.File(fp=img_buf, filename="matchup.png"),
         )
+        # Store message ID immediately so a restart can resume this match instead of re-posting
+        conn.execute(
+            "UPDATE tournament_matches SET discord_message_id = ? WHERE id = ?",
+            (msg.id, match_id),
+        )
+        conn.commit()
+
         await msg.add_reaction("\U0001f170")  # A button
         await msg.add_reaction("\U0001f171")  # B button
 
@@ -1149,6 +1178,60 @@ class BestBotPosts(commands.Cog):
         loser_placement = PLACEMENT_BY_ROUND[rnd]
         _record_placement(conn, tid, loser_post["id"], loser_placement)
 
+        _advance_winner(conn, tid, rnd, match_idx, winner_post["id"])
+        conn.commit()
+
+        if rnd < 4:
+            next_round_name = ROUND_NAMES.get(rnd + 1, f"Round {rnd + 1}")
+            await channel.send(f"**{winner_post['name']}** wins! Advances to {next_round_name}.")
+        else:
+            await channel.send(f"**{winner_post['name']}** wins the tournament!")
+
+    async def _resume_match(self, channel, match, tournament, conn):
+        """Re-attach to an already-posted match after a bot restart."""
+        match_id = match["id"]
+        rnd = match["round"]
+        match_idx = match["match_index"]
+        tid = tournament["id"]
+
+        try:
+            msg = await channel.fetch_message(match["discord_message_id"])
+        except discord.NotFound:
+            _LOG.warning("Match %d message was deleted, resetting to pending", match_id)
+            conn.execute(
+                "UPDATE tournament_matches SET status = 'pending', discord_message_id = NULL WHERE id = ?",
+                (match_id,),
+            )
+            conn.commit()
+            return
+        except Exception as e:
+            _LOG.error("Could not fetch message for match %d, will retry: %s", match_id, e)
+            await asyncio.sleep(5)
+            return
+
+        _LOG.info("Resuming match %d from message %d", match_id, match["discord_message_id"])
+
+        winner_idx = await self._poll_winner(msg)
+        if winner_idx is None:
+            conn.execute(
+                "UPDATE tournament_matches SET status = 'pending', discord_message_id = NULL WHERE id = ?",
+                (match_id,),
+            )
+            conn.commit()
+            return
+
+        post_a = _get_post_by_id(conn, match["post_a_id"])
+        post_b = _get_post_by_id(conn, match["post_b_id"])
+
+        winner_post = post_a if winner_idx == 0 else post_b
+        loser_post = post_b if winner_idx == 0 else post_a
+
+        conn.execute(
+            "UPDATE tournament_matches SET winner_id = ?, status = 'completed' WHERE id = ?",
+            (winner_post["id"], match_id),
+        )
+        loser_placement = PLACEMENT_BY_ROUND[rnd]
+        _record_placement(conn, tid, loser_post["id"], loser_placement)
         _advance_winner(conn, tid, rnd, match_idx, winner_post["id"])
         conn.commit()
 
@@ -1207,6 +1290,7 @@ class BestBotPosts(commands.Cog):
 
             # Retry fetching message with exponential backoff (handle Discord API errors)
             max_retries = 3
+            fetch_failed = False
             for attempt in range(max_retries):
                 try:
                     msg = await msg.channel.fetch_message(msg.id)
@@ -1224,10 +1308,13 @@ class BestBotPosts(commands.Cog):
                         await asyncio.sleep(wait_time)
                     else:
                         _LOG.error("Discord API error after %d retries, skipping poll cycle: %s", max_retries, e)
-                        continue  # Skip this poll cycle, try again next interval
+                        fetch_failed = True
                 except Exception as e:
                     _LOG.error("Unexpected error fetching message: %s", e)
-                    continue
+                    fetch_failed = True
+                    break
+            if fetch_failed:
+                continue
 
             a_count = b_count = 1
             for r in msg.reactions:
