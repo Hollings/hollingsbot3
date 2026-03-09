@@ -31,6 +31,7 @@ TOURNAMENT_CHANNEL_ID = os.getenv("TOURNAMENT_CHANNEL_ID")
 GOOD_BOT_POSTS_CHANNEL_ID = os.getenv("GOOD_BOT_POSTS_CHANNEL_ID")
 IMAGES_FOLDER = Path(os.getenv("BEST_BOT_POSTS_IMAGES", "generated/best_bot_posts"))
 POLL_INTERVAL = 7
+POLL_TIMEOUT = 12 * 60 * 60  # 12 hours max polling before auto-resolving
 MATCHUP_DELAY = 1
 CHAMPIONS_INTERVAL = 16  # Run champions tournament every N regular tournaments
 
@@ -1281,8 +1282,13 @@ class BestBotPosts(commands.Cog):
             _LOG.warning("Failed to build bracket image for completed tournament")
 
     async def _poll_winner(self, msg):
-        """Poll until same winner twice in a row, requiring at least one human vote."""
+        """Poll until same winner twice in a row, requiring at least one human vote.
+
+        Returns 0 (A wins), 1 (B wins), or None if polling was cancelled.
+        If no votes arrive within POLL_TIMEOUT, picks a random winner.
+        """
         prev_winner = None
+        poll_start = asyncio.get_event_loop().time()
         while self.running:
             await asyncio.sleep(POLL_INTERVAL)
             if not self.running:
@@ -1324,6 +1330,15 @@ class BestBotPosts(commands.Cog):
                     b_count = r.count
 
             if a_count + b_count <= 2:
+                elapsed = asyncio.get_event_loop().time() - poll_start
+                if elapsed > POLL_TIMEOUT:
+                    winner = random.randint(0, 1)
+                    _LOG.info(
+                        "Poll timeout after %.0fs with no votes, picking random winner: %s",
+                        elapsed,
+                        "A" if winner == 0 else "B",
+                    )
+                    return winner
                 prev_winner = None
                 continue
 
@@ -1332,6 +1347,15 @@ class BestBotPosts(commands.Cog):
             elif b_count > a_count:
                 winner = 1
             else:
+                elapsed = asyncio.get_event_loop().time() - poll_start
+                if elapsed > POLL_TIMEOUT:
+                    winner = random.randint(0, 1)
+                    _LOG.info(
+                        "Poll timeout after %.0fs with tied votes, picking random winner: %s",
+                        elapsed,
+                        "A" if winner == 0 else "B",
+                    )
+                    return winner
                 prev_winner = None
                 continue
 
