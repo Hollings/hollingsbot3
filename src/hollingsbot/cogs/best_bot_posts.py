@@ -1163,6 +1163,14 @@ class BestBotPosts(commands.Cog):
             )
             conn.commit()
             return
+        if winner_idx == "timeout":
+            # No votes after POLL_TIMEOUT - reset match so it gets re-posted
+            conn.execute(
+                "UPDATE tournament_matches SET status = 'pending', discord_message_id = NULL WHERE id = ?",
+                (match_id,),
+            )
+            conn.commit()
+            return
 
         if winner_idx == 0:
             winner_post = post_a
@@ -1213,7 +1221,8 @@ class BestBotPosts(commands.Cog):
         _LOG.info("Resuming match %d from message %d", match_id, match["discord_message_id"])
 
         winner_idx = await self._poll_winner(msg)
-        if winner_idx is None:
+        if winner_idx is None or winner_idx == "timeout":
+            # Reset match so it gets re-posted as a fresh message
             conn.execute(
                 "UPDATE tournament_matches SET status = 'pending', discord_message_id = NULL WHERE id = ?",
                 (match_id,),
@@ -1284,8 +1293,8 @@ class BestBotPosts(commands.Cog):
     async def _poll_winner(self, msg):
         """Poll until same winner twice in a row, requiring at least one human vote.
 
-        Returns 0 (A wins), 1 (B wins), or None if polling was cancelled.
-        If no votes arrive within POLL_TIMEOUT, picks a random winner.
+        Returns 0 (A wins), 1 (B wins), None if polling was cancelled,
+        or "timeout" if POLL_TIMEOUT elapsed with no votes or a tied vote.
         """
         prev_winner = None
         poll_start = asyncio.get_event_loop().time()
@@ -1332,13 +1341,8 @@ class BestBotPosts(commands.Cog):
             if a_count + b_count <= 2:
                 elapsed = asyncio.get_event_loop().time() - poll_start
                 if elapsed > POLL_TIMEOUT:
-                    winner = random.randint(0, 1)
-                    _LOG.info(
-                        "Poll timeout after %.0fs with no votes, picking random winner: %s",
-                        elapsed,
-                        "A" if winner == 0 else "B",
-                    )
-                    return winner
+                    _LOG.info("Poll timeout after %.0fs with no votes, will re-post match", elapsed)
+                    return "timeout"
                 prev_winner = None
                 continue
 
@@ -1349,13 +1353,8 @@ class BestBotPosts(commands.Cog):
             else:
                 elapsed = asyncio.get_event_loop().time() - poll_start
                 if elapsed > POLL_TIMEOUT:
-                    winner = random.randint(0, 1)
-                    _LOG.info(
-                        "Poll timeout after %.0fs with tied votes, picking random winner: %s",
-                        elapsed,
-                        "A" if winner == 0 else "B",
-                    )
-                    return winner
+                    _LOG.info("Poll timeout after %.0fs with tied votes, will re-post match", elapsed)
+                    return "timeout"
                 prev_winner = None
                 continue
 
