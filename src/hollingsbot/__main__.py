@@ -97,6 +97,7 @@ async def main():
         await _ensure_loaded("hollingsbot.cogs.feature_requests")
         await _ensure_loaded("hollingsbot.cogs.best_bot_posts")
         await _ensure_loaded("hollingsbot.cogs.yeah_streak")
+        await _ensure_loaded("hollingsbot.cogs.tamagotchi")
         logger.info("starting bot")
         await bot.start(token)
 
@@ -104,6 +105,8 @@ async def main():
 @bot.event
 async def on_message(message):
     if message.author.bot:
+        # Allow bots to use commands (e.g., for tamagotchi) but skip logging
+        await bot.process_commands(message)
         return
     privacy = os.getenv("STABLE_DIFFUSION_PRIVACY", "0").strip().lower() in {"1", "true", "yes", "on"}
     if not privacy:
