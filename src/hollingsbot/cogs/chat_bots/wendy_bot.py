@@ -381,18 +381,11 @@ class WendyBot:
                 # Real user message → "user"
                 role = "user"
 
-            # Strip arrival/departure announcements from content
-            content = self._strip_arrival_announcement(turn.content)
-
-            # Skip turns that are now empty after stripping
-            if not content.strip():
-                continue
-
             # Create new turn with translated role
             translated.append(
                 ConversationTurn(
                     role=role,
-                    content=content,
+                    content=turn.content,
                     images=turn.images,
                     message_id=turn.message_id,
                     author_id=turn.author_id,
@@ -402,27 +395,6 @@ class WendyBot:
             )
 
         return translated
-
-    def _strip_arrival_announcement(self, text: str) -> str:
-        """Strip arrival/departure announcements from text.
-
-        Strips patterns like:
-        - '*[BotName arrives for N message(s)]*'
-        - '*[BotName departs]*'
-        - '*[BotName has depleted all replies and fades away]*'
-        """
-        # Pattern: *[SomeName arrives for N message(s)]*
-        arrival_pattern = r"\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*"
-        # Pattern: *[SomeName departs]*
-        depart_pattern = r"\*\[.+?\s+departs\]\*\s*"
-        # Pattern: *[SomeName has depleted all replies and fades away]*
-        deplete_pattern = r"\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*"
-
-        cleaned = text
-        cleaned = re.sub(arrival_pattern, "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(depart_pattern, "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(deplete_pattern, "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip()
 
     def _build_conversation_payload(
         self,

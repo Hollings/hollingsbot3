@@ -97,6 +97,44 @@ def generate_bot_name() -> str:
     return f"{random.choice(_ADJECTIVES)} {random.choice(_NOUNS)}"
 
 
+# Departure phrases - used when a temp bot leaves the conversation
+_DEPARTURE_PHRASES = [
+    "departs",
+    "leaves",
+    "slips away into the night",
+    "fades from view",
+    "vanishes without a word",
+    "steps out of the room",
+    "takes their leave",
+    "disappears into the crowd",
+    "slips quietly out the door",
+    "drifts off into silence",
+    "retreats into the shadows",
+    "turns and walks away",
+    "closes the door behind them",
+    "waves and wanders off",
+    "mutters something and disappears",
+    "yawns and vanishes",
+    "shrugs and slips away",
+    "exits stage left",
+    "blinks out of existence",
+    "remembers a prior engagement",
+    "tips their hat and leaves",
+    "wanders off in search of snacks",
+    "quietly excuses themselves",
+    "slips out unnoticed",
+    "is gone",
+    "leaves the conversation",
+    "ducks out",
+    "evaporates mid-sentence",
+]
+
+
+def departure_message(bot_name: str) -> str:
+    """Return a random departure announcement for a temp bot."""
+    return f"*[{bot_name} {random.choice(_DEPARTURE_PHRASES)}]*"
+
+
 class GenerationJob:
     """Tracks active temp bot generation state."""
 
@@ -530,11 +568,6 @@ class TempBotManager:
             if turn.role == "assistant":
                 text = self._strip_display_name_prefix(text)
 
-            # Strip arrival announcements from all messages
-            # (Other bots shouldn't see "[BotName arrives for N messages]")
-            text = self._strip_arrival_announcement(text)
-
-            # Skip empty messages (might be arrival-only messages)
             if not text.strip():
                 continue
 
@@ -564,31 +597,6 @@ class TempBotManager:
         if match:
             return text[match.end() :]
         return text
-
-    def _strip_arrival_announcement(self, text: str) -> str:
-        """Strip arrival/departure announcements from text.
-
-        Strips:
-        - '*[BotName arrives for N message(s)]*'
-        - '*[BotName departs]*'
-        - '*[BotName has depleted all replies and fades away]*'
-
-        Returns the text with announcements removed, or empty string if
-        the entire message was just an announcement.
-        """
-        # Pattern: *[SomeName arrives for N message(s)]*
-        # Using .+? (non-greedy) to match bot name without consuming "arrives for"
-        arrival_pattern = r"\*\[.+?\s+arrives\s+for\s+\d+\s+messages?\]\*\s*"
-        # Pattern: *[SomeName departs]*
-        depart_pattern = r"\*\[.+?\s+departs\]\*\s*"
-        # Pattern: *[SomeName has depleted all replies and fades away]*
-        deplete_pattern = r"\*\[.+?\s+has\s+depleted\s+all\s+replies\s+and\s+fades\s+away\]\*\s*"
-
-        cleaned = text
-        cleaned = re.sub(arrival_pattern, "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(depart_pattern, "", cleaned, flags=re.IGNORECASE)
-        cleaned = re.sub(deplete_pattern, "", cleaned, flags=re.IGNORECASE)
-        return cleaned.strip()
 
     async def _build_turn_from_message(self, message: discord.Message) -> ConversationTurn | None:
         """Build a ConversationTurn from a Discord message."""
@@ -697,7 +705,7 @@ class TempBotManager:
                 try:
                     webhook = await self.bot.fetch_webhook(webhook_id)
                     await webhook.send(
-                        f"*[{bot_name} departs]*",
+                        departure_message(bot_name),
                         username=bot_name,
                     )
                 except Exception:
@@ -1104,15 +1112,15 @@ Be concise and capture the essence of the bot's time in the chat."""
         try:
             webhook = await self.bot.fetch_webhook(webhook_id)
 
-            # Send depletion message if requested
+            # Send departure message if requested
             if send_depletion_message:
                 try:
                     await webhook.send(
-                        f"*[{bot_name} has depleted all replies and fades away]*",
+                        departure_message(bot_name),
                         username=bot_name,
                     )
                 except Exception:
-                    _LOG.warning(f"Failed to send depletion message for {bot_name}")
+                    _LOG.warning(f"Failed to send departure message for {bot_name}")
 
             await webhook.delete(reason="Temp bot depleted all replies")
             _LOG.info(f"Auto-despawned temp bot '{bot_name}'")
@@ -1375,14 +1383,12 @@ Be concise and capture the essence of the bot's time in the chat."""
                 f"spawn_message_id={spawn_message_id}, initial_context={len(initial_context)} messages"
             )
 
-            # Send initial response (with arrival message prepended)
-            arrival_msg = f"*[{bot_name} arrives for {reply_count} message{'s' if reply_count != 1 else ''}]*"
+            # Send initial response
             await self._send_initial_response(
                 ctx.channel,
                 webhook.id,
                 bot_name,
                 initial_prompt,
-                arrival_msg,
                 spawn_message_id,
                 initial_context=initial_context,
             )
@@ -1399,19 +1405,17 @@ Be concise and capture the essence of the bot's time in the chat."""
         webhook_id: int,
         bot_name: str,
         prompt: str,
-        arrival_msg: str,
         spawn_message_id: int | None,
         initial_context: list[ConversationTurn] | None = None,
         recall_context: dict | None = None,
     ) -> None:
-        """Send temp bot's initial response to spawn prompt with arrival message.
+        """Send temp bot's initial response to spawn prompt.
 
         Args:
             channel: Discord channel to send to
             webhook_id: Webhook ID for this temp bot
             bot_name: Name of the temp bot
             prompt: The spawn prompt/personality
-            arrival_msg: The arrival announcement message
             spawn_message_id: Message ID where the bot was spawned
             initial_context: Optional list of context messages (from reply or -context flag)
             recall_context: Optional dict with recall info (previous_messages, messages_missed, conversation_summary)
@@ -1454,12 +1458,9 @@ Be concise and capture the essence of the bot's time in the chat."""
                 response_text = response_text.replace("!despawn", "").replace("!DESPAWN", "").strip()
                 _LOG.info(f"Temp bot '{bot_name}' requested self-despawn in initial response")
 
-            # Prepend arrival message to response
-            full_response = f"{arrival_msg}\n\n{response_text}"
-
             # Send via webhook (coordinator will add to history automatically via on_message)
             webhook = await self.bot.fetch_webhook(webhook_id)
-            await webhook.send(full_response, username=bot_name, wait=True)
+            await webhook.send(response_text, username=bot_name, wait=True)
 
             _LOG.info(f"Temp bot '{bot_name}' sent initial response ({remaining} replies remaining)")
 
@@ -1469,7 +1470,7 @@ Be concise and capture the essence of the bot's time in the chat."""
                 # Send departure message for self-despawn
                 try:
                     await webhook.send(
-                        f"*[{bot_name} departs]*",
+                        departure_message(bot_name),
                         username=bot_name,
                     )
                 except Exception:
@@ -1595,14 +1596,12 @@ Be concise and capture the essence of the bot's time in the chat."""
                 f"in channel {ctx.channel.id}, {reply_count} replies"
             )
 
-            # Send initial response (with return message and recall context)
-            arrival_msg = f"*[{bot_name} returns for {reply_count} message{'s' if reply_count != 1 else ''}]*"
+            # Send initial response (with recall context)
             await self._send_initial_response(
                 ctx.channel,
                 webhook.id,
                 bot_name,
                 spawn_prompt,
-                arrival_msg,
                 spawn_message_id,
                 initial_context=None,
                 recall_context=recall_context,
