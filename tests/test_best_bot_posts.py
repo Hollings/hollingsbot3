@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import tempfile
 from pathlib import Path
@@ -41,7 +42,7 @@ class TestInitDb:
     def test_creates_elo_posts_table(self, setup_best_bot_posts):
         """Test that elo_posts table is created."""
         _bbp, db_path = setup_best_bot_posts
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='elo_posts'")
             result = cursor.fetchone()
         assert result is not None
@@ -49,7 +50,7 @@ class TestInitDb:
     def test_creates_match_history_table(self, setup_best_bot_posts):
         """Test that match_history table is created."""
         _bbp, db_path = setup_best_bot_posts
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='match_history'")
             result = cursor.fetchone()
         assert result is not None
@@ -69,7 +70,7 @@ class TestFilenameExists:
         """Test that existing filename is detected."""
         bbp, db_path = setup_best_bot_posts
 
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             conn.execute("INSERT INTO elo_posts (name, filename) VALUES ('test', 'existing.png')")
             conn.commit()
 
@@ -90,7 +91,7 @@ class TestInsertPost:
 
         bbp._insert_post("test post", "test.png", "image")
 
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             post = conn.execute("SELECT * FROM elo_posts WHERE filename = 'test.png'").fetchone()
 
         assert post is not None
@@ -104,7 +105,7 @@ class TestInsertPost:
 
         bbp._insert_post("text post", "text_1234.txt", "text", text_content="Hello world")
 
-        with sqlite3.connect(db_path) as conn:
+        with contextlib.closing(sqlite3.connect(db_path)) as conn:
             post = conn.execute("SELECT * FROM elo_posts WHERE post_type = 'text'").fetchone()
 
         assert post is not None

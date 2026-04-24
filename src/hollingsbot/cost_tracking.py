@@ -11,6 +11,7 @@ Tables are created by prompt_db.init_db() - this module just uses them.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import sqlite3
 from datetime import datetime, timezone
@@ -142,7 +143,7 @@ class CostTracker:
         if not isinstance(cost, int | float) or cost < 0:
             raise ValueError(f"Cost must be a non-negative number, got: {cost}")
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
 
             # Update and get current hourly budget
@@ -205,7 +206,7 @@ class CostTracker:
 
         today = self._get_today_string()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             # Use immediate transaction to prevent race conditions
             conn.execute("BEGIN IMMEDIATE")
 
@@ -283,7 +284,7 @@ class CostTracker:
         """
         today = self._get_today_string()
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
 
             # Update and get current hourly budget
@@ -326,7 +327,7 @@ class CostTracker:
             user_id: Discord user ID
             amount: Amount of credits to grant (can be negative to deduct)
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """
                 INSERT INTO user_credits (user_id, balance, lifetime_spent, last_updated)
@@ -351,7 +352,7 @@ class CostTracker:
         Returns:
             List of dicts with keys: date, total_cost, free_budget_used, credits_used, generation_count
         """
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
             rows = conn.execute(
                 """

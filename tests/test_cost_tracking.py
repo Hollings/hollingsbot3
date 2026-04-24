@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import sqlite3
 import tempfile
 from datetime import datetime, timedelta, timezone
@@ -23,7 +24,7 @@ def db_path():
 @pytest.fixture
 def setup_db(db_path):
     """Initialize the database tables needed for cost tracking."""
-    with sqlite3.connect(db_path) as conn:
+    with contextlib.closing(sqlite3.connect(db_path)) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_hourly_budget (
                 user_id INTEGER PRIMARY KEY,
@@ -254,7 +255,7 @@ class TestBudgetRefresh:
         expected_accrual = minute_rate * 60
 
         # Manually update last_tick_minute to simulate time passing
-        with sqlite3.connect(tracker.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
             past_time = datetime.now(timezone.utc) - timedelta(minutes=60)
             conn.execute(
                 "UPDATE user_hourly_budget SET last_tick_minute = ? WHERE user_id = ?",
@@ -272,7 +273,7 @@ class TestBudgetRefresh:
         tracker.can_afford(user_id, 0)
 
         # Simulate 48 hours passing (should still cap at daily budget)
-        with sqlite3.connect(tracker.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
             past_time = datetime.now(timezone.utc) - timedelta(hours=48)
             conn.execute(
                 "UPDATE user_hourly_budget SET last_tick_minute = ? WHERE user_id = ?",
