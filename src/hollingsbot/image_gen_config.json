@@ -14,9 +14,10 @@
   },
   "$$": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-2-pro",
+    "model": "black-forest-labs/flux-2-max",
     "safety_tolerance": 5,
-    "price_per_image": 0.04
+    "resolution": "2 MP",
+    "price_per_image": 0.08
   },
   "$$$": {
     "api": "replicate",
