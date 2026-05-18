@@ -33,9 +33,6 @@ data/
 data;C/
 old_dbs/
 
-# Build artifacts
-*.egg-info/
-
 # Runtime logs and dumps
 stderr.txt
 dump.json

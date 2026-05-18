@@ -83,7 +83,7 @@ This section contains the contents of the repository's files.
 Goal: Extract each feature from Discord cogs into self-contained service classes with clean, Discord-agnostic interfaces for easy use from other code (e.g., LLM tool-calling).
 
 > Feature Checklist (simplest → complex)
-  
+
   - [ ] LLM help — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.help_command: !h shows chat help.
   - [ ] LLM list models — src/hollingsbot/cogs/llm_chat.py::LLMAPIChat.list_models: !models lists AVAILABLE_MODELS.
   - [ ] List image models — src/hollingsbot/cogs/image_gen_cog.py::ImageGenCog.on_message: !models shows prefixes/providers and scopes.
