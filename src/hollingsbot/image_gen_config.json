@@ -20,9 +20,8 @@
   },
   "$$$": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-2-max",
-    "safety_tolerance": 5,
-    "resolution": "2 MP",
+    "model": "openai/gpt-image-2",
+    "quality": "medium",
     "price_per_image": 0.08
   },
   "$$$$": {
