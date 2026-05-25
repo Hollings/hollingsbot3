@@ -27,3 +27,32 @@ venv/
 
 # Documentation builds
 docs/
+
+# Runtime data and bind mounts
+data/
+data;C/
+old_dbs/
+
+# Build artifacts
+*.egg-info/
+
+# Runtime logs and dumps
+stderr.txt
+dump.json
+debug_*.json
+level2_summaries_dump.txt
+generated/messages_*.txt
+generated/debug_logs.json
+generated/test_image.*
+generated/llm_chat_new_state.json
+generated/*.png
+generated/*.jpg
+generated/*.jpeg
+
+# Database backups
+*.backup
+*.backup-*
+hollingsbot_live_backup_*.db
+
+# Misc accidental dumps
+/-
