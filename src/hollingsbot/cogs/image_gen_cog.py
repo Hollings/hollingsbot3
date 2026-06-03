@@ -1057,7 +1057,10 @@ class ImageGenCog(commands.Cog):
         aspect_ratio_override: str | None = None
         model_lower = spec.model.lower()
         supports_dynamic_aspect = (
-            "gpt-image" in model_lower or "black-forest-labs/" in model_lower or "flux" in model_lower
+            "gpt-image" in model_lower
+            or "black-forest-labs/" in model_lower
+            or "flux" in model_lower
+            or "seedream-4" in model_lower
         )
         if supports_dynamic_aspect and not (do_edit or do_outpaint):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
