@@ -53,3 +53,7 @@ hollingsbot_live_backup_*.db
 
 # Misc accidental dumps
 /-
+
+# Build artifacts
+*.egg-info/
+repomix-output.xml

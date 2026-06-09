@@ -8,15 +8,9 @@ pytest
 pytest-asyncio
 
 pillow
-transformers
-torch
 watchfiles
 anthropic
 openai
 cairosvg
-pytesseract
 beautifulsoup4
 emoji
-fastapi
-uvicorn[standard]
-python-multipart

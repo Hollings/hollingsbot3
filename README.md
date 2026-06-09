@@ -27,7 +27,6 @@ For in-depth technical documentation, see the [docs/](docs/) directory:
 
 - **LLM-powered Chat** (`llm_chat.py`): Multi-provider support (OpenAI, Anthropic) with per-channel conversation history, image attachments, URL metadata extraction, and SVG rendering
 - **Image Generation** (`image_gen_cog.py`): Prefix-based routing to multiple generation APIs (Replicate, etc.), image editing, outpainting, cost tracking, and daily rate limiting
-- **GPT-2 Chat** (`gpt2_chat.py`): Lightweight text generation in designated channels
 - **GIF Creation** (`gif_chain.py`): Build animated GIFs from reply chain images with adaptive compression
 - **Starboard** (`starboard.py`): Mirror reacted bot messages to a dedicated channel with metadata logging
 - **Admin Commands** (`admin.py`): Container restart, credit management, pricing/budget configuration
@@ -384,53 +383,6 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 
 ---
 
-### 4. GPT-2 Chat (`src/hollingsbot/cogs/gpt2_chat.py`)
-
-**Purpose**: Lightweight text generation in a designated channel using GPT-2 or similar small models.
-
-**Key Features**:
-- **Channel-specific** - Responds in a single configured channel
-- **Simple prompts** - No conversation history; one-shot generation
-- **Temperature randomization** - Adds variation using triangular distribution (biased toward 1.0)
-- **Stale response handling** - If multiple messages arrive before generation finishes, only responds to the latest
-- **Timeout handling** - Graceful error messages if generation exceeds timeout
-
-**Key Classes & Data Structures**:
-
-- `GPT2Chat(commands.Cog)` - Main cog
-  - `channel_id: int | None` - Configured channel ID for responses
-  - `api: str` - Text generation API (e.g., "huggingface")
-  - `model: str` - Model name (e.g., "gpt2-medium")
-  - `timeout: int` - Generation timeout in seconds
-  - `_latest: dict[int, int]` - Tracks newest message ID per channel (prevents stale responses)
-
-**Key Methods**:
-- `on_message(message)` - Listens for messages in configured channel
-- `_should_respond(message)` - Check if message should be answered (filters bots, keywords, channels)
-- `_generate(prompt)` - Generate text with error handling and temperature
-- `_celery_task(api, model, prompt, temperature)` - Call Celery task and await result
-- `_generate_temperature()` - Generate random temperature (triangular distribution: 0.5 to 1.5, mode at 1.0)
-
-**Configuration**:
-- Constructor parameters: `channel_id`, `api`, `model`, `task_func` (for testing), `timeout`
-- Environment variables: `GPT2_CHANNEL_ID`, `GPT2_RESPONSE_TIMEOUT`
-
-**Environment Variables**:
-- `GPT2_CHANNEL_ID` - Discord channel ID for GPT-2 responses
-- `GPT2_RESPONSE_TIMEOUT` - Timeout in seconds (default: 180)
-
-**Constants**:
-- `_MAX_DISCORD_LEN = 2000` - Max message length
-- `_IGNORED_KEYWORD = "enhance"` - Won't generate responses for this keyword
-- `_TEMP_MIN = 0.5`, `_TEMP_MAX = 1.5`, `_TEMP_MODE = 1.0` - Temperature distribution
-
-**Dependencies**:
-- `hollingsbot.tasks::generate_text` - Celery task
-
-**File Location**: `src/hollingsbot/cogs/gpt2_chat.py` (278 lines)
-
----
-
 ### 5. GIF Chain (`src/hollingsbot/cogs/gif_chain.py`)
 
 **Purpose**: Create animated GIFs from image reply chains.
@@ -669,8 +621,6 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `DAILY_FREE_BUDGET` - Daily free budget per user in dollars (default: 0.50)
 
 **GPT-2 Chat**:
-- `GPT2_CHANNEL_ID` - Discord channel ID for GPT-2 responses
-- `GPT2_RESPONSE_TIMEOUT` - Generation timeout in seconds (default: 180)
 
 **GIF Chain**:
 - `GIF_CHAIN_MAX_FRAMES` - Max frames in GIF (default: 30)

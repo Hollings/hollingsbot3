@@ -5,7 +5,7 @@
 ### Prerequisites
 - Python 3.10+
 - Git
-- System dependencies: `tesseract-ocr`, `libcairo2` (for image processing)
+- System dependencies: `libcairo2` (for image processing)
 
 ### Quick Start
 

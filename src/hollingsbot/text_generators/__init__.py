@@ -6,7 +6,6 @@ This package provides a unified interface for multiple LLM providers:
 - xAI (Grok)
 - Google (Gemini)
 - OpenRouter (multi-provider routing)
-- HuggingFace (local/HF models)
 
 All generators implement the TextGeneratorAPI abstract base class, providing
 a consistent `generate(prompt: str) -> str` method.
@@ -27,17 +26,14 @@ from .anthropic import AnthropicTextGenerator
 from .base import TextGeneratorAPI
 from .gemini import GeminiTextGenerator
 from .grok import GrokTextGenerator
-from .huggingface import HuggingFaceTextGenerator
 from .openai_chatgpt import OpenAIChatTextGenerator
-from .openrouter import OpenRouterCompletionsGenerator, OpenRouterLoomGenerator, OpenRouterTextGenerator
+from .openrouter import OpenRouterLoomGenerator, OpenRouterTextGenerator
 
 __all__ = [
     "AnthropicTextGenerator",
     "GeminiTextGenerator",
     "GrokTextGenerator",
-    "HuggingFaceTextGenerator",
     "OpenAIChatTextGenerator",
-    "OpenRouterCompletionsGenerator",
     "OpenRouterLoomGenerator",
     "OpenRouterTextGenerator",
     "TextGeneratorAPI",
@@ -46,8 +42,6 @@ __all__ = [
 
 def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
     """Return an appropriate text-generator instance for the given API."""
-    if api == "huggingface":
-        return HuggingFaceTextGenerator(model)
     if api == "anthropic":
         return AnthropicTextGenerator(model)
     if api in ("openai", "chatgpt"):
@@ -56,8 +50,6 @@ def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
         return GrokTextGenerator(model)
     if api == "openrouter":
         return OpenRouterTextGenerator(model)
-    if api == "openrouter-completions":
-        return OpenRouterCompletionsGenerator(model)
     if api == "openrouter-loom":
         return OpenRouterLoomGenerator(model)
     if api == "gemini":

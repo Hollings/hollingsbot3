@@ -13,18 +13,12 @@ dependencies = [
     "celery",
     "redis",
     "pillow",
-    "transformers",
-    "torch",
     "watchfiles",
     "anthropic",
     "openai",
     "cairosvg",
-    "pytesseract",
     "beautifulsoup4",
     "emoji",
-    "fastapi",
-    "uvicorn[standard]",
-    "python-multipart",
 ]
 
 [project.optional-dependencies]
