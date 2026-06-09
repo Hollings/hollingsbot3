@@ -277,7 +277,7 @@ class LlamaBot:
         webhook = None
         if webhook_url:
             try:
-                webhook = discord.Webhook.from_url(webhook_url, client=self.bot.http)
+                webhook = discord.Webhook.from_url(webhook_url, client=self.bot)
             except Exception:
                 _LOG.exception("Failed to create webhook")
 

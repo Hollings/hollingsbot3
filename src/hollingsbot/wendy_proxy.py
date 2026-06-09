@@ -101,10 +101,11 @@ async def send_message(request: SendMessageRequest):
 
         # Validate attachment path if provided
         if request.attachment:
-            att_path = Path(request.attachment)
-            # Only allow attachments from Wendy's directories
-            allowed_prefixes = ["/data/wendy/", "/tmp/"]
-            if not any(request.attachment.startswith(p) for p in allowed_prefixes):
+            # Resolve symlinks/".." segments so a path like /tmp/../app/.env
+            # can't escape the allowed directories via a prefix match.
+            att_path = Path(request.attachment).resolve()
+            allowed_dirs = [Path("/data/wendy").resolve(), Path("/tmp").resolve()]
+            if not any(att_path.is_relative_to(d) for d in allowed_dirs):
                 raise HTTPException(
                     status_code=400, detail=f"Attachment must be in /data/wendy/ or /tmp/, got: {request.attachment}"
                 )
@@ -123,7 +124,7 @@ async def send_message(request: SendMessageRequest):
             "message": msg_text,  # outbox expects "message" not "content"
         }
         if request.attachment:
-            message_data["file_path"] = request.attachment  # outbox expects "file_path"
+            message_data["file_path"] = str(att_path)  # outbox expects "file_path"; use the validated resolved path
 
         outbox_path = OUTBOX_DIR / filename
         outbox_path.write_text(json.dumps(message_data))
@@ -151,7 +152,11 @@ async def check_messages(channel_id: int, limit: int = 10, all_messages: bool = 
         conn.row_factory = sqlite3.Row
 
         try:
-            if since_id:
+            if since_id is not None:
+                # Ascending order so that when more than `limit` new messages
+                # exist, we return the oldest unseen batch and the rest are
+                # picked up on the next poll - descending would advance
+                # last_seen past messages that were never returned.
                 query = """
                     SELECT message_id, channel_id, author_name, content, timestamp, has_images
                     FROM cached_messages
@@ -160,7 +165,7 @@ async def check_messages(channel_id: int, limit: int = 10, all_messages: bool = 
                     AND LOWER(author_name) NOT LIKE '%hollingsbot%'
                     AND content NOT LIKE '!spawn%'
                     AND content NOT LIKE '-%'
-                    ORDER BY message_id DESC
+                    ORDER BY message_id ASC
                     LIMIT ?
                 """
                 rows = conn.execute(query, (channel_id, since_id, limit)).fetchall()

@@ -1136,20 +1136,9 @@ class ImageGenCog(commands.Cog):
         if cleaned.startswith("!"):
             # Get the potential command word (everything between ! and first space)
             potential_command = cleaned[1:].split()[0].lower() if len(cleaned) > 1 else ""
-            # List of known bot commands that should not trigger image generation
-            bot_commands = {
-                "usage",
-                "balance",
-                "grant",
-                "set_price",
-                "set_budget",
-                "reset",
-                "ping",
-                "help",
-                "model",
-                "system",
-                "models",
-            }
+            # Any registered bot command (or alias) should not trigger image generation
+            bot_commands = {cmd.name.lower() for cmd in self.bot.commands}
+            bot_commands.update(alias.lower() for cmd in self.bot.commands for alias in cmd.aliases)
             if potential_command in bot_commands:
                 return  # Let the command system handle it
 

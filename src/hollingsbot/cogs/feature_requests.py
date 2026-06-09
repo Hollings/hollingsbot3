@@ -72,6 +72,11 @@ class FeatureRequests(commands.Cog):
 
         except asyncio.TimeoutError:
             _LOG.error(f"Claude Code timed out after {timeout}s")
+            # wait_for cancels the communicate() coroutine but leaves the
+            # subprocess running - kill it so it doesn't linger.
+            with contextlib.suppress(ProcessLookupError):
+                proc.kill()
+            await proc.communicate()
             return f"Error: Claude Code timed out after {timeout}s", False
         except FileNotFoundError:
             _LOG.error("Claude Code CLI not found at: %s", CLAUDE_CODE_CLI_PATH)

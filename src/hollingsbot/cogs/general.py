@@ -6,6 +6,7 @@ all channels and provide core bot functionality.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from discord.ext import commands
@@ -156,8 +157,8 @@ class General(commands.Cog):
         try:
             # Run the repair task
             result = repair_wendy.delay(ctx.channel.id)
-            # Wait for result with timeout
-            task_result = result.get(timeout=360)  # 6 min timeout
+            # Wait for result with timeout (in a thread so the event loop stays free)
+            task_result = await asyncio.to_thread(result.get, timeout=360)  # 6 min timeout
 
             if task_result.get("success"):
                 await ctx.send("Repair completed. Check Wendy's message for details.")

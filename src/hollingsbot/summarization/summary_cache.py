@@ -320,8 +320,8 @@ class SummaryCache:
             end_message_id=row["end_message_id"],
             summary_text=row["summary_text"],
             message_count=row["message_count"],
-            start_timestamp=row.get("start_timestamp", None),
-            end_timestamp=row.get("end_timestamp", None),
+            start_timestamp=row["start_timestamp"],
+            end_timestamp=row["end_timestamp"],
             created_at=row["created_at"],
         )
 

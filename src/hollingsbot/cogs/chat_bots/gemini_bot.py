@@ -665,7 +665,7 @@ class GeminiBot:
         if webhook_url:
             try:
                 # Parse webhook URL to get ID and token
-                webhook = discord.Webhook.from_url(webhook_url, client=self.bot.http)
+                webhook = discord.Webhook.from_url(webhook_url, client=self.bot)
             except Exception:
                 _LOG.exception("Failed to create webhook from URL for channel %s", channel_id)
 

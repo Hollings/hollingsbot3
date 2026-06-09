@@ -265,6 +265,16 @@ class GPT2Chat(commands.Cog):
 
         reply = await self._generate(prompt)
 
+        # A newer prompt arrived in this channel while we were generating;
+        # discard this stale response.
+        if self._latest.get(channel_id) != message.id:
+            logger.info(
+                "Discarding stale response for message %s in channel %s",
+                message.id,
+                channel_id,
+            )
+            return
+
         if reply:
             truncated_reply = reply[: self._MAX_DISCORD_LEN]
             await message.channel.send(truncated_reply)

@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 import discord
@@ -17,6 +18,9 @@ _LOG = logging.getLogger(__name__)
 OUTBOX_DIR = Path(os.getenv("WENDY_OUTBOX_DIR", "/data/wendy/outbox"))
 MESSAGE_LOG_FILE = Path("/data/wendy/message_log.jsonl")
 MAX_MESSAGE_LOG_LINES = 1000  # Rolling log limit
+MIN_FILE_AGE_SECONDS = 2.0  # Skip files this young - the producer may still be writing
+MAX_SEND_ATTEMPTS = 5  # After this many failures, quarantine the file as .failed
+DISCORD_MESSAGE_LIMIT = 2000
 
 
 class WendyOutbox(commands.Cog):
@@ -24,6 +28,7 @@ class WendyOutbox(commands.Cog):
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
+        self._send_attempts: dict[str, int] = {}
         self._ensure_outbox_dir()
         self.watch_outbox.start()
         _LOG.info("WendyOutbox initialized, watching %s", OUTBOX_DIR)
@@ -82,11 +87,16 @@ class WendyOutbox(commands.Cog):
     def cog_unload(self):
         self.watch_outbox.cancel()
 
+    def _outbox_sort_key(self, file_path: Path) -> tuple[int, str]:
+        """Sort outbox files chronologically by embedded timestamp."""
+        ts = self._extract_outbox_timestamp(file_path.name)
+        return (ts if ts is not None else 0, file_path.name)
+
     @tasks.loop(seconds=0.5)
     async def watch_outbox(self):
         """Check for new messages in the outbox."""
         try:
-            for file_path in OUTBOX_DIR.glob("*.json"):
+            for file_path in sorted(OUTBOX_DIR.glob("*.json"), key=self._outbox_sort_key):
                 await self._process_outbox_file(file_path)
         except Exception as e:
             _LOG.error("Error watching outbox: %s", e)
@@ -95,17 +105,72 @@ class WendyOutbox(commands.Cog):
     async def before_watch(self):
         await self.bot.wait_until_ready()
 
+    @staticmethod
+    def _chunk_message(text: str) -> list[str]:
+        """Split a message into Discord-sized chunks, preferring newline boundaries."""
+        if len(text) <= DISCORD_MESSAGE_LIMIT:
+            return [text]
+        chunks = []
+        remaining = text
+        while remaining:
+            if len(remaining) <= DISCORD_MESSAGE_LIMIT:
+                chunks.append(remaining)
+                break
+            split_at = remaining.rfind("\n", 0, DISCORD_MESSAGE_LIMIT)
+            if split_at <= 0:
+                split_at = DISCORD_MESSAGE_LIMIT
+            chunks.append(remaining[:split_at])
+            remaining = remaining[split_at:].lstrip("\n")
+        return chunks
+
+    def _discard_file(self, outbox_file: Path) -> None:
+        """Remove an outbox file and forget its retry count."""
+        self._send_attempts.pop(outbox_file.name, None)
+        try:
+            outbox_file.unlink()
+        except FileNotFoundError:
+            pass
+
+    def _quarantine_file(self, outbox_file: Path) -> None:
+        """Move a repeatedly-failing file out of the watch glob for inspection."""
+        self._send_attempts.pop(outbox_file.name, None)
+        try:
+            outbox_file.rename(outbox_file.with_suffix(".json.failed"))
+            _LOG.error("Quarantined outbox file after %d failed attempts: %s", MAX_SEND_ATTEMPTS, outbox_file)
+        except OSError:
+            _LOG.exception("Failed to quarantine outbox file %s", outbox_file)
+
     async def _process_outbox_file(self, outbox_file: Path) -> None:
         """Process a single outbox file and send the message."""
         try:
             data = json.loads(outbox_file.read_text())
             channel_id = int(data["channel_id"])
             message_text = data["message"]
+        except FileNotFoundError:
+            return  # Already handled (e.g. picked up by a previous iteration)
+        except json.JSONDecodeError as e:
+            # The producer writes non-atomically, so a fresh file may simply be
+            # mid-write. Only treat it as corrupt once it has had time to finish.
+            try:
+                age = time.time() - outbox_file.stat().st_mtime
+            except FileNotFoundError:
+                return
+            if age < MIN_FILE_AGE_SECONDS:
+                return
+            _LOG.error("Invalid JSON in outbox file %s: %s", outbox_file, e)
+            self._discard_file(outbox_file)
+            return
+        except (KeyError, TypeError, ValueError) as e:
+            # Valid JSON but missing/malformed fields - it will never send.
+            _LOG.error("Malformed outbox file %s: %s", outbox_file, e)
+            self._discard_file(outbox_file)
+            return
 
+        try:
             channel = self.bot.get_channel(channel_id)
             if not channel:
                 _LOG.warning("Channel %s not found, skipping message", channel_id)
-                outbox_file.unlink()
+                self._discard_file(outbox_file)
                 return
 
             # Check for file attachment
@@ -119,11 +184,11 @@ class WendyOutbox(commands.Cog):
                 else:
                     _LOG.warning("Attachment file not found: %s", file_path_str)
 
-            # Send the message (with or without attachment) and capture message ID
-            if attachment:
-                sent_msg = await channel.send(message_text, file=attachment)
-            else:
-                sent_msg = await channel.send(message_text)
+            # Send the message (chunked if needed, attachment on the first chunk)
+            chunks = self._chunk_message(message_text) if message_text else [message_text]
+            sent_msg = await channel.send(chunks[0], file=attachment) if attachment else await channel.send(chunks[0])
+            for extra_chunk in chunks[1:]:
+                await channel.send(extra_chunk)
 
             _LOG.info(
                 "Sent Wendy outbox message to channel %s (msg_id=%s): %s...", channel_id, sent_msg.id, message_text[:50]
@@ -140,14 +205,16 @@ class WendyOutbox(commands.Cog):
                 )
 
             # Delete the file after successful send
-            outbox_file.unlink()
+            self._discard_file(outbox_file)
 
-        except json.JSONDecodeError as e:
-            _LOG.error("Invalid JSON in outbox file %s: %s", outbox_file, e)
-            outbox_file.unlink()  # Remove corrupt file
         except Exception as e:
-            _LOG.error("Error processing outbox file %s: %s", outbox_file, e)
-            # Don't delete - might be temporary error
+            attempts = self._send_attempts.get(outbox_file.name, 0) + 1
+            self._send_attempts[outbox_file.name] = attempts
+            _LOG.error(
+                "Error processing outbox file %s (attempt %d/%d): %s", outbox_file, attempts, MAX_SEND_ATTEMPTS, e
+            )
+            if attempts >= MAX_SEND_ATTEMPTS:
+                self._quarantine_file(outbox_file)
 
 
 async def setup(bot: commands.Bot) -> None:

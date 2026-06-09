@@ -1007,7 +1007,7 @@ class BestBotPosts(commands.Cog):
                 temp_path = IMAGES_FOLDER / f"temp_{attachment.filename}"
                 temp_path.write_bytes(img_data)
 
-                post_id = ingest_image(temp_path, use_ocr=HAS_OCR)
+                post_id = await asyncio.to_thread(ingest_image, temp_path, use_ocr=HAS_OCR)
                 if post_id:
                     await message.add_reaction("\u2705")
 
