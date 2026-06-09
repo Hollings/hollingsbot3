@@ -631,8 +631,9 @@ class GrokBot:
                 job.result.revoke(terminate=True)
                 _LOG.info("Revoked Celery task for channel %s (terminate=True)", channel_id)
 
-            # Now wait for local task cleanup
-            with suppress(asyncio.CancelledError):
+            # Now wait for local task cleanup (TimeoutError if it takes >0.5s
+            # to unwind - still proceed to clear the job entry below)
+            with suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(job.task, timeout=0.5)
 
             self._active_generations.pop(channel_id, None)
@@ -924,9 +925,9 @@ class GrokBot:
         channel_id = ctx.channel.id
         lock = self.coordinator._lock_for_channel(channel_id)
         async with lock:
-            self.coordinator.channel_histories[channel_id] = self.coordinator.channel_histories.get(
-                channel_id
-            ).__class__(maxlen=self.coordinator.history_limit)
+            # Clear in place - creates the deque if missing and keeps any
+            # existing references to it valid.
+            self.coordinator._history_for_channel(channel_id).clear()
         await ctx.send("Channel history cleared")
 
     async def handle_cancel_command(self, ctx: commands.Context) -> None:

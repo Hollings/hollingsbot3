@@ -272,6 +272,11 @@ class Starboard(commands.Cog):
         if not self._is_message_eligible(message):
             return
 
+        # Mark as seen immediately - two near-simultaneous reactions would
+        # otherwise both pass the eligibility check during the awaits below
+        # and produce duplicate starboard posts.
+        self._seen_message_ids.append(message.id)
+
         # Resolve and validate starboard channel
         starboard_channel = await self._resolve_channel(self.starboard_channel_id)
         if not self._validate_starboard_channel(starboard_channel, payload.guild_id):
@@ -282,8 +287,6 @@ class Starboard(commands.Cog):
         if sent_message is None:
             return
 
-        # Mark as seen and log
-        self._seen_message_ids.append(message.id)
         self._log_starboard_entry(payload, message, starboard_channel.id, sent_message.id)
 
     @staticmethod

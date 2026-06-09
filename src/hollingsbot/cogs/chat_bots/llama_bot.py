@@ -246,7 +246,7 @@ class LlamaBot:
             job.task.cancel()
             if job.result:
                 job.result.revoke(terminate=True)
-            with suppress(asyncio.CancelledError):
+            with suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(job.task, timeout=0.5)
             self._active_generations.pop(channel_id, None)
 

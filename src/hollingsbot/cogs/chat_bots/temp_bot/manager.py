@@ -52,6 +52,28 @@ MIN_GENERATION_TIME_BEFORE_CANCEL = 2.0  # Don't cancel if generation started le
 _DEBUG_LOGS_PATH = Path("generated/debug_logs.json")
 _DEBUG_LOGS_MAX_SIZE = 100
 
+DISCORD_MESSAGE_LIMIT = 2000
+
+_DESPAWN_RE = re.compile(r"!despawn", re.IGNORECASE)
+
+
+def _chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
+    """Split a message into Discord-sized chunks, preferring newline boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    return chunks
+
 
 class GenerationJob:
     """Tracks active temp bot generation state."""
@@ -175,6 +197,7 @@ class TempBotManager:
             current_turn = self._extract_current_turn(message, history)
             if not current_turn:
                 _LOG.warning("Failed to extract current turn from history")
+                increment_temp_bot_replies(webhook_id)  # Refund the reserved reply
                 self._generating_webhooks.discard(webhook_id)
                 return None
 
@@ -490,6 +513,7 @@ class TempBotManager:
         llm_debug: dict[str, Any] = {}
         response_text = ""
         stored_conversation = conversation.copy()
+        message_sent = False
 
         try:
             _LOG.info(f"Temp bot '{bot_name}' starting generation...")
@@ -500,22 +524,27 @@ class TempBotManager:
 
             if not response_text or not response_text.strip():
                 _LOG.warning(f"Empty response from temp bot '{bot_name}'")
+                increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
                 return None
 
             # Check if bot wants to self-despawn
-            should_despawn = "!despawn" in response_text.lower()
+            should_despawn = bool(_DESPAWN_RE.search(response_text))
             if should_despawn:
                 # Strip !despawn from the response
-                response_text = response_text.replace("!despawn", "").replace("!DESPAWN", "").strip()
+                response_text = _DESPAWN_RE.sub("", response_text).strip()
                 _LOG.info(f"Temp bot '{bot_name}' requested self-despawn")
 
             # Wait for human to finish typing (if applicable)
             await self._wait_for_typing_to_clear(channel_id)
 
-            # Send via webhook
+            # Send via webhook (chunked if over Discord's limit)
             _LOG.info(f"Temp bot '{bot_name}' sending message via webhook {webhook_id}")
             webhook = await self.bot.fetch_webhook(webhook_id)
-            sent_message = await webhook.send(response_text, username=bot_name, wait=True)
+            chunks = _chunk_message(response_text)
+            sent_message = await webhook.send(chunks[0], username=bot_name, wait=True)
+            message_sent = True
+            for extra_chunk in chunks[1:]:
+                await webhook.send(extra_chunk, username=bot_name, wait=True)
             _LOG.info(f"Temp bot '{bot_name}' sent message successfully")
 
             # Reset cancellation count on successful post
@@ -580,6 +609,8 @@ class TempBotManager:
             raise
         except Exception:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
+            if not message_sent:
+                increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
             return None
         finally:
             # Remove from generating set (allows cleanup to proceed)
@@ -637,8 +668,10 @@ class TempBotManager:
             job.result.revoke(terminate=True)
             _LOG.info("Revoked temp bot Celery task for channel %s (terminate=True)", channel_id)
 
-        # Now wait for local task cleanup
-        with suppress(asyncio.CancelledError):
+        # Now wait for local task cleanup. Suppress TimeoutError too - if the
+        # cancelled task takes >0.5s to unwind we must still refund and clear
+        # the job entry below.
+        with suppress(asyncio.CancelledError, TimeoutError):
             await asyncio.wait_for(job.task, timeout=0.5)
 
         # Refund the reply count since the message wasn't sent
@@ -1013,6 +1046,7 @@ class TempBotManager:
             initial_context: Optional list of context messages (from reply or -context flag)
             recall_context: Optional dict with recall info (previous_messages, messages_missed, conversation_summary)
         """
+        message_sent = False
         try:
             # Decrement reply count first (atomic operation)
             remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
@@ -1042,18 +1076,23 @@ class TempBotManager:
             response_text = await self._generate_response(conversation)
             if not response_text or not response_text.strip():
                 _LOG.error("Empty initial response for temp bot")
+                increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
                 return
 
             # Check if bot wants to self-despawn in first message
-            should_despawn = "!despawn" in response_text.lower()
+            should_despawn = bool(_DESPAWN_RE.search(response_text))
             if should_despawn:
                 # Strip !despawn from the response
-                response_text = response_text.replace("!despawn", "").replace("!DESPAWN", "").strip()
+                response_text = _DESPAWN_RE.sub("", response_text).strip()
                 _LOG.info(f"Temp bot '{bot_name}' requested self-despawn in initial response")
 
             # Send via webhook (coordinator will add to history automatically via on_message)
             webhook = await self.bot.fetch_webhook(webhook_id)
-            await webhook.send(response_text, username=bot_name, wait=True)
+            chunks = _chunk_message(response_text)
+            await webhook.send(chunks[0], username=bot_name, wait=True)
+            message_sent = True
+            for extra_chunk in chunks[1:]:
+                await webhook.send(extra_chunk, username=bot_name, wait=True)
 
             _LOG.info(f"Temp bot '{bot_name}' sent initial response ({remaining} replies remaining)")
 
@@ -1075,9 +1114,16 @@ class TempBotManager:
 
         except Exception:
             _LOG.exception(f"Failed to send initial response for temp bot '{bot_name}'")
+            if not message_sent:
+                with suppress(Exception):
+                    increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
 
     async def handle_despawn_command(self, ctx: commands.Context, name: str | None = None) -> None:
-        """Manually remove temporary bots."""
+        """Manually remove temporary bots.
+
+        With no name: list active temp bots. With a name: remove that bot.
+        With "all": remove every temp bot in the channel.
+        """
         if not isinstance(ctx.channel, discord.TextChannel):
             await ctx.send("This command only works in text channels.")
             return
@@ -1088,7 +1134,21 @@ class TempBotManager:
             await ctx.send("No temporary bots active in this channel.")
             return
 
-        # Despawn all temp bots
+        if name is None:
+            lines = ["**Active temp bots** (use `!despawn <name>` or `!despawn all`):"]
+            for bot in temp_bots:
+                lines.append(f"- **{bot['name']}** ({bot['replies_remaining']} replies remaining)")
+            await ctx.send("\n".join(lines))
+            return
+
+        if name.lower() != "all":
+            matched = [bot for bot in temp_bots if bot["name"].lower() == name.lower()]
+            if not matched:
+                names = ", ".join(f"**{bot['name']}**" for bot in temp_bots)
+                await ctx.send(f"No temp bot named **{name}**. Active: {names}")
+                return
+            temp_bots = matched
+
         despawned = []
         failed = []
 

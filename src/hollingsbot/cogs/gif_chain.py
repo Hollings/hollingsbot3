@@ -7,6 +7,7 @@ them into an animated GIF.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import logging
@@ -415,10 +416,15 @@ class GifReplyChainCog(commands.Cog):
         return buffer.getvalue()
 
     async def _build_gif_bytes(self, frames: list[Image.Image]) -> bytes:
+        """Build a GIF from frames in a worker thread (encoding is CPU-heavy)."""
+        return await asyncio.to_thread(self._build_gif_bytes_sync, frames)
+
+    def _build_gif_bytes_sync(self, frames: list[Image.Image]) -> bytes:
         """Build a GIF from frames, trying compression strategies to fit size limit.
 
         Attempts multiple combinations of scaling, frame dropping, and palette
-        reduction to produce a GIF under the configured size limit.
+        reduction to produce a GIF under the configured size limit. Can run
+        dozens of full encodes, so this must not run on the event loop.
 
         Args:
             frames: Prepared frames to encode
@@ -517,8 +523,8 @@ class GifReplyChainCog(commands.Cog):
                 await message.reply("No images found in the reply chain.", mention_author=False)
                 return
 
-            # Prepare frames
-            frames = self._prepare_frames(image_blobs)
+            # Prepare frames (decode/scale is CPU-bound - keep off the event loop)
+            frames = await asyncio.to_thread(self._prepare_frames, image_blobs)
             if not frames:
                 await message.reply("Could not decode images from the reply chain.", mention_author=False)
                 return

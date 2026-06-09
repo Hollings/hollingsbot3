@@ -23,6 +23,7 @@ import logging
 import os
 import random
 import re
+import time
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -358,16 +359,17 @@ class ImageGenCog(commands.Cog):
             queue="image",
         )
 
-        elapsed = 0.0
-        while not async_result.ready():
-            if elapsed >= timeout:
+        # ready()/failed() are synchronous Redis round-trips - keep them off
+        # the event loop so a slow/unreachable broker can't freeze the bot.
+        start = time.monotonic()
+        while not await asyncio.to_thread(async_result.ready):
+            if time.monotonic() - start >= timeout:
                 async_result.revoke(terminate=True)
                 raise TimeoutError(f"Image generation timed out after {timeout}s")
             await asyncio.sleep(poll_interval)
-            elapsed += poll_interval
 
         # Check for task failure
-        if async_result.failed():
+        if await asyncio.to_thread(async_result.failed):
             error = async_result.result
             raise RuntimeError(f"Image generation failed: {error}")
 
@@ -1035,8 +1037,9 @@ class ImageGenCog(commands.Cog):
             if needs_generated_prompt:
                 prompts = outpaint_prompts
 
-        # Check cost affordability
-        cost = spec.price_per_image if spec.price_per_image is not None else self._default_price
+        # Check cost affordability - charge for every prompt in a <a,b,c> expansion
+        per_image_cost = spec.price_per_image if spec.price_per_image is not None else self._default_price
+        cost = per_image_cost * len(prompts)
         can_afford, error_msg = self._cost_tracker.can_afford(message.author.id, cost)
 
         if not can_afford:

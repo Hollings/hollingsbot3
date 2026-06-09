@@ -58,11 +58,8 @@ class DebugCommands(commands.Cog):
         output = "\n".join(lines)
 
         # Send in chunks if too long
-        if len(output) > 2000:
-            await ctx.send(output[:2000])
-            await ctx.send(output[2000:])
-        else:
-            await ctx.send(output)
+        for start in range(0, len(output), 2000):
+            await ctx.send(output[start : start + 2000])
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

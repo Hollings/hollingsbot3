@@ -1299,6 +1299,12 @@ class BestBotPosts(commands.Cog):
                 try:
                     msg = await msg.channel.fetch_message(msg.id)
                     break
+                except discord.NotFound:
+                    # Matchup message was deleted - polling it forever would
+                    # wedge the tournament. Bail out; the caller resets the
+                    # match and the main loop re-posts it.
+                    _LOG.warning("Matchup message %d was deleted, abandoning poll", msg.id)
+                    return None
                 except discord.errors.DiscordServerError as e:
                     if attempt < max_retries - 1:
                         wait_time = 2**attempt

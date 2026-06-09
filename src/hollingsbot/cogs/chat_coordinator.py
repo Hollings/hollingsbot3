@@ -59,6 +59,7 @@ class ChatCoordinator(commands.Cog):
         self.history_limit = history_limit
         self._history_locks: dict[int, asyncio.Lock] = {}
         self._warmed_channels: set[int] = set()
+        self._warming_tasks: dict[int, asyncio.Task] = {}
 
         # Message processing locks (prevent concurrent on_message per channel)
         self._processing_locks: dict[int, asyncio.Lock] = {}
@@ -71,6 +72,10 @@ class ChatCoordinator(commands.Cog):
 
         # Track active message processing per channel
         self._active_message_tasks: dict[int, asyncio.Task] = {}
+
+        # Strong references to fire-and-forget summarization tasks (asyncio
+        # only keeps weak references; without this they can be GC'd mid-run)
+        self._summary_tasks: set[asyncio.Task] = set()
 
         # Summarization setup (uses shared DB from prompt_db)
         self.summary_enabled = os.getenv("LLM_SUMMARY_ENABLED", "0") == "1"
@@ -152,18 +157,34 @@ class ChatCoordinator(commands.Cog):
         return lock
 
     async def _ensure_channel_warm(self, channel: discord.abc.Messageable) -> None:
-        """Warm up channel history by backfilling from Discord."""
+        """Warm up channel history by backfilling from Discord.
+
+        Concurrent callers for the same channel share a single warming task
+        and wait for it - marking the channel warm before the (slow) backfill
+        completes would let later messages append mid-warm, producing
+        duplicated and out-of-order history.
+        """
         channel_id = channel.id
         if channel_id in self._warmed_channels:
             return
 
-        _LOG.info("Warming channel %s history", channel_id)
-        self._warmed_channels.add(channel_id)
+        task = self._warming_tasks.get(channel_id)
+        if task is None:
+            task = asyncio.create_task(self._warm_channel(channel))
+            self._warming_tasks[channel_id] = task
 
-        if not isinstance(channel, discord.TextChannel | discord.Thread | discord.DMChannel):
-            return
+        # Shield so a cancelled message handler doesn't cancel the shared warm.
+        await asyncio.shield(task)
+
+    async def _warm_channel(self, channel: discord.abc.Messageable) -> None:
+        """Do the actual history backfill for a channel."""
+        channel_id = channel.id
+        _LOG.info("Warming channel %s history", channel_id)
 
         try:
+            if not isinstance(channel, discord.TextChannel | discord.Thread | discord.DMChannel):
+                return
+
             messages = []
             async for msg in channel.history(limit=self.history_limit * 3):
                 messages.append(msg)
@@ -172,7 +193,11 @@ class ChatCoordinator(commands.Cog):
             lock = self._lock_for_channel(channel_id)
             async with lock:
                 history = self._history_for_channel(channel_id)
+                existing_ids = {t.message_id for t in history if t.message_id is not None}
                 for msg in messages:
+                    if msg.id in existing_ids:
+                        continue
+
                     # Skip other bots (except main bot and temp bots)
                     if msg.author.bot and msg.author.id != self.bot.user.id:
                         # Check if it's a temp bot webhook
@@ -191,6 +216,10 @@ class ChatCoordinator(commands.Cog):
             _LOG.info("Warmed channel %s with %d messages", channel_id, len(messages))
         except Exception:
             _LOG.exception("Failed to warm channel %s", channel_id)
+        finally:
+            # Mark warm only once the backfill is done (success or not)
+            self._warmed_channels.add(channel_id)
+            self._warming_tasks.pop(channel_id, None)
 
     async def _build_history_turn(self, message: discord.Message) -> ConversationTurn | None:
         """Build a lightweight turn for history warming (placeholders for attachments)."""
@@ -506,8 +535,10 @@ class ChatCoordinator(commands.Cog):
             return
 
         try:
-            # Run in background, don't wait
-            asyncio.create_task(self.summary_worker.trigger_summarization(channel_id))
+            # Run in background, don't wait (but keep a strong reference)
+            task = asyncio.create_task(self.summary_worker.trigger_summarization(channel_id))
+            self._summary_tasks.add(task)
+            task.add_done_callback(self._summary_tasks.discard)
         except Exception:
             _LOG.exception("Failed to trigger summarization for channel %d", channel_id)
 

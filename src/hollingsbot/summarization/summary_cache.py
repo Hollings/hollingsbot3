@@ -405,7 +405,7 @@ class SummaryCache:
 
         for group in groups:
             # Skip groups before clear point
-            if min_start_id and group.start_message_id <= min_start_id:
+            if min_start_id is not None and group.start_message_id <= min_start_id:
                 continue
             if group.end_message_id in exclude_end_ids:
                 continue
