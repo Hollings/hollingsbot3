@@ -82,7 +82,7 @@ class CreditsCog(commands.Cog):
 
     @commands.command(name="redeem")
     async def redeem_command(self, ctx: commands.Context, amount: int | None = None) -> None:
-        """Redeem Wendy tokens for image generation credits.
+        """Redeem tokens for image generation credits.
 
         Usage: !redeem <amount>
         Example: !redeem 47
@@ -95,7 +95,7 @@ class CreditsCog(commands.Cog):
 
             message = (
                 f"**Token Redemption**\n"
-                f"Exchange your Wendy tokens for image generation credits!\n\n"
+                f"Exchange your tokens for image generation credits!\n\n"
                 f"**Exchange rate:** {TOKENS_PER_EXCHANGE} tokens = ${CENTS_PER_EXCHANGE / 100:.2f}\n"
                 f"**Your tokens:** {token_balance}\n"
                 f"**Max credits:** ${max_credits:.2f}\n\n"

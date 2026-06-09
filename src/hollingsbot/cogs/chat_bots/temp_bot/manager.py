@@ -107,7 +107,6 @@ class TempBotManager:
     def _load_base_system_prompt(self) -> str:
         """Load base system prompt for temp bots."""
         try:
-            # Use separate temp bot system prompt (no "Wendy" references)
             temp_bot_prompt_file = Path("config/temp_bot_system_prompt.txt")
             if temp_bot_prompt_file.exists():
                 return temp_bot_prompt_file.read_text(encoding="utf-8").strip()

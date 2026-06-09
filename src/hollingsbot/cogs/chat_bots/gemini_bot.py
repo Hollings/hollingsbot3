@@ -346,7 +346,7 @@ class GeminiBot:
 
         GeminiBot sees:
         - Own past webhook messages -> "assistant"
-        - All other messages (users, Wendy, temp bots) -> "user"
+        - All other messages (users, other bots, temp bots) -> "user"
         """
         # Get GeminiBot's webhook IDs
         gemini_webhook_ids = set(self.channel_webhooks.values())
@@ -360,7 +360,7 @@ class GeminiBot:
                 # This is from GeminiBot -> "assistant"
                 role = "assistant"
             else:
-                # Everything else (users, Wendy, temp bots) -> "user"
+                # Everything else (users, other bots, temp bots) -> "user"
                 role = "user"
 
             # Create new turn with translated role

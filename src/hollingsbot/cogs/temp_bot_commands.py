@@ -47,7 +47,7 @@ class TempBotCommands(commands.Cog):
         subsequent messages (including from other bots) until it runs out of replies.
 
         Usage: !spawn <reply_count> <initial_prompt>
-        Example: !spawn 10 convince wendy to cheer up
+        Example: !spawn 10 convince everyone to cheer up
 
         Options:
         - Reply to a message with !spawn to include that message as initial context

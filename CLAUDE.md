@@ -79,7 +79,6 @@ Docker containers orchestrated by docker-compose:
 - **celery_text**: Text generation worker (queue: `text`, concurrency: 1)
 - **celery_image**: Image generation worker (queue: `image`, concurrency: 2, requires NVIDIA GPU)
 - **redis**: Message broker for Celery tasks
-- **wendy_proxy**: FastAPI proxy for Wendy deployments (no Discord token access)
 
 Codebase mounted at `/app`, state in `./data/` bind mount.
 
@@ -87,7 +86,7 @@ Codebase mounted at `/app`, state in `./data/` bind mount.
 
 **Cog System** (`src/hollingsbot/cogs/`): discord.py Cog pattern for modular features. Key cogs:
 - `chat_coordinator.py` - Routes messages to appropriate chat bots
-- `chat_bots/wendy_bot.py` - Main LLM chat with tool use and conversation history
+- `chat_bots/` - LLM chat bots (Gemini, Grok, Llama, temp bots) with shared conversation history
 - `image_gen_cog.py` - Image generation/editing via Celery
 - `starboard.py` - Message reposting on reactions
 - `temp_bot_commands.py` - Temporary webhook-based bots
@@ -123,10 +122,6 @@ The `llm_chat.py` cog maintains per-channel conversation history using a deque-b
 - **Image Handling**: Attachments are downloaded, resized (max 2048px), converted to JPEG, and base64-encoded as data URLs
 - **Text Attachments**: Uploaded text files are inlined into the conversation (max 120KB)
 - **SVG Rendering**: SVG code blocks are automatically converted to PNG (requires cairosvg)
-- **Model Selection**: Users can set per-user model preferences via `!model` command, stored in state JSON
-
-The system prompt is loaded from `config/system_prompt.txt` (or env var `SYSTEM_PROMPT_FILE`) with mtime-based caching. Users can override via `!system <prompt>` or reset with `!system reset`.
-
 ### Conversation Summarization
 
 When `LLM_SUMMARY_ENABLED=1`, the bot uses progressive summarization to reduce token costs and enable prompt caching:
@@ -168,7 +163,7 @@ The `temp_bot_cog.py` allows spawning temporary webhook-based LLM bots that shar
 - **Conversation Tracking**: `ConversationTurn` includes `webhook_id` field for proper attribution
 
 **Example Flow**:
-1. User: `!spawn 10 convince wendy to cheer up`
+1. User: `!spawn 10 convince everyone to cheer up`
 2. Bot creates "Clever Owl" with 10 replies
 3. Clever Owl immediately responds to the prompt
 4. Main bot and Clever Owl can now respond to each other's messages
@@ -193,7 +188,6 @@ See `.env` file for full list. Most important:
 - `DISCORD_TOKEN` - Bot token (required)
 - `DEFAULT_LLM_PROVIDER`, `DEFAULT_LLM_MODEL` - LLM defaults
 - `STABLE_DIFFUSION_CHANNEL_IDS`, `LLM_WHITELIST_CHANNELS` - Channel allowlists (comma-separated)
-- `SYSTEM_PROMPT_FILE` - Path to system prompt (default: `config/system_prompt.txt`)
 - `PROMPT_DB_PATH` - SQLite database path (default: `/data/hollingsbot.db`)
 
 ## Adding New Features
@@ -218,68 +212,3 @@ See `.env` file for full list. Most important:
 - **Auto-restart**: Bot restarts every 6 hours (`BOT_RESTART_INTERVAL`)
 - **Available Models**: `src/hollingsbot/available_models.json`
 - **Unicode**: Avoid emojis in Python code due to `UnicodeEncodeError: 'charmap' codec can't encode character`
-
-## Wendy Deployment System
-
-Wendy can deploy static websites and multiplayer game servers to `wendy.monster` using a unified deployment script.
-
-### Architecture
-
-```
-Wendy (Claude CLI in celery_text)
-      |
-      | runs ./scripts/wendy/deploy.sh <project-path> [target-url]
-      v
-wendy_proxy (this repo) ────────────────────────────────────────────┐
-      |                                                              |
-      | POST /api/deploy_site                POST /api/deploy_game   |
-      | (adds WENDY_DEPLOY_TOKEN)            (adds WENDY_GAMES_TOKEN)|
-      v                                                              v
-wendy-sites (Orange Pi:8910)              wendy-games manager (Orange Pi:8920)
-      |                                                              |
-      v                                                              v
-https://wendy.monster/<name>/             Docker: wendy-game-<name>
-                                                   |
-                                                   v
-                                          https://wendy.monster/game/<name>/
-                                          wss://wendy.monster/game/<name>/ws
-```
-
-### Unified Deploy Script
-
-Location: `scripts/wendy/deploy.sh`
-
-**Auto-detection:**
-- Has `server.ts` → Game server deployment
-- Has `index.html` → Static site deployment
-
-**Usage:**
-```bash
-deploy.sh <project-path> [target-url]
-
-# Examples:
-deploy.sh landing              # site -> wendy.monster/landing/
-deploy.sh landing my-site      # site -> wendy.monster/my-site/
-deploy.sh snake-game           # game -> wendy.monster/game/snake-game/
-```
-
-### Environment Variables
-
-In `.env`:
-- `WENDY_DEPLOY_TOKEN` - Token for wendy-sites service
-- `WENDY_GAMES_TOKEN` - Token for wendy-games service
-
-In `docker-compose.yml`, wendy_proxy receives both tokens:
-```yaml
-wendy_proxy:
-  environment:
-    - WENDY_DEPLOY_TOKEN=${WENDY_DEPLOY_TOKEN}
-    - WENDY_GAMES_TOKEN=${WENDY_GAMES_TOKEN}
-```
-
-### Related Files
-
-- `scripts/wendy/deploy.sh` - Unified deployment script
-- `src/hollingsbot/wendy_proxy.py` - FastAPI proxy with `/api/deploy_site` and `/api/deploy_game`
-- `config/system_prompt.txt` - Wendy's instructions (includes deployment docs)
-- `data/wendy/wendys_folder/` - Wendy's workspace for projects

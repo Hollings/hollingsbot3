@@ -43,8 +43,6 @@ AVAILABLE_TOOLS: dict[str, Tool] = {
         function=check_tokens,
         channel_message=None,
     ),
-    # Note: "assistant" tool removed - when using claude-cli provider,
-    # Wendy IS Claude Code and has native access to WebSearch, WebFetch, Read
 }
 
 

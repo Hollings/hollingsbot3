@@ -25,7 +25,6 @@ See docs/INTEGRATIONS.md for details on each provider.
 
 from .anthropic import AnthropicTextGenerator
 from .base import TextGeneratorAPI
-from .claude_cli import ClaudeCliTextGenerator
 from .gemini import GeminiTextGenerator
 from .grok import GrokTextGenerator
 from .huggingface import HuggingFaceTextGenerator
@@ -34,7 +33,6 @@ from .openrouter import OpenRouterCompletionsGenerator, OpenRouterLoomGenerator,
 
 __all__ = [
     "AnthropicTextGenerator",
-    "ClaudeCliTextGenerator",
     "GeminiTextGenerator",
     "GrokTextGenerator",
     "HuggingFaceTextGenerator",
@@ -64,6 +62,4 @@ def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
         return OpenRouterLoomGenerator(model)
     if api == "gemini":
         return GeminiTextGenerator(model)
-    if api == "claude-cli":
-        return ClaudeCliTextGenerator(model)
     raise ValueError(f"Unknown API: {api}")

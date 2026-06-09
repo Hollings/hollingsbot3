@@ -305,43 +305,13 @@ class ChatCoordinator(commands.Cog):
         self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]
     ) -> None:
         """Try to get a response from bots (can be cancelled)."""
-        # Wendy always gets triggered first - she's the main character
-        # Other bots run after, with only one responding
-        wendy = None
-        other_bots = []
-
-        for bot_instance in self.bots:
-            if bot_instance.__class__.__name__ == "WendyBot":
-                wendy = bot_instance
-            else:
-                other_bots.append(bot_instance)
-
-        # Always trigger Wendy (she checks messages herself via check_messages.sh)
-        if wendy and hasattr(wendy, "receive_message"):
-            try:
-                _LOG.info("Triggering WendyBot...")
-                response_data = await wendy.receive_message(message, snapshot)
-                if response_data:
-                    await self._add_response_to_history(
-                        channel_id,
-                        response_data["message_id"],
-                        response_data["text"],
-                        response_data.get("webhook_id"),
-                        response_data["bot_name"],
-                    )
-                    _LOG.info("WendyBot responded")
-            except asyncio.CancelledError:
-                _LOG.info("WendyBot generation cancelled")
-                raise
-            except Exception:
-                _LOG.exception("Error calling WendyBot")
-
-        # Then try other bots (temp bots, etc.) - stop after first response
+        # Try bots in random order - stop after first response
         import random
 
-        random.shuffle(other_bots)
+        bots = list(self.bots)
+        random.shuffle(bots)
 
-        for bot_instance in other_bots:
+        for bot_instance in bots:
             try:
                 if hasattr(bot_instance, "receive_message"):
                     _LOG.info(f"Trying {bot_instance.__class__.__name__}...")
@@ -396,10 +366,6 @@ class ChatCoordinator(commands.Cog):
         # Collect images for LLM context
         current_images = await chat_utils.collect_image_attachments(message)
         merged_images = reply_images + current_images
-
-        # Save all attachments (any file type) for Wendy to access via check_messages.sh
-        if message.attachments:
-            await chat_utils.save_attachments_for_wendy(message)
 
         return ConversationTurn(
             role=role,
@@ -597,21 +563,18 @@ async def setup(bot: commands.Bot) -> None:
     await bot.add_cog(coordinator)
 
     # Import and register bots
-    # from hollingsbot.cogs.chat_bots.wendy_bot import WendyBot  # Moved to wendy-bot service
     from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
     from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
     from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
 
     # Initialize bots with typing tracker
-    # wendy = WendyBot(bot, coordinator, coordinator.typing_tracker)  # Moved to wendy-bot service
     temp_bot_manager = TempBotManager(bot, coordinator, coordinator.typing_tracker)
     grok = GrokBot(bot, coordinator, coordinator.typing_tracker)
     llama = LlamaBot(bot, coordinator, coordinator.typing_tracker)
     gemini = GeminiBot(bot, coordinator, coordinator.typing_tracker)
 
     # Register with coordinator
-    # coordinator.register_bot(wendy)  # Moved to wendy-bot service
     coordinator.register_bot(temp_bot_manager)
     coordinator.register_bot(grok)
     coordinator.register_bot(llama)

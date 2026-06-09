@@ -25,12 +25,12 @@ def build_level_1_prompt(messages: list[CachedMessage]) -> str:
     """
     messages_text = "\n".join(f"{msg.author_name}: {msg.content}" for msg in messages)
 
-    prompt = f"""Write a ONE sentence note about this conversation from Wendy's perspective (first person as Wendy). Be extremely brief. Example: "I talked with Hollings about X" or "We discussed Y". Never say "I talked with Wendy" - you ARE Wendy.
+    prompt = f"""Write a ONE sentence note about this conversation from the chat bot's perspective (first person). Be extremely brief. Example: "I talked with Hollings about X" or "We discussed Y".
 
 Messages:
 {messages_text}
 
-Wendy's one-sentence note:"""
+One-sentence note:"""
 
     return prompt
 
@@ -47,12 +47,12 @@ def build_level_2_prompt(summaries: list[str]) -> str:
     """
     summaries_text = "\n".join(f"- {s}" for s in summaries)
 
-    prompt = f"""Combine these notes into exactly 2 sentences from Wendy's perspective (first person as Wendy). Merge related topics, drop minor details.
+    prompt = f"""Combine these notes into exactly 2 sentences from the chat bot's perspective (first person). Merge related topics, drop minor details.
 
-Wendy's previous notes:
+Previous notes:
 {summaries_text}
 
-Wendy's two-sentence summary:"""
+Two-sentence summary:"""
 
     return prompt
 

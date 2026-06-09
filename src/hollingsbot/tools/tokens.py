@@ -75,16 +75,16 @@ def give_token(user: str) -> str:
         channel_id = context.get("channel_id")
         user_id = resolve_user_by_display_name(user, channel_id)
 
-    # If user is invalid, credit to Wendy herself
+    # If user is invalid, credit to the bot itself
     if user_id is None:
         bot_user_id = context.get("bot_user_id")
         if bot_user_id:
             try:
                 new_balance = give_user_token(bot_user_id)
-                _LOG.info("Invalid user '%s', gave token to Wendy instead (balance: %d)", user, new_balance)
-                return f"Couldn't find '{user}', so Wendy gets to have it. She now has {new_balance} token(s)."
+                _LOG.info("Invalid user '%s', gave token to the bot instead (balance: %d)", user, new_balance)
+                return f"Couldn't find '{user}', so I get to keep it. I now have {new_balance} token(s)."
             except Exception as exc:
-                _LOG.exception("Failed to give token to Wendy")
+                _LOG.exception("Failed to give token to the bot")
                 return f"Failed to give token: {exc}"
         return f"Invalid user identifier: {user}"
 

@@ -347,7 +347,7 @@ class GrokBot:
 
         GrokBot sees:
         - Own past webhook messages → "assistant"
-        - All other messages (users, Wendy, temp bots) → "user"
+        - All other messages (users, other bots, temp bots) → "user"
         """
         # Get GrokBot's webhook IDs
         grok_webhook_ids = set(self.channel_webhooks.values())
@@ -361,7 +361,7 @@ class GrokBot:
                 # This is from GrokBot → "assistant"
                 role = "assistant"
             else:
-                # Everything else (users, Wendy, temp bots) → "user"
+                # Everything else (users, other bots, temp bots) → "user"
                 role = "user"
 
             # Create new turn with translated role
@@ -799,9 +799,9 @@ class GrokBot:
                         args = parse_arguments(tool_call.raw_args)
                         query = args.get("query", "")
                         if query:
-                            display_messages.append(f'*wendy searched for "{query}"*')
+                            display_messages.append(f'*grok searched for "{query}"*')
                         else:
-                            display_messages.append("*wendy searched recent messages*")
+                            display_messages.append("*grok searched recent messages*")
 
             except Exception as exc:
                 _LOG.exception("Tool execution failed: %s", tool_call)

@@ -91,7 +91,6 @@ async def main():
             await _ensure_loaded("hollingsbot.cogs.starboard")
         await _ensure_loaded("hollingsbot.cogs.auto_pin")
         await _ensure_loaded("hollingsbot.cogs.chat_coordinator")
-        # await _ensure_loaded("hollingsbot.cogs.wendy_outbox")  # Moved to wendy-bot service
         await _ensure_loaded("hollingsbot.cogs.temp_bot_commands")
         await _ensure_loaded("hollingsbot.cogs.debug_commands")
         await _ensure_loaded("hollingsbot.cogs.feature_requests")
