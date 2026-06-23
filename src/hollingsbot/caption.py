@@ -21,21 +21,35 @@ def _load_font(size: int) -> ImageFont.ImageFont:
     return ImageFont.load_default()
 
 
-def calculate_font_size(caption: str) -> int:
-    """Return a font size based on caption length."""
+# Image width the caption sizes below were originally tuned for.
+_BASELINE_WIDTH = 1024
+
+
+def calculate_font_size(caption: str, image_width: int = _BASELINE_WIDTH) -> int:
+    """Return a font size based on caption length, scaled to image width.
+
+    Sizes are tuned for a 1024px-wide image and scaled up proportionally for
+    larger images so captions stay readable at thumbnail sizes. Images at or
+    below the baseline width keep the original sizing (no shrinking).
+    """
     if len(caption) < 100:
-        return 40
-    if len(caption) < 200:
-        return 30
-    return 20
+        base = 40
+    elif len(caption) < 200:
+        base = 30
+    else:
+        base = 20
+
+    scale = max(1.0, image_width / _BASELINE_WIDTH)
+    return round(base * scale)
 
 
 def _add_caption(img: Image.Image, caption: str) -> Image.Image:
     """Return a new image with the caption above the original image."""
-    font_size = calculate_font_size(caption)
+    font_size = calculate_font_size(caption, img.width)
     font = _load_font(font_size)
 
-    margin = 20
+    scale = max(1.0, img.width / _BASELINE_WIDTH)
+    margin = round(20 * scale)
     max_width = img.width - 2 * margin
 
     temp_img = Image.new("RGB", (img.width, img.height), (255, 255, 255))
