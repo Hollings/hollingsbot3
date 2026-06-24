@@ -101,13 +101,6 @@ class ChatCoordinator(commands.Cog):
         bot_name = bot_instance.__class__.__name__
         _LOG.info(f"Registered bot: {bot_name}")
 
-    def unregister_bot(self, bot_instance: object) -> None:
-        """Unregister a bot instance."""
-        if bot_instance in self.bots:
-            self.bots.remove(bot_instance)
-            bot_name = bot_instance.__class__.__name__
-            _LOG.info(f"Unregistered bot: {bot_name}")
-
     # ==================== Generation Cancellation ====================
 
     async def _cancel_all_generations(self, channel_id: int) -> None:
@@ -541,51 +534,6 @@ class ChatCoordinator(commands.Cog):
             task.add_done_callback(self._summary_tasks.discard)
         except Exception:
             _LOG.exception("Failed to trigger summarization for channel %d", channel_id)
-
-    def get_summarized_context(self, channel_id: int, raw_message_count: int | None = None) -> dict:
-        """Get hierarchical summaries + recent messages for LLM context building.
-
-        Args:
-            channel_id: The channel to get context for
-            raw_message_count: Number of raw messages to include (default: 7)
-
-        Returns:
-            dict with keys:
-                - raw_messages: list[CachedMessage] - recent messages (count varies)
-                - level_1_groups: list[MessageGroup] - up to 5 summaries of 5 messages each
-                - level_2_groups: list[MessageGroup] - up to 5 summaries of 25 messages each
-                - total_message_coverage: int - total messages represented
-                - has_summaries: bool - whether any summaries are available
-        """
-        if not self.summary_enabled or not self.summary_cache:
-            return {
-                "raw_messages": [],
-                "level_1_groups": [],
-                "level_2_groups": [],
-                "total_message_coverage": 0,
-                "has_summaries": False,
-            }
-
-        try:
-            context = self.summary_cache.get_hierarchical_context(channel_id, raw_message_count)
-            has_summaries = bool(context["level_1_groups"]) or bool(context["level_2_groups"])
-
-            return {
-                "raw_messages": context["raw_messages"],
-                "level_1_groups": context["level_1_groups"],
-                "level_2_groups": context["level_2_groups"],
-                "total_message_coverage": context["total_message_coverage"],
-                "has_summaries": has_summaries,
-            }
-        except Exception:
-            _LOG.exception("Failed to get summarized context")
-            return {
-                "raw_messages": [],
-                "level_1_groups": [],
-                "level_2_groups": [],
-                "total_message_coverage": 0,
-                "has_summaries": False,
-            }
 
 
 async def setup(bot: commands.Bot) -> None:

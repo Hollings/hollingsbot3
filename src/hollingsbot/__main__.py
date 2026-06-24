@@ -23,6 +23,8 @@ import discord
 from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
+from hollingsbot.settings import parse_id_set
+
 load_dotenv()
 
 token = os.getenv("DISCORD_TOKEN")
@@ -34,8 +36,7 @@ intents.message_content = True
 
 
 def _ids_from_env(name: str) -> set[int]:
-    raw = os.getenv(name, "") or ""
-    return {int(x.strip()) for x in raw.split(",") if x.strip().isdigit()}
+    return parse_id_set(os.getenv(name))
 
 
 _IMG_CHANNEL_IDS = _ids_from_env("STABLE_DIFFUSION_CHANNEL_IDS")

@@ -276,17 +276,6 @@ async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttac
     )
 
 
-def image_from_bytes(name: str, data: bytes) -> ImageAttachment:
-    """Create ImageAttachment from raw bytes (e.g., SVG conversion)."""
-    try:
-        with Image.open(io.BytesIO(data)) as img:
-            width, height = img.size
-    except Exception:
-        width = height = None
-    data_url = "data:image/png;base64," + base64.b64encode(data).decode("ascii")
-    return ImageAttachment(name=name, url="", data_url=data_url, width=width, height=height, size=len(data))
-
-
 def images_from_history(
     channel_histories: dict[int, deque[ConversationTurn]],
     channel_id: int,

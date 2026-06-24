@@ -26,7 +26,15 @@ celery_app.conf.task_routes = {
 }
 
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _ensure_output_dir() -> None:
+    """Create the image output directory on demand.
+
+    Done lazily (rather than at import time) so importing this module does not
+    require write access to OUTPUT_DIR. mkdir(exist_ok=True) is idempotent.
+    """
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 @celery_app.task(
@@ -126,6 +134,7 @@ def generate_image(
             logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
 
     ts = int(time.time())
+    _ensure_output_dir()
     if callable(gen_many):
         # Write all images and return list of paths
         if not images_bytes:

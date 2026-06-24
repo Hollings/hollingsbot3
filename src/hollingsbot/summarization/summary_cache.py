@@ -118,15 +118,6 @@ class SummaryCache:
                 ),
             )
 
-    def get_message_count(self, channel_id: int) -> int:
-        """Get total number of cached messages for a channel."""
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                "SELECT COUNT(*) FROM cached_messages WHERE channel_id = ?",
-                (channel_id,),
-            )
-            return cursor.fetchone()[0]
-
     def get_all_messages_ordered(self, channel_id: int, include_old: bool = False) -> list[CachedMessage]:
         """Get all cached messages for a channel, ordered by message_id (chronological).
 
@@ -154,19 +145,6 @@ class SummaryCache:
                     """,
                     (channel_id, SUMMARIZATION_CUTOFF_TIMESTAMP),
                 )
-            return [self._row_to_cached_message(row) for row in cursor.fetchall()]
-
-    def get_messages_by_ids(self, channel_id: int, start_id: int, end_id: int) -> list[CachedMessage]:
-        """Get cached messages between two message IDs (inclusive)."""
-        with self._get_connection(row_factory=True) as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM cached_messages
-                WHERE channel_id = ? AND message_id >= ? AND message_id <= ?
-                ORDER BY message_id ASC
-                """,
-                (channel_id, start_id, end_id),
-            )
             return [self._row_to_cached_message(row) for row in cursor.fetchall()]
 
     def get_recent_messages(self, channel_id: int, count: int) -> list[CachedMessage]:
@@ -227,21 +205,9 @@ class SummaryCache:
             )
             return cursor.lastrowid
 
-    def update_group_summary(self, group_id: int, summary_text: str) -> None:
-        """Update the summary text for a message group."""
-        with self._get_connection() as conn:
-            conn.execute(
-                "UPDATE message_groups SET summary_text = ? WHERE id = ?",
-                (summary_text, group_id),
-            )
-
     def get_groups_by_level(self, channel_id: int, level: int) -> list[MessageGroup]:
         """Get all message groups at a specific level for a channel."""
         return self._query_groups(channel_id, level, summary_filter=None)
-
-    def get_unsummarized_groups(self, channel_id: int, level: int) -> list[MessageGroup]:
-        """Get groups that don't have summaries yet at a specific level."""
-        return self._query_groups(channel_id, level, summary_filter="unsummarized")
 
     def get_summarized_groups(self, channel_id: int, level: int) -> list[MessageGroup]:
         """Get groups that have summaries at a specific level."""
@@ -282,21 +248,6 @@ class SummaryCache:
                 (channel_id, level),
             )
             return [self._row_to_message_group(row) for row in cursor.fetchall()]
-
-    def get_latest_group(self, channel_id: int, level: int) -> MessageGroup | None:
-        """Get the most recent message group at a specific level."""
-        with self._get_connection(row_factory=True) as conn:
-            cursor = conn.execute(
-                """
-                SELECT * FROM message_groups
-                WHERE channel_id = ? AND level = ?
-                ORDER BY end_message_id DESC
-                LIMIT 1
-                """,
-                (channel_id, level),
-            )
-            row = cursor.fetchone()
-            return self._row_to_message_group(row) if row else None
 
     def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
         """Check if a group already exists."""

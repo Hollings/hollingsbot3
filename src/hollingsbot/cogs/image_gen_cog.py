@@ -36,6 +36,7 @@ from discord.ext import commands
 from hollingsbot.caption import add_caption
 from hollingsbot.cost_tracking import CostTracker
 from hollingsbot.prompt_db import bulk_add_prompts, init_db
+from hollingsbot.settings import parse_id_set
 from hollingsbot.tasks import generate_image  # celery task
 from hollingsbot.text_generators import get_text_generator
 from hollingsbot.utils.image_utils import compress_image_to_fit
@@ -191,14 +192,12 @@ class ImageGenCog(commands.Cog):
         self.bot = bot
         init_db()
 
-        env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
-        self._allowed_channel_ids: set[int] = {int(cid.strip()) for cid in env_ids.split(",") if cid.strip().isdigit()}
+        self._allowed_channel_ids: set[int] = parse_id_set(os.getenv("STABLE_DIFFUSION_CHANNEL_IDS"))
 
         # Optional separate allowlist for the "edit:" command specifically.
         # If set, messages starting with "edit:" are also allowed in these channels
         # in addition to any general image channels above.
-        edit_ids = os.getenv("EDIT_CHANNEL_IDS", "")
-        self._edit_channel_ids: set[int] = {int(cid.strip()) for cid in edit_ids.split(",") if cid.strip().isdigit()}
+        self._edit_channel_ids: set[int] = parse_id_set(os.getenv("EDIT_CHANNEL_IDS"))
 
         allow_str = os.getenv("STABLE_DIFFUSION_ALLOW_DMS", "1").strip().lower()
         self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}

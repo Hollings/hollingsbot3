@@ -17,6 +17,8 @@ import discord
 from discord.ext import commands
 from PIL import Image
 
+from hollingsbot.settings import parse_id_set
+
 __all__ = ["GifReplyChainCog"]
 
 _log = logging.getLogger(__name__)
@@ -75,8 +77,7 @@ class GifReplyChainCog(commands.Cog):
         self.bot = bot
 
         # Load configuration from environment
-        env_ids = os.getenv("STABLE_DIFFUSION_CHANNEL_IDS", "")
-        self._allowed_channel_ids: set[int] = {int(x.strip()) for x in env_ids.split(",") if x.strip().isdigit()}
+        self._allowed_channel_ids: set[int] = parse_id_set(os.getenv("STABLE_DIFFUSION_CHANNEL_IDS"))
 
         self._max_frames = int(os.getenv("GIF_CHAIN_MAX_FRAMES", str(DEFAULT_MAX_FRAMES)))
         self._max_side_px = int(os.getenv("GIF_CHAIN_MAX_SIDE", str(DEFAULT_MAX_SIDE_PX)))

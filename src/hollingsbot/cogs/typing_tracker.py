@@ -72,15 +72,3 @@ class TypingTracker:
             _LOG.debug("Expired stale typing state for channel %d (age: %s)", channel_id, age)
 
         return is_recent
-
-    def clear_channel(self, channel_id: int) -> None:
-        """Clear typing state for a channel.
-
-        Useful when a message is sent to reset the typing indicator.
-
-        Args:
-            channel_id: The channel to clear
-        """
-        if channel_id in self._typing_state:
-            del self._typing_state[channel_id]
-            _LOG.debug("Cleared typing state for channel %d", channel_id)
