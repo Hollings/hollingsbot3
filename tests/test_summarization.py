@@ -178,6 +178,15 @@ class TestMessageGroups:
         groups = cache.get_groups_by_level(1, 1)
         assert [g.start_message_id for g in groups] == [1, 11]
 
+    def test_group_exists(self, cache):
+        assert cache.group_exists(1, 1, 1) is False
+        cache.save_message_group(_group(1, 5, "summary"))
+        assert cache.group_exists(1, 1, 1) is True
+        # Differing channel, level, or start id should not match.
+        assert cache.group_exists(2, 1, 1) is False
+        assert cache.group_exists(1, 2, 1) is False
+        assert cache.group_exists(1, 1, 6) is False
+
 
 class TestClearPoints:
     def test_set_and_get(self, cache):

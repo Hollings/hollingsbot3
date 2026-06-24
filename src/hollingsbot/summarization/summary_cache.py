@@ -205,6 +205,15 @@ class SummaryCache:
             )
             return cursor.lastrowid
 
+    def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
+        """Check if a group already exists."""
+        with self._get_connection() as conn:
+            cursor = conn.execute(
+                """SELECT 1 FROM message_groups WHERE channel_id = ? AND level = ? AND start_message_id = ?""",
+                (channel_id, level, start_message_id),
+            )
+            return cursor.fetchone() is not None
+
     def get_groups_by_level(self, channel_id: int, level: int) -> list[MessageGroup]:
         """Get all message groups at a specific level for a channel."""
         return self._query_groups(channel_id, level, summary_filter=None)
