@@ -349,13 +349,15 @@ class GrokBot:
         - Own past webhook messages → "assistant"
         - All other messages (users, other bots, temp bots) → "user"
         """
-        # Get GrokBot's webhook IDs
-        grok_webhook_ids = set(self.channel_webhooks.values())
+        # Get GrokBot's webhook IDs (parsed to ints for exact comparison)
+        grok_webhook_ids = {
+            wid for url in self.channel_webhooks.values() if (wid := chat_utils.webhook_id_from_url(url)) is not None
+        }
 
         translated = []
         for turn in history:
             # Check if this is from GrokBot itself (has one of our webhook IDs)
-            is_own_message = turn.webhook_id and any(str(turn.webhook_id) in wh_url for wh_url in grok_webhook_ids)
+            is_own_message = turn.webhook_id is not None and turn.webhook_id in grok_webhook_ids
 
             if is_own_message:
                 # This is from GrokBot → "assistant"

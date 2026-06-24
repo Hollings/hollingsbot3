@@ -491,7 +491,7 @@ class GifReplyChainCog(commands.Cog):
         if (message.content or "").strip().lower() != "gif":
             return False
 
-        return message.reference
+        return message.reference is not None
 
     async def _get_target_message(self, message: discord.Message) -> discord.Message | None:
         """Get the target message from a reply reference.

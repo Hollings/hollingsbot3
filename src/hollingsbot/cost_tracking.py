@@ -59,6 +59,11 @@ class CostTracker:
         at the daily free budget. Budget accrues at a rate of daily_budget / 1440
         (minutes per day).
 
+        This method does NOT commit; the caller owns the transaction. This keeps
+        the budget tick inside the caller's atomic transaction (e.g. the
+        ``BEGIN IMMEDIATE`` block in :meth:`deduct_cost`) so an inner commit can
+        no longer release the write lock early or defeat a later rollback.
+
         Args:
             user_id: Discord user ID
             conn: Database connection to use
@@ -96,7 +101,6 @@ class CostTracker:
                 "INSERT INTO user_hourly_budget (user_id, current_budget, last_tick_minute) VALUES (?, ?, ?)",
                 (user_id, current_budget, current_minute),
             )
-            conn.commit()
             _log.info(f"Initialized budget for user {user_id} at ${current_budget:.5f}")
             return current_budget
 
@@ -115,7 +119,6 @@ class CostTracker:
                 "UPDATE user_hourly_budget SET current_budget = ?, last_tick_minute = ? WHERE user_id = ?",
                 (new_budget, current_minute, user_id),
             )
-            conn.commit()
 
             _log.debug(
                 f"Updated budget for user {user_id}: "
@@ -146,8 +149,10 @@ class CostTracker:
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
 
-            # Update and get current hourly budget
+            # Update and get current hourly budget (commit the tick: this is a
+            # standalone read path, not part of a larger transaction)
             current_budget = self._update_hourly_budget(user_id, conn)
+            conn.commit()
 
             # Get credit balance
             credit_row = conn.execute(
@@ -287,8 +292,10 @@ class CostTracker:
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
 
-            # Update and get current hourly budget
+            # Update and get current hourly budget (commit the tick: this is a
+            # standalone read path, not part of a larger transaction)
             current_budget = self._update_hourly_budget(user_id, conn)
+            conn.commit()
 
             # Get daily usage
             daily_row = conn.execute(

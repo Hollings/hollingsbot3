@@ -238,6 +238,65 @@ class TestGetHistory:
         assert history[0]["generation_count"] == 2
 
 
+class TestTransactionAtomicity:
+    """Regression tests for deduct_cost atomicity.
+
+    Bug: `_update_hourly_budget` issued its own `conn.commit()`, which ended the
+    `BEGIN IMMEDIATE` transaction in `deduct_cost` early - defeating the
+    race-protection write lock and making the budget tick survive a later
+    rollback. The fix makes the caller own the commit.
+    """
+
+    def _seed_zero_budget_with_elapsed(self, tracker, user_id, minutes=60):
+        """Create a user row at budget 0 with last_tick set `minutes` in the past."""
+        tracker.can_afford(user_id, 0)  # create the row
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
+            past = (datetime.now(timezone.utc) - timedelta(minutes=minutes)).isoformat()
+            conn.execute(
+                "UPDATE user_hourly_budget SET current_budget = 0, last_tick_minute = ? WHERE user_id = ?",
+                (past, user_id),
+            )
+            conn.commit()
+
+    def test_update_hourly_budget_does_not_self_commit(self, tracker):
+        """A rolled-back transaction must undo the budget tick.
+
+        If `_update_hourly_budget` committed internally, the accrued budget would
+        persist past the caller's rollback. This asserts it does not.
+        """
+        user_id = 555
+        self._seed_zero_budget_with_elapsed(tracker, user_id, minutes=60)
+
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            accrued = tracker._update_hourly_budget(user_id, conn)
+            assert accrued > 0, "60 minutes elapsed should accrue some budget"
+            conn.rollback()
+
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
+            row = conn.execute(
+                "SELECT current_budget FROM user_hourly_budget WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        assert row[0] == pytest.approx(0.0, abs=1e-9), "tick must roll back; helper must not self-commit"
+
+    def test_read_path_still_persists_tick(self, tracker):
+        """can_afford / get_user_status own the commit now, so the tick still
+        persists on the read paths (no behavior regression)."""
+        user_id = 556
+        self._seed_zero_budget_with_elapsed(tracker, user_id, minutes=60)
+
+        # A read path must advance last_tick_minute durably.
+        tracker.get_user_status(user_id)
+
+        with contextlib.closing(sqlite3.connect(tracker.db_path)) as conn:
+            row = conn.execute(
+                "SELECT current_budget FROM user_hourly_budget WHERE user_id = ?",
+                (user_id,),
+            ).fetchone()
+        assert row[0] > 0, "read path should durably persist the accrued tick"
+
+
 class TestBudgetRefresh:
     """Tests for budget refresh over time."""
 

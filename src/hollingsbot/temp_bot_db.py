@@ -357,14 +357,16 @@ def get_messages_since_bot_left(channel_id: int, bot_name: str) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _adjust_replies_remaining(webhook_id: int, delta: int) -> int:
+def _adjust_replies_remaining(webhook_id: int, delta: int) -> int | None:
     """Atomically add `delta` to `replies_remaining` for an active temp bot.
 
     Uses BEGIN IMMEDIATE for a write lock plus RETURNING for atomicity, so
     concurrent decrement/increment calls cannot lose updates.
 
     Returns:
-        The new `replies_remaining` value, or -1 if no active row matched.
+        The new `replies_remaining` value, or ``None`` if no active row matched.
+        ``None`` (rather than -1) is used so callers can distinguish "no such
+        active bot" from a row that was legitimately decremented to -1.
     """
     init_db()
     with sqlite3.connect(DB_PATH) as conn:
@@ -381,7 +383,7 @@ def _adjust_replies_remaining(webhook_id: int, delta: int) -> int:
             )
             row = cur.fetchone()
             conn.commit()
-            return -1 if row is None else int(row[0])
+            return None if row is None else int(row[0])
         except Exception:
             conn.rollback()
             raise
@@ -394,9 +396,14 @@ def decrement_temp_bot_replies(webhook_id: int) -> tuple[int, bool]:
         tuple: (remaining_replies, should_cleanup)
         - remaining_replies: The new value after decrement (-1 if bot not found)
         - should_cleanup: True if bot should be cleaned up (remaining <= 0)
+
+    A bot that already sat at 0 while still active (e.g. hit during the race
+    window before cleanup runs) decrements to -1 and is correctly reported with
+    should_cleanup=True, distinct from the "bot not found" case which reports
+    (-1, False).
     """
     remaining = _adjust_replies_remaining(webhook_id, -1)
-    if remaining == -1:
+    if remaining is None:
         return (-1, False)
     return (remaining, remaining <= 0)
 
@@ -407,4 +414,5 @@ def increment_temp_bot_replies(webhook_id: int) -> int:
     Returns:
         The new value after increment, or -1 if bot not found.
     """
-    return _adjust_replies_remaining(webhook_id, 1)
+    result = _adjust_replies_remaining(webhook_id, 1)
+    return -1 if result is None else result

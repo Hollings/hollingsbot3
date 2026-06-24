@@ -418,3 +418,24 @@ def build_user_message_text(display_name: str, reply_hint: str | None, base_text
         body = "[no content]"
 
     return f"<{display_name}>: {body}"
+
+
+def webhook_id_from_url(webhook_url: str) -> int | None:
+    """Extract the numeric webhook ID from a Discord webhook URL.
+
+    Discord webhook URLs look like
+    ``https://discord.com/api/webhooks/<id>/<token>`` (optionally with query
+    params). The ``<id>`` segment is the webhook's integer ID. Returns ``None``
+    if the URL doesn't contain a parseable ID.
+
+    This exists so callers can compare webhook IDs exactly (``id in {ids}``)
+    instead of doing a fragile substring test of ``str(id)`` against the full
+    URL, where a digit run inside the secret token could cause a false match.
+    """
+    path = webhook_url.split("?", 1)[0].rstrip("/")
+    parts = path.split("/")
+    # .../webhooks/<id>/<token>  -> id is second-to-last; .../webhooks/<id> -> last
+    for candidate in (parts[-2] if len(parts) >= 2 else "", parts[-1] if parts else ""):
+        if candidate.isdigit():
+            return int(candidate)
+    return None

@@ -109,6 +109,35 @@ def test_decrement_after_delete_is_noop(temp_bot_db):
     assert should_cleanup is False
 
 
+def test_decrement_to_negative_reports_cleanup(temp_bot_db):
+    """A still-active bot at 0 decremented to -1 must report should_cleanup=True.
+
+    Regression: the -1 sentinel for "no active row" collided with a row that
+    was legitimately decremented to -1 (a depleted-but-still-active bot hit in
+    the race window before cleanup runs). That made decrement report
+    should_cleanup=False for a bot that genuinely needs cleanup.
+    """
+    from hollingsbot.temp_bot_db import decrement_temp_bot_replies
+
+    webhook_id = _make_bot(temp_bot_db, replies_remaining=0)
+
+    remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
+
+    assert remaining == -1
+    assert should_cleanup is True, "a real active row at -1 must be flagged for cleanup"
+
+
+def test_decrement_missing_bot_distinct_from_negative(temp_bot_db):
+    """The 'no such active bot' case still reports (-1, False), distinct from
+    a row legitimately decremented to -1 (which reports should_cleanup=True)."""
+    from hollingsbot.temp_bot_db import decrement_temp_bot_replies
+
+    remaining, should_cleanup = decrement_temp_bot_replies(webhook_id=123456)
+
+    assert remaining == -1
+    assert should_cleanup is False
+
+
 def test_inactive_bot_excluded_from_active_listings(temp_bot_db):
     """`get_temp_bots_for_channel` and `get_depleted_temp_bots` must not
     return inactive bots. After cleanup, the bot is invisible to the
