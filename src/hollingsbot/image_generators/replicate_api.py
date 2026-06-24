@@ -124,38 +124,17 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
 
             # Handle gpt-image models specially
             if self._is_gpt_image():
-                inputs["quality"] = self.quality
-                inputs["moderation"] = "low"
-                if self.aspect_ratio:
-                    inputs["aspect_ratio"] = self.aspect_ratio
-                if image_input:
-                    # Scale images to 1024px max dimension for gpt-image
-                    scaled_images = self._scale_images_for_gpt(image_input)
-                    prepared, cleanup = self._prepare_image_inputs(scaled_images)
-                    try:
-                        # gpt-image uses input_images parameter
-                        inputs["input_images"] = prepared
-                        if output_format:
-                            inputs["output_format"] = output_format
-                        self._log.info(
-                            "Replicate run (gpt-image) model=%s quality=%s keys=%s",
-                            self.model,
-                            self.quality,
-                            sorted(inputs.keys()),
-                        )
-                        raw_output = await self._client.async_run(self.model, input=inputs)
-                    finally:
-                        self._cleanup_files(cleanup)
-                else:
-                    if output_format:
-                        inputs["output_format"] = output_format
+                gpt_inputs, cleanup = self._build_gpt_image_inputs(prompt, image_input, output_format)
+                try:
                     self._log.info(
                         "Replicate run (gpt-image) model=%s quality=%s keys=%s",
                         self.model,
                         self.quality,
-                        sorted(inputs.keys()),
+                        sorted(gpt_inputs.keys()),
                     )
-                    raw_output = await self._client.async_run(self.model, input=inputs)
+                    raw_output = await self._client.async_run(self.model, input=gpt_inputs)
+                finally:
+                    self._cleanup_files(cleanup)
                 return await self._normalise_output(raw_output)
 
             # Prefer maximum resolution and sequential generation by default for Seedream-4
@@ -214,6 +193,35 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return await self._normalise_output(raw_output)
         except Exception as exc:
             raise RuntimeError(f"Replicate generation failed: {exc}") from exc
+
+    def _build_gpt_image_inputs(
+        self,
+        prompt: str,
+        image_input: Sequence[Any] | None,
+        output_format: str | None,
+    ) -> tuple[dict[str, Any], list[tuple[BinaryIO, str | None]]]:
+        """Build the input payload for gpt-image models.
+
+        Returns the assembled inputs dict and a cleanup list of any temporary
+        files opened for ``input_images`` (caller must pass it to
+        :meth:`_cleanup_files` after the model run completes).
+        """
+        inputs: dict[str, Any] = {"prompt": prompt}
+        if self.model_options:
+            inputs.update(self.model_options)
+        inputs["quality"] = self.quality
+        inputs["moderation"] = "low"
+        if self.aspect_ratio:
+            inputs["aspect_ratio"] = self.aspect_ratio
+        cleanup: list[tuple[BinaryIO, str | None]] = []
+        if image_input:
+            # Scale images to 1024px max dimension for gpt-image, then prepare uploads
+            scaled_images = self._scale_images_for_gpt(image_input)
+            prepared, cleanup = self._prepare_image_inputs(scaled_images)
+            inputs["input_images"] = prepared
+        if output_format:
+            inputs["output_format"] = output_format
+        return inputs, cleanup
 
     def _scale_images_for_gpt(self, images: Sequence[Any]) -> list[bytes]:
         """Scale images to 1024px max dimension for gpt-image models."""
@@ -332,38 +340,17 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
 
         # Handle gpt-image models specially
         if self._is_gpt_image():
-            inputs["quality"] = self.quality
-            inputs["moderation"] = "low"
-            if self.aspect_ratio:
-                inputs["aspect_ratio"] = self.aspect_ratio
-            if image_input:
-                # Scale images to 1024px max dimension for gpt-image
-                scaled_images = self._scale_images_for_gpt(image_input)
-                prepared, cleanup = self._prepare_image_inputs(scaled_images)
-                try:
-                    # gpt-image uses input_images parameter
-                    inputs["input_images"] = prepared
-                    if output_format:
-                        inputs["output_format"] = output_format
-                    self._log.info(
-                        "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
-                        self.model,
-                        self.quality,
-                        sorted(inputs.keys()),
-                    )
-                    raw_output = await self._client.async_run(self.model, input=inputs)
-                finally:
-                    self._cleanup_files(cleanup)
-            else:
-                if output_format:
-                    inputs["output_format"] = output_format
+            gpt_inputs, cleanup = self._build_gpt_image_inputs(prompt, image_input, output_format)
+            try:
                 self._log.info(
                     "Replicate run (gpt-image many) model=%s quality=%s keys=%s",
                     self.model,
                     self.quality,
-                    sorted(inputs.keys()),
+                    sorted(gpt_inputs.keys()),
                 )
-                raw_output = await self._client.async_run(self.model, input=inputs)
+                raw_output = await self._client.async_run(self.model, input=gpt_inputs)
+            finally:
+                self._cleanup_files(cleanup)
 
             results = await self._collect_all(raw_output)
             if not results:

@@ -249,18 +249,6 @@ class SummaryCache:
             )
             return [self._row_to_message_group(row) for row in cursor.fetchall()]
 
-    def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
-        """Check if a group already exists."""
-        with self._get_connection() as conn:
-            cursor = conn.execute(
-                """
-                SELECT 1 FROM message_groups
-                WHERE channel_id = ? AND level = ? AND start_message_id = ?
-                """,
-                (channel_id, level, start_message_id),
-            )
-            return cursor.fetchone() is not None
-
     def _row_to_message_group(self, row: sqlite3.Row) -> MessageGroup:
         """Convert a database row to a MessageGroup."""
         return MessageGroup(
