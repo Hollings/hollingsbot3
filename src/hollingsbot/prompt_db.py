@@ -1,7 +1,8 @@
 # prompt_db.py
 import os
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
@@ -9,10 +10,28 @@ DEFAULT_DB = Path("/data/hollingsbot.db")
 DB_PATH = Path(os.getenv("PROMPT_DB_PATH", str(DEFAULT_DB))).expanduser()
 
 
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    """Open a SQLite connection that commits on success and always closes.
+
+    sqlite3's own context manager (``with sqlite3.connect(...) as conn``)
+    commits/rolls back the transaction but does NOT close the connection,
+    leaking the file handle until garbage collection. That lingering handle
+    locks the database file on Windows (WinError 32), breaking temp-dir
+    teardown in tests. Closing explicitly also rolls back on error.
+    """
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
     """Create required tables if they don't exist."""
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS prompts (
@@ -242,7 +261,7 @@ class RateLimitError(RuntimeError):
 
 def add_prompt(text: str, submitter: str, api: str, model: str, *, status: str = "queued") -> int:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             "INSERT INTO prompts (text, submitter, api, model, time, status) VALUES (?, ?, ?, ?, ?, ?)",
             (text, submitter, api, model, datetime.utcnow().isoformat(), status),
@@ -296,7 +315,7 @@ def bulk_add_prompts(
         return []
 
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         if daily_limit is not None:
             if window_start is None:
                 raise ValueError("window_start must be provided when enforcing a daily_limit")
@@ -337,7 +356,7 @@ def bulk_add_prompts(
 
 def update_status(prompt_id: int, status: str) -> None:
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("UPDATE prompts SET status = ? WHERE id = ?", (status, prompt_id))
         conn.commit()
 
@@ -365,7 +384,7 @@ def log_starboard_post(
     """
 
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             INSERT INTO starboard_posts (
@@ -441,7 +460,7 @@ def log_llm_api_call(
 ) -> int:
     """Log an LLM API call for debugging purposes."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO llm_api_logs (
@@ -472,7 +491,7 @@ def log_llm_api_call(
 def give_user_token(user_id: int) -> int:
     """Give one token to a user. Returns the user's new token balance."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             INSERT INTO user_tokens (user_id, tokens, last_received_at)
@@ -495,7 +514,7 @@ def give_user_token(user_id: int) -> int:
 def get_user_token_balance(user_id: int) -> int:
     """Get a user's token balance."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             "SELECT tokens FROM user_tokens WHERE user_id = ?",
             (user_id,),
@@ -510,7 +529,7 @@ def deduct_user_tokens(user_id: int, amount: int) -> tuple[bool, int]:
     Returns (False, current_balance) if user doesn't have enough tokens.
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             "SELECT tokens FROM user_tokens WHERE user_id = ?",
             (user_id,),
@@ -536,7 +555,7 @@ def get_token_leaderboard(limit: int = 10) -> list[tuple[int, int]]:
         List of (user_id, tokens) tuples, sorted by tokens descending.
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             """
             SELECT user_id, tokens FROM user_tokens
@@ -556,7 +575,7 @@ def resolve_user_by_display_name(display_name: str, channel_id: int | None = Non
     If channel_id provided, prefers matches from that channel.
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         # Try channel-specific search first if channel_id provided
         if channel_id:
             cur = conn.execute(
