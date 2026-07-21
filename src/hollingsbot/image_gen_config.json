@@ -37,14 +37,13 @@
   },
   "edit:": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
+    "model": "google/nano-banana-2",
     "mode": "edit",
-    "quality": "low",
-    "price_per_image": 0.02
+    "price_per_image": 0.04
   },
   "edit high:": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
+    "model": "openai/gpt-image-2",
     "mode": "edit",
     "quality": "high",
     "price_per_image": 0.05
@@ -57,7 +56,7 @@
   },
   "zoom out": {
     "api": "replicate",
-    "model": "openai/gpt-image-1.5",
+    "model": "openai/gpt-image-2",
     "mode": "edit",
     "quality": "low",
     "price_per_image": 0.02,
