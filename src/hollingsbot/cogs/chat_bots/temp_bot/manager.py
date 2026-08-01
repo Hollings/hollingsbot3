@@ -260,8 +260,8 @@ class TempBotManager:
         """Select which temp bot (if any) should respond to this message.
 
         A bot that is directly replied to always responds. Otherwise each bot
-        independently rolls RESPONSE_PROBABILITY; if none pass, no temp bot
-        responds and the coordinator falls through to the main bots.
+        independently rolls RESPONSE_PROBABILITY; if none pass, one is forced
+        so that at least one temp bot always responds while any are active.
         """
         # Exclude the temp bot that just spoke (if message is from a temp bot)
         available_bots = temp_bots
@@ -285,11 +285,11 @@ class TempBotManager:
             _LOG.info(f"Message is a direct reply to temp bot '{replied_bot['name']}', it will respond")
             return replied_bot
 
-        # Roll probability for each bot independently; no response if all decline
+        # Roll probability for each bot independently; force one if all decline
         willing_bots = [bot for bot in available_bots if random.random() < RESPONSE_PROBABILITY]
         if not willing_bots:
-            _LOG.info(f"All {len(available_bots)} temp bots declined probability roll, no temp bot responds")
-            return None
+            _LOG.info(f"All {len(available_bots)} temp bots declined probability roll, forcing one to respond")
+            willing_bots = [random.choice(available_bots)]
 
         # Pick a random bot from those willing to respond
         selected = random.choice(willing_bots)
