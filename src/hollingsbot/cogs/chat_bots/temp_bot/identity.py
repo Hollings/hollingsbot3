@@ -29,7 +29,10 @@ _IDENTITY_USER_PROMPT_TEMPLATE = (
     "Generate a name and avatar for a character based on this personality:\n\n"
     "```\n{topic}\n```\n\n"
     "Requirements:\n"
-    "1. NAME: An obscure 2-3 word name that subtly relates to the topic. "
+    "1. NAME: If the personality description explicitly gives the character a name "
+    '(e.g. "you are Gary", "a bot named Mr. Snuffles", "Gary the grumpy plumber"), '
+    "use EXACTLY that name - do not invent a different one. "
+    "Otherwise, invent an obscure 2-3 word name that subtly relates to the topic. "
     "Can be Firstname Lastname style or modern username style. Keep it subtle, not nerdy or cringe. "
     "Do NOT use the word Meridian.\n\n"
     "2. AVATAR: A prompt for an AI image generator to create a profile picture for this character. "
