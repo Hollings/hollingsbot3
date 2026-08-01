@@ -66,6 +66,22 @@ _INITIAL_KICKOFF_PROMPT = (
 )
 
 
+def _strip_self_name_prefix(text: str, bot_name: str) -> str:
+    """Remove a leading self-name tag from generated output.
+
+    History is fed to the LLM as ``<DisplayName>: text``, and some models
+    imitate the convention in their own replies (``<Jeff> hi``, ``Jeff: hi``).
+    Webhook messages already carry the bot's name, so strip the tag.
+    """
+    name = re.escape(bot_name)
+    pattern = re.compile(rf"^\s*(?:<{name}>\s*:?|{name}\s*:)\s*", re.IGNORECASE)
+    prev = None
+    while prev != text:
+        prev = text
+        text = pattern.sub("", text, count=1)
+    return text
+
+
 def _chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     """Split a message into Discord-sized chunks, preferring newline boundaries."""
     if len(text) <= limit:
@@ -546,6 +562,7 @@ class TempBotManager:
 
             # Store Celery async_result in job for cancellation
             response_text, llm_debug, stored_conversation = await self._generate_response_with_job(conversation, job)
+            response_text = _strip_self_name_prefix(response_text, bot_name)
             _LOG.info(f"Temp bot '{bot_name}' generated response: {response_text[:100]}...")
 
             if not response_text or not response_text.strip():
@@ -1102,6 +1119,7 @@ class TempBotManager:
 
             # Generate response
             response_text = await self._generate_response(conversation)
+            response_text = _strip_self_name_prefix(response_text, bot_name)
             if not response_text or not response_text.strip():
                 _LOG.error("Empty initial response for temp bot")
                 increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
