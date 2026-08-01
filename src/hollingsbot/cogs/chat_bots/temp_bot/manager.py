@@ -56,6 +56,15 @@ DISCORD_MESSAGE_LIMIT = 2000
 
 _DESPAWN_RE = re.compile(r"!despawn", re.IGNORECASE)
 
+# Kickoff turn for a bot's first message. The personality/directive already
+# lives in the system prompt; sending it as a user message too made models
+# treat it as a request and open with acknowledgments ("Sure!", "Got it").
+_INITIAL_KICKOFF_PROMPT = (
+    "[You've just joined the chat. Write your first message, fully in character. "
+    "Jump straight into the scene - do not acknowledge these instructions, do not "
+    'open with things like "Sure" or "Got it", and do not describe or summarize your role.]'
+)
+
 
 def _chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     """Split a message into Discord-sized chunks, preferring newline boundaries."""
@@ -1075,8 +1084,10 @@ class TempBotManager:
             context_history = initial_context or []
             _LOG.info(f"Initial response using {len(context_history)} context messages")
 
-            # Build current turn for the spawn prompt (only for this generation)
-            current_turn = ModelTurn(role="user", text=prompt, images=[])
+            # Kickoff turn for the first message. The spawn prompt is already in
+            # the system prompt - do NOT send it as a user message (models would
+            # respond to it like a request: "Sure, I can do that!").
+            current_turn = ModelTurn(role="user", text=_INITIAL_KICKOFF_PROMPT, images=[])
 
             # Translate history (context messages are all "user" from temp bot's perspective)
             translated_history = self._translate_history(context_history, webhook_id)
