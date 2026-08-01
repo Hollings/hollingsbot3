@@ -730,8 +730,8 @@ class TempBotManager:
 
         Returns (text, llm_debug, conversation).
         """
-        provider = "anthropic"
-        model = "claude-haiku-4-5"
+        provider = "openai"
+        model = "gpt-5.6-luna"
 
         # Debug logging
         _LOG.info(f"Temp bot calling Celery with {len(conversation)} turns")
@@ -784,7 +784,7 @@ class TempBotManager:
         return text, llm_debug, stored_conversation
 
     async def _generate_response(self, conversation: list[dict[str, Any]]) -> str:
-        """Generate LLM response via Celery using Claude Haiku.
+        """Generate LLM response via Celery using GPT-5.6 Luna.
 
         Thin wrapper around :meth:`_generate_response_with_job` for callers that
         don't need cancellation support — discards the debug payload.
