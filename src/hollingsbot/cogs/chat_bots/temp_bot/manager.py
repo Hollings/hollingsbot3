@@ -250,7 +250,9 @@ class TempBotManager:
     def _select_responding_bot(self, message: discord.Message, temp_bots: list[dict]) -> dict | None:
         """Select which temp bot (if any) should respond to this message.
 
-        Uses RESPONSE_PROBABILITY to determine if each bot wants to respond.
+        A bot that is directly replied to always responds. Otherwise each bot
+        independently rolls RESPONSE_PROBABILITY; if none pass, no temp bot
+        responds and the coordinator falls through to the main bots.
         """
         # Exclude the temp bot that just spoke (if message is from a temp bot)
         available_bots = temp_bots
@@ -268,18 +270,33 @@ class TempBotManager:
         if not available_bots:
             return None
 
-        # Roll probability for each bot independently
-        willing_bots = [bot for bot in available_bots if random.random() < RESPONSE_PROBABILITY]
+        # If the message is a direct reply to one of our temp bots, that bot always responds
+        replied_bot = self._find_replied_temp_bot(message, available_bots)
+        if replied_bot:
+            _LOG.info(f"Message is a direct reply to temp bot '{replied_bot['name']}', it will respond")
+            return replied_bot
 
+        # Roll probability for each bot independently; no response if all decline
+        willing_bots = [bot for bot in available_bots if random.random() < RESPONSE_PROBABILITY]
         if not willing_bots:
-            # At least one temp bot must respond - force pick one
-            _LOG.info(f"All {len(available_bots)} temp bots declined probability roll, forcing one to respond")
-            willing_bots = [random.choice(available_bots)]
+            _LOG.info(f"All {len(available_bots)} temp bots declined probability roll, no temp bot responds")
+            return None
 
         # Pick a random bot from those willing to respond
         selected = random.choice(willing_bots)
         _LOG.info(f"{len(willing_bots)}/{len(available_bots)} bots willing to respond, selected '{selected['name']}'")
         return selected
+
+    @staticmethod
+    def _find_replied_temp_bot(message: discord.Message, temp_bots: list[dict]) -> dict | None:
+        """Return the temp bot whose webhook message this message replies to, if any."""
+        reference = message.reference
+        if not reference:
+            return None
+        resolved = reference.resolved
+        if not isinstance(resolved, discord.Message) or not resolved.webhook_id:
+            return None
+        return next((b for b in temp_bots if b["webhook_id"] == resolved.webhook_id), None)
 
     def _extract_current_turn(self, message: discord.Message, history: list[ConversationTurn]) -> ModelTurn | None:
         """Extract current turn from history."""
