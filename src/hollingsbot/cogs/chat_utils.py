@@ -1,5 +1,6 @@
 """Shared utility functions for chat system."""
 
+import asyncio
 import base64
 import io
 import logging
@@ -202,10 +203,19 @@ def encode_jpeg(image: Image.Image) -> bytes:
     """Encode image as JPEG, trying progressively lower quality to meet size limit."""
     for quality in (90, 85, 80, 75, 70, 60, 50):
         out = io.BytesIO()
-        image.save(out, format="JPEG", optimize=True, quality=quality)
+        image.save(out, format="JPEG", quality=quality)
         if out.tell() <= _IMAGE_MAX_BYTES:
             return out.getvalue()
     return out.getvalue()
+
+
+def _process_image_bytes(data: bytes) -> tuple[bytes, int, int]:
+    """Decode, resize, and re-encode raw image bytes (CPU-bound; run in a thread)."""
+    with Image.open(io.BytesIO(data)) as img:
+        img = img.convert("RGB")
+        img = resize_image_if_needed(img)
+        width, height = img.size
+        return encode_jpeg(img), width, height
 
 
 def resize_image_if_needed(img: Image.Image) -> Image.Image:
@@ -249,11 +259,9 @@ async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttac
         return None
 
     try:
-        with Image.open(io.BytesIO(data)) as img:
-            img = img.convert("RGB")
-            img = resize_image_if_needed(img)
-            width, height = img.size
-            jpeg_bytes = encode_jpeg(img)
+        # PIL decode/resize/encode is CPU-bound and holds the GIL for hundreds
+        # of ms on large images; keep it off the event loop.
+        jpeg_bytes, width, height = await asyncio.to_thread(_process_image_bytes, data)
     except Exception:
         _LOG.exception("Failed to process image attachment %s", attachment.filename)
         return ImageAttachment(
@@ -359,10 +367,14 @@ async def build_reply_hint(
 # ==================== URL Metadata ====================
 
 
-async def extract_url_images(base_text: str) -> tuple[list[ImageAttachment], str, str]:
+async def extract_url_images(base_text: str, *, download_images: bool = True) -> tuple[list[ImageAttachment], str, str]:
     """
     Extract URL metadata and images from text.
     Returns (images, full_metadata_text, history_metadata_text).
+
+    Pass ``download_images=False`` when only the metadata text is needed
+    (e.g. history turns) - downloading and re-encoding every linked image
+    just to discard it stalls the event loop for seconds per link.
     """
     url_images: list[ImageAttachment] = []
     full_metadata_text = ""
@@ -382,6 +394,9 @@ async def extract_url_images(base_text: str) -> tuple[list[ImageAttachment], str
     # For history: exclude images
     history_metadata_parts = [format_metadata_for_llm(m, include_images=False) for m in url_metadata_list]
     history_metadata_text = "\n\n".join(history_metadata_parts)
+
+    if not download_images:
+        return url_images, full_metadata_text, history_metadata_text
 
     # Download and process images from URL metadata
     for metadata in url_metadata_list:

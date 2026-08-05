@@ -924,7 +924,11 @@ class ImageGenCog(commands.Cog):
 
             prompt_text, images_bytes = result
             try:
-                files = self._prepare_discord_files(images_bytes, prompt_text, spec, seed, limit_bytes, skip_caption)
+                # Captioning + compression can run dozens of PIL encodes; keep
+                # that CPU work off the event loop.
+                files = await asyncio.to_thread(
+                    self._prepare_discord_files, images_bytes, prompt_text, spec, seed, limit_bytes, skip_caption
+                )
 
                 if not files:
                     raise RuntimeError(

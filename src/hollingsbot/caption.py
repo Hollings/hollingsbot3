@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import textwrap
+from functools import lru_cache
 from io import BytesIO
 
 from PIL import Image, ImageDraw, ImageFont
 
 
+@lru_cache(maxsize=16)
 def _load_font(size: int) -> ImageFont.ImageFont:
     """Return a truetype font or fall back to the default."""
     font_candidates = (

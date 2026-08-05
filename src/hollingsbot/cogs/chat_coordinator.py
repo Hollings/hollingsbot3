@@ -380,8 +380,9 @@ class ChatCoordinator(commands.Cog):
         for placeholder in placeholders:
             history_text += f"\n{placeholder}"
 
-        # Extract URL metadata
-        _, _, history_metadata = await chat_utils.extract_url_images(base_text)
+        # Extract URL metadata (text only - the images are never used here, and
+        # downloading them stalls the event loop while the history lock is held)
+        _, _, history_metadata = await chat_utils.extract_url_images(base_text, download_images=False)
         if history_metadata:
             history_text += f"\n\n{history_metadata}"
 

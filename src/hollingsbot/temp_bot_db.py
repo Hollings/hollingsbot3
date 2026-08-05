@@ -11,9 +11,34 @@ session context.
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from hollingsbot.prompt_db import DB_PATH, init_db
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
+
+@contextmanager
+def _connect() -> Iterator[sqlite3.Connection]:
+    """Open a SQLite connection that always closes.
+
+    ``with sqlite3.connect(...)`` only manages the transaction, not the
+    connection - the file handle leaks until GC. Mirrors
+    ``prompt_db._connect`` but reads this module's ``DB_PATH`` so tests that
+    monkeypatch ``temp_bot_db.DB_PATH`` keep working.
+    """
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        yield conn
+        conn.commit()
+    finally:
+        conn.close()
+
 
 # ---------------------------------------------------------------------------
 # Row-to-dict helpers
@@ -83,7 +108,7 @@ def create_temp_bot(
 ) -> int:
     """Create a new temporary bot record."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO temp_bots (
@@ -112,7 +137,7 @@ def create_temp_bot(
 def get_temp_bots_for_channel(channel_id: int) -> list[dict]:
     """Get all active temp bots for a specific channel."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             f"""
             SELECT {_BASE_COLUMNS}, created_at
@@ -127,7 +152,7 @@ def get_temp_bots_for_channel(channel_id: int) -> list[dict]:
 def get_temp_bot_by_webhook_id(webhook_id: int) -> dict | None:
     """Get a temp bot by its webhook ID."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             f"""
             SELECT {_BASE_COLUMNS}, created_at
@@ -143,7 +168,7 @@ def get_temp_bot_by_webhook_id(webhook_id: int) -> dict | None:
 def deactivate_temp_bot(webhook_id: int) -> None:
     """Mark a temp bot as inactive (soft delete)."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute(
             """
             UPDATE temp_bots
@@ -169,7 +194,7 @@ def delete_temp_bot(webhook_id: int) -> None:
 def get_depleted_temp_bots() -> list[dict]:
     """Get all active temp bots that have run out of replies."""
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             f"""
             SELECT {_BASE_COLUMNS}, created_at, conversation_summary
@@ -190,7 +215,7 @@ def get_historical_temp_bots(
     """
     init_db()
     select = f"SELECT {_BASE_COLUMNS}, created_at, deactivated_at FROM temp_bots"
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         if channel_id is not None:
             cur = conn.execute(
                 f"""
@@ -222,13 +247,13 @@ def get_temp_bot_by_name(name: str, channel_id: int | None = None) -> dict | Non
     """
     init_db()
     select = f"SELECT {_BASE_COLUMNS}, created_at, deactivated_at, is_active FROM temp_bots"
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         # Try channel-specific search first
         if channel_id is not None:
             cur = conn.execute(
                 f"""
                 {select}
-                WHERE channel_id = ? AND LOWER(name) = LOWER(?)
+                WHERE channel_id = ? AND name = ? COLLATE NOCASE
                 ORDER BY created_at DESC
                 LIMIT 1
                 """,
@@ -242,7 +267,7 @@ def get_temp_bot_by_name(name: str, channel_id: int | None = None) -> dict | Non
         cur = conn.execute(
             f"""
             {select}
-            WHERE LOWER(name) = LOWER(?)
+            WHERE name = ? COLLATE NOCASE
             ORDER BY created_at DESC
             LIMIT 1
             """,
@@ -258,7 +283,7 @@ def search_temp_bots(query: str, limit: int = 10) -> list[dict]:
     Returns matching bots ordered by most recent first.
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             f"""
             SELECT {_BASE_COLUMNS}, created_at, deactivated_at, is_active
@@ -290,7 +315,7 @@ def get_temp_bot_previous_messages(channel_id: int, bot_name: str, limit: int = 
         Ordered chronologically (oldest first)
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         cur = conn.execute(
             """
             SELECT author_name, content, timestamp
@@ -324,7 +349,7 @@ def get_messages_since_bot_left(channel_id: int, bot_name: str) -> int:
         Number of messages since the bot's last message, or 0 if not found
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         # Find the bot's last message timestamp
         cur = conn.execute(
             """
@@ -369,7 +394,7 @@ def _adjust_replies_remaining(webhook_id: int, delta: int) -> int | None:
         active bot" from a row that was legitimately decremented to -1.
     """
     init_db()
-    with sqlite3.connect(DB_PATH) as conn:
+    with _connect() as conn:
         conn.execute("BEGIN IMMEDIATE")
         try:
             cur = conn.execute(

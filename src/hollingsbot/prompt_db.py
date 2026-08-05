@@ -9,6 +9,11 @@ from pathlib import Path
 DEFAULT_DB = Path("/data/hollingsbot.db")
 DB_PATH = Path(os.getenv("PROMPT_DB_PATH", str(DEFAULT_DB))).expanduser()
 
+# Paths whose schema has already been created this process; init_db() is a
+# no-op for them. Keyed by path (not a bare bool) so tests that monkeypatch
+# DB_PATH to a fresh temp file still get their schema created.
+_initialized_paths: set[str] = set()
+
 
 @contextmanager
 def _connect() -> Iterator[sqlite3.Connection]:
@@ -19,9 +24,15 @@ def _connect() -> Iterator[sqlite3.Connection]:
     leaking the file handle until garbage collection. That lingering handle
     locks the database file on Windows (WinError 32), breaking temp-dir
     teardown in tests. Closing explicitly also rolls back on error.
+
+    WAL mode lets the bot process and Celery workers read/write concurrently
+    without "database is locked" errors; the 30s timeout covers the remaining
+    writer-vs-writer contention.
     """
-    conn = sqlite3.connect(DB_PATH)
+    conn = sqlite3.connect(DB_PATH, timeout=30.0)
     try:
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
         yield conn
         conn.commit()
     finally:
@@ -29,7 +40,10 @@ def _connect() -> Iterator[sqlite3.Connection]:
 
 
 def init_db() -> None:
-    """Create required tables if they don't exist."""
+    """Create required tables if they don't exist (once per DB path per process)."""
+    db_key = str(DB_PATH)
+    if db_key in _initialized_paths:
+        return
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _connect() as conn:
         conn.execute(
@@ -238,7 +252,23 @@ def init_db() -> None:
             )
         """)
 
+        # temp_bots is queried by webhook_id on every outgoing bot message and
+        # by (channel_id, is_active) on every incoming message; without these
+        # the hot path full-scans an ever-growing table under the write lock.
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_bots_webhook ON temp_bots(webhook_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_bots_channel_active ON temp_bots(channel_id, is_active)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_temp_bots_name ON temp_bots(name COLLATE NOCASE)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_channel_author"
+            " ON cached_messages(channel_id, author_name, timestamp)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_messages_author_nocase"
+            " ON cached_messages(author_name COLLATE NOCASE, timestamp)"
+        )
+
         conn.commit()
+    _initialized_paths.add(db_key)
 
 
 class RateLimitError(RuntimeError):
@@ -581,7 +611,7 @@ def resolve_user_by_display_name(display_name: str, channel_id: int | None = Non
             cur = conn.execute(
                 """
                 SELECT author_id FROM cached_messages
-                WHERE channel_id = ? AND LOWER(author_name) = LOWER(?)
+                WHERE channel_id = ? AND author_name = ? COLLATE NOCASE
                 ORDER BY timestamp DESC LIMIT 1
                 """,
                 (channel_id, display_name),
@@ -594,7 +624,7 @@ def resolve_user_by_display_name(display_name: str, channel_id: int | None = Non
         cur = conn.execute(
             """
             SELECT author_id FROM cached_messages
-            WHERE LOWER(author_name) = LOWER(?)
+            WHERE author_name = ? COLLATE NOCASE
             ORDER BY timestamp DESC LIMIT 1
             """,
             (display_name,),
