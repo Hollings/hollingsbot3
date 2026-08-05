@@ -283,14 +283,12 @@ class LlamaBot:
             except Exception:
                 _LOG.exception("Failed to create webhook")
 
-        # Truncate to 2000 chars for Discord
-        if len(text) > 2000:
-            text = text[:1997] + "..."
-
-        if webhook:
-            msg = await webhook.send(text, username=bot_name, wait=True)
-        else:
-            msg = await channel.send(text)
-        sent.append(msg)
+        # Split long responses instead of silently truncating mid-sentence
+        for chunk in chat_utils.chunk_message(text):
+            if webhook:
+                msg = await webhook.send(chunk, username=bot_name, wait=True)
+            else:
+                msg = await channel.send(chunk)
+            sent.append(msg)
 
         return sent

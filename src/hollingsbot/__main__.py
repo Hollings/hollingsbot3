@@ -63,6 +63,34 @@ async def on_ready():
         restart_task.start()
 
 
+@bot.event
+async def on_command_error(ctx: commands.Context, error: commands.CommandError) -> None:
+    """Surface command errors to the user instead of swallowing them.
+
+    Without this handler discord.py only logs, so a typo'd `!spawn 10` or
+    `!grant @user lots` failed in total silence.
+    """
+    # "!" doubles as an image-gen prefix, so unknown commands are normal noise.
+    if isinstance(error, commands.CommandNotFound):
+        return
+    # Commands with their own error handlers deal with it themselves.
+    if ctx.command and ctx.command.has_error_handler():
+        return
+    if isinstance(error, commands.MissingRequiredArgument | commands.BadArgument | commands.BadUnionArgument):
+        sig = f"{ctx.prefix}{ctx.command.qualified_name} {ctx.command.signature}".strip()
+        doc = ctx.command.short_doc or ""
+        await ctx.reply(f"Usage: `{sig}`\n{doc}".strip(), mention_author=False)
+        return
+    if isinstance(error, commands.CommandOnCooldown):
+        await ctx.reply(f"Slow down - try again in {error.retry_after:.0f}s.", mention_author=False)
+        return
+    if isinstance(error, commands.CheckFailure):
+        await ctx.reply("You don't have permission to use that command.", mention_author=False)
+        return
+    logger.error("Command %s failed", ctx.command, exc_info=error)
+    await ctx.reply("Something went wrong running that command.", mention_author=False)
+
+
 RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
 
 

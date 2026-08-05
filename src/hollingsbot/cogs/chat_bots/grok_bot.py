@@ -486,7 +486,12 @@ class GrokBot:
                 tool_debug,
             )
 
-            # Don't send error to Discord (triggers message loop)
+            # Don't send an error MESSAGE to Discord (bot messages re-trigger
+            # on_message and can loop), but a reaction on the user's message
+            # can't loop and beats total silence.
+            with suppress(discord.HTTPException):
+                emoji = "\N{ALARM CLOCK}" if isinstance(exc, TimeoutError) else "\N{WARNING SIGN}"
+                await message.add_reaction(emoji)
             return None
         finally:
             if self._active_generations.get(channel.id) is job:
@@ -684,8 +689,6 @@ class GrokBot:
         svg_files: list[discord.File],
     ) -> list[discord.Message]:
         """Send response to Discord channel via webhook (with custom name) or regular message."""
-        import io
-
         sent: list[discord.Message] = []
 
         # Try to get webhook for this channel
@@ -701,28 +704,13 @@ class GrokBot:
             except Exception:
                 _LOG.exception("Failed to create webhook from URL for channel %s", channel_id)
 
-        # Handle long messages
-        if len(text) > 2000:
-            timestamp = int(time.time())
-            filename = f"response_{timestamp}.txt"
-            file = discord.File(io.BytesIO(text.encode("utf-8")), filename=filename)
-
+        # Split long responses into multiple messages instead of dumping a
+        # .txt attachment nobody opens.
+        for chunk in chat_utils.chunk_message(text):
             if webhook:
-                msg = await webhook.send(
-                    "Response too long, attached as file:",
-                    file=file,
-                    username=bot_name,
-                    wait=True,
-                )
+                msg = await webhook.send(chunk, username=bot_name, wait=True)
             else:
-                msg = await channel.send("Response too long, attached as file:", file=file)
-            sent.append(msg)
-        else:
-            # Send text
-            if webhook:
-                msg = await webhook.send(text, username=bot_name, wait=True)
-            else:
-                msg = await channel.send(text)
+                msg = await channel.send(chunk)
             sent.append(msg)
 
         # Send SVG files

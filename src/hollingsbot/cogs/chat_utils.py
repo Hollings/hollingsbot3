@@ -196,6 +196,29 @@ async def collect_text_attachments_full(message: discord.Message) -> tuple[list[
     return full_blocks, placeholders
 
 
+# ==================== Message Chunking ====================
+
+DISCORD_MESSAGE_LIMIT = 2000
+
+
+def chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
+    """Split a message into Discord-sized chunks, preferring newline boundaries."""
+    if len(text) <= limit:
+        return [text]
+    chunks = []
+    remaining = text
+    while remaining:
+        if len(remaining) <= limit:
+            chunks.append(remaining)
+            break
+        split_at = remaining.rfind("\n", 0, limit)
+        if split_at <= 0:
+            split_at = limit
+        chunks.append(remaining[:split_at])
+        remaining = remaining[split_at:].lstrip("\n")
+    return chunks
+
+
 # ==================== Image Processing ====================
 
 

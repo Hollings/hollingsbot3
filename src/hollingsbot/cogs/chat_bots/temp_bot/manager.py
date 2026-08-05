@@ -16,6 +16,7 @@ from typing import Any
 import discord
 from discord.ext import commands, tasks
 
+from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.image_generators import generate_avatar
 from hollingsbot.prompt_db import (
@@ -84,20 +85,7 @@ def _strip_self_name_prefix(text: str, bot_name: str) -> str:
 
 def _chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     """Split a message into Discord-sized chunks, preferring newline boundaries."""
-    if len(text) <= limit:
-        return [text]
-    chunks = []
-    remaining = text
-    while remaining:
-        if len(remaining) <= limit:
-            chunks.append(remaining)
-            break
-        split_at = remaining.rfind("\n", 0, limit)
-        if split_at <= 0:
-            split_at = limit
-        chunks.append(remaining[:split_at])
-        remaining = remaining[split_at:].lstrip("\n")
-    return chunks
+    return chat_utils.chunk_message(text, limit)
 
 
 class GenerationJob:
@@ -990,93 +978,104 @@ class TempBotManager:
             await self.handle_recall_command(ctx, reply_count, bot_data=existing_bot)
             return
 
-        # Generate bot name and avatar prompt together
-        bot_name, avatar_prompt = await generate_bot_identity(initial_prompt)
-
-        # Temp bots should only see messages from their spawn point forward
-        spawn_message_id = ctx.message.id
-        if existing_bots:
-            _LOG.info(
-                f"Spawning additional temp bot '{bot_name}' with context from spawn point ({len(existing_bots)} bots already active)"
-            )
-        else:
-            _LOG.info(f"Spawning first temp bot '{bot_name}' with context from spawn point")
-
-        # Build initial context from reply and/or previous messages
-        initial_context: list[ConversationTurn] = []
-
-        # Get history for context building
-        lock = self.coordinator._lock_for_channel(ctx.channel.id)
-        async with lock:
-            history = self.coordinator._history_for_channel(ctx.channel.id)
-            history_snapshot = list(history)
-
-        # Include previous 5 messages if -context flag used
-        if include_context and history_snapshot:
-            context_messages = history_snapshot[-5:]
-            initial_context.extend(context_messages)
-            _LOG.info(f"Including {len(context_messages)} previous messages as context for temp bot")
-
-        # Include replied-to message if spawned as reply
-        if reply_message:
-            reply_turn = await self._build_turn_from_message(reply_message)
-            if reply_turn:
-                # Avoid duplicates if reply is already in context
-                if not any(t.message_id == reply_turn.message_id for t in initial_context):
-                    initial_context.insert(0, reply_turn)
-                    _LOG.info(f"Including replied-to message {reply_message.id} as initial context")
+        # Immediate feedback: spawning runs an LLM call for the identity, an
+        # image generation for the avatar, and a full completion for the first
+        # message - without this the user stares at nothing for a long time.
+        with suppress(discord.HTTPException):
+            await ctx.message.add_reaction("\N{HOURGLASS WITH FLOWING SAND}")
 
         try:
-            # Generate avatar image from the AI-generated prompt
-            avatar_bytes = None
-            if avatar_prompt:
-                _LOG.info(f"Generating avatar for '{bot_name}' with prompt: {avatar_prompt[:80]}...")
-                avatar_bytes = await generate_avatar(avatar_prompt)
-                if avatar_bytes:
-                    _LOG.info(f"Avatar generated for '{bot_name}' ({len(avatar_bytes)} bytes)")
+            async with ctx.typing():
+                # Generate bot name and avatar prompt together
+                bot_name, avatar_prompt = await generate_bot_identity(initial_prompt)
+
+                # Temp bots should only see messages from their spawn point forward
+                spawn_message_id = ctx.message.id
+                if existing_bots:
+                    _LOG.info(
+                        f"Spawning additional temp bot '{bot_name}' with context from spawn point ({len(existing_bots)} bots already active)"
+                    )
                 else:
-                    _LOG.warning(f"Failed to generate avatar for '{bot_name}'")
+                    _LOG.info(f"Spawning first temp bot '{bot_name}' with context from spawn point")
 
-            # Create webhook with avatar if available
-            webhook = await ctx.channel.create_webhook(
-                name=f"TempBot-{bot_name}",
-                avatar=avatar_bytes,
-                reason=f"Temporary LLM bot spawned by {ctx.author}",
-            )
+                # Build initial context from reply and/or previous messages
+                initial_context: list[ConversationTurn] = []
 
-            # Register in database with spawn_message_id and avatar_bytes
-            create_temp_bot(
-                channel_id=ctx.channel.id,
-                webhook_id=webhook.id,
-                name=bot_name,
-                avatar_url=None,
-                spawn_prompt=initial_prompt,
-                replies_remaining=reply_count,
-                spawn_message_id=spawn_message_id,
-                avatar_bytes=avatar_bytes,
-            )
+                # Get history for context building
+                lock = self.coordinator._lock_for_channel(ctx.channel.id)
+                async with lock:
+                    history = self.coordinator._history_for_channel(ctx.channel.id)
+                    history_snapshot = list(history)
 
-            _LOG.info(
-                f"Spawned temp bot '{bot_name}' (webhook_id={webhook.id}) "
-                f"in channel {ctx.channel.id}, {reply_count} replies remaining, "
-                f"spawn_message_id={spawn_message_id}, initial_context={len(initial_context)} messages"
-            )
+                # Include previous 5 messages if -context flag used
+                if include_context and history_snapshot:
+                    context_messages = history_snapshot[-5:]
+                    initial_context.extend(context_messages)
+                    _LOG.info(f"Including {len(context_messages)} previous messages as context for temp bot")
 
-            # Send initial response
-            await self._send_initial_response(
-                ctx.channel,
-                webhook.id,
-                bot_name,
-                initial_prompt,
-                spawn_message_id,
-                initial_context=initial_context,
-            )
+                # Include replied-to message if spawned as reply
+                if reply_message:
+                    reply_turn = await self._build_turn_from_message(reply_message)
+                    if reply_turn:
+                        # Avoid duplicates if reply is already in context
+                        if not any(t.message_id == reply_turn.message_id for t in initial_context):
+                            initial_context.insert(0, reply_turn)
+                            _LOG.info(f"Including replied-to message {reply_message.id} as initial context")
 
-        except discord.Forbidden:
-            await ctx.send("I don't have permission to create webhooks in this channel.")
-        except discord.HTTPException as exc:
-            _LOG.exception("Failed to create webhook")
-            await ctx.send(f"Failed to create webhook: {exc}")
+                try:
+                    # Generate avatar image from the AI-generated prompt
+                    avatar_bytes = None
+                    if avatar_prompt:
+                        _LOG.info(f"Generating avatar for '{bot_name}' with prompt: {avatar_prompt[:80]}...")
+                        avatar_bytes = await generate_avatar(avatar_prompt)
+                        if avatar_bytes:
+                            _LOG.info(f"Avatar generated for '{bot_name}' ({len(avatar_bytes)} bytes)")
+                        else:
+                            _LOG.warning(f"Failed to generate avatar for '{bot_name}'")
+
+                    # Create webhook with avatar if available
+                    webhook = await ctx.channel.create_webhook(
+                        name=f"TempBot-{bot_name}",
+                        avatar=avatar_bytes,
+                        reason=f"Temporary LLM bot spawned by {ctx.author}",
+                    )
+
+                    # Register in database with spawn_message_id and avatar_bytes
+                    create_temp_bot(
+                        channel_id=ctx.channel.id,
+                        webhook_id=webhook.id,
+                        name=bot_name,
+                        avatar_url=None,
+                        spawn_prompt=initial_prompt,
+                        replies_remaining=reply_count,
+                        spawn_message_id=spawn_message_id,
+                        avatar_bytes=avatar_bytes,
+                    )
+
+                    _LOG.info(
+                        f"Spawned temp bot '{bot_name}' (webhook_id={webhook.id}) "
+                        f"in channel {ctx.channel.id}, {reply_count} replies remaining, "
+                        f"spawn_message_id={spawn_message_id}, initial_context={len(initial_context)} messages"
+                    )
+
+                    # Send initial response
+                    await self._send_initial_response(
+                        ctx.channel,
+                        webhook.id,
+                        bot_name,
+                        initial_prompt,
+                        spawn_message_id,
+                        initial_context=initial_context,
+                    )
+
+                except discord.Forbidden:
+                    await ctx.send("I don't have permission to create webhooks in this channel.")
+                except discord.HTTPException as exc:
+                    _LOG.exception("Failed to create webhook")
+                    await ctx.send(f"Failed to create webhook: {exc}")
+        finally:
+            with suppress(discord.HTTPException):
+                await ctx.message.remove_reaction("\N{HOURGLASS WITH FLOWING SAND}", ctx.me)
 
     async def _send_initial_response(
         self,

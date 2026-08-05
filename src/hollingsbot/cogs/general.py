@@ -70,16 +70,27 @@ class General(commands.Cog):
         await ctx.send("\n".join(lines), allowed_mentions=discord.AllowedMentions.none())
 
     @commands.command(name="help")
-    async def help_cmd(self, ctx: commands.Context) -> None:
-        """Display comprehensive bot help documentation.
+    async def help_cmd(self, ctx: commands.Context, *, command_name: str | None = None) -> None:
+        """Display bot help documentation.
 
-        Shows available features, commands, and usage examples across all cogs.
-        The message is automatically truncated if it exceeds Discord's length limit.
+        `!help` shows the overview; `!help <command>` shows that command's
+        usage and full description.
         """
         _log.debug("Help command invoked by %s in channel %s", ctx.author, ctx.channel)
-        help_text = self._build_help_text()
-        truncated_text = self._truncate_for_discord(help_text)
-        await ctx.send(truncated_text)
+
+        if command_name:
+            cmd = self.bot.get_command(command_name.lstrip("!").strip())
+            if cmd is None:
+                await ctx.send(f"No command named `{command_name}`. Try `!help` for the overview.")
+                return
+            sig = f"!{cmd.qualified_name} {cmd.signature}".strip()
+            await ctx.send(f"**{sig}**\n{cmd.help or 'No description available.'}")
+            return
+
+        from hollingsbot.cogs.chat_utils import chunk_message
+
+        for chunk in chunk_message(self._build_help_text(), MAX_HELP_MESSAGE_LENGTH):
+            await ctx.send(chunk)
 
     def _build_help_text(self) -> str:
         """Build the complete help message text.
@@ -92,50 +103,33 @@ class General(commands.Cog):
         """
         return (
             "**Hollingsbot Help**\n"
-            "Mention the bot to run commands anywhere (e.g., `@Bot help`).\n\n"
+            "Mention the bot to run commands anywhere (e.g., `@Bot help`). "
+            "Use `!help <command>` for details on any command.\n\n"
             "Image generation\n"
             "- `! prompt` quick image.\n"
             "- `$ prompt` higher quality; `$$ prompt` premium.\n"
             "- `^ prompt` SVG generator.\n"
             "- `edit: ...` reply to a message with an image (or attach one) to edit; the bot replies to your prompt message.\n"
             "- Tips: `{123}` sets seed; `<a, b, c>` expands to multiple prompts.\n"
-            "- `!models` list available image generators.\n\n"
+            "- `!models` list available image generators (image channels only).\n"
+            "- `!usage` your budget and credits; `!redeem` trade tokens for credits; `!balance` full status.\n\n"
             "GIF from reply chain\n"
             "- Reply `gif` to any message to build a GIF from all images across the whole reply chain (root → leaf). Shows a thinking emoji while working.\n\n"
             "Chat with LLMs\n"
             "- Type normally; the bot replies with context and supports images.\n"
-            "- `!models` list available chat models.\n"
-            "- `!model <provider/model>` set your preferred model.\n"
-            "- `!system` show; `!system <text>` set; `!system reset` clear your system prompt.\n"
-            "- Long replies auto-split; large code blocks may be attached; SVG blocks are rendered.\n\n"
-            "GPT‑2 channel\n"
-            "- In the GPT‑2 channel, the bot replies to any message with a lightweight model.\n\n"
+            "- Long replies auto-split; SVG blocks are rendered as images.\n\n"
+            "Temp bots\n"
+            "- `!spawn <replies> <prompt>` spawn a temporary bot with a personality (e.g. `!spawn 10 a grumpy pirate`).\n"
+            "- `!despawn [name|all]` list or remove temp bots.\n"
+            "- `!recall <replies> <name>` bring back a previous temp bot.\n"
+            "- `!history [query]` list or search past temp bots; `!clear` clear chat history.\n\n"
             "Admin\n"
-            "- `!reset` restart the project containers (the bot may go offline briefly).\n\n"
+            "- `!reset` restart the project containers; `!grant`, `!set_price`, `!set_budget`.\n\n"
             "Other\n"
-            "- `ping` returns `Pong!`.\n"
-            "- `!tokens` show token leaderboard.\n"
+            "- `!ping` returns `Pong!`.\n"
+            "- `!tokens` show token leaderboard; `!yeahscore` / `!yeahleaders` yeah-streak stats.\n"
             "- If a starboard is enabled, reacting to a bot message can repost it there.\n"
         )
-
-    def _truncate_for_discord(self, text: str) -> str:
-        """Truncate text to fit within Discord's message length limit.
-
-        Args:
-            text: The text to truncate.
-
-        Returns:
-            The text truncated to MAX_HELP_MESSAGE_LENGTH if necessary.
-        """
-        if len(text) <= MAX_HELP_MESSAGE_LENGTH:
-            return text
-
-        _log.warning(
-            "Help text (%d chars) exceeds limit (%d chars), truncating",
-            len(text),
-            MAX_HELP_MESSAGE_LENGTH,
-        )
-        return text[:MAX_HELP_MESSAGE_LENGTH]
 
 
 async def setup(bot: commands.Bot) -> None:

@@ -176,16 +176,24 @@ class CostTracker:
             )
             return (True, "")
 
-        # Cannot afford
-        hourly_rate = self.daily_free_budget / 24.0
+        # Cannot afford - tell the user exactly when they'll have enough,
+        # since budget accrues per minute and the wait is computable.
+        minute_rate = self.daily_free_budget / 1440.0
+        shortfall_after_credits = cost - current_budget - credit_balance
+        if minute_rate > 0:
+            minutes_needed = int(shortfall_after_credits / minute_rate) + 1
+            wait = f"~{minutes_needed} min" if minutes_needed < 60 else f"~{minutes_needed / 60:.1f} hours"
+            wait_line = f"You'll have enough free budget in {wait}.\n"
+        else:
+            wait_line = ""
 
         error_msg = (
             f"Insufficient funds for this generation.\n\n"
             f"This costs ${cost:.2f} but you have:\n"
             f"  - Free budget: ${current_budget:.2f} / ${self.daily_free_budget:.2f}\n"
             f"  - Credit balance: ${credit_balance:.2f}\n\n"
-            f"Budget increases by ${hourly_rate:.2f}/hour (max ${self.daily_free_budget:.2f}/day).\n"
-            f"Ask an admin about purchasing credits!"
+            f"{wait_line}"
+            f"Or trade tokens for credits with `!redeem` (check `!balance` and `!usage`)."
         )
 
         _log.info(

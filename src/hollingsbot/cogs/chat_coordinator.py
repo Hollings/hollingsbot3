@@ -2,7 +2,6 @@
 
 import asyncio
 import contextlib
-import io
 import logging
 import os
 import time
@@ -465,28 +464,13 @@ class ChatCoordinator(commands.Cog):
                     _LOG.warning(f"Failed to fetch webhook {webhook_id}, falling back")
                     webhook = None
 
-        # Handle long messages
-        if len(text) > 2000:
-            timestamp = int(time.time())
-            filename = f"response_{timestamp}.txt"
-            file = discord.File(io.BytesIO(text.encode("utf-8")), filename=filename)
-
+        # Split long responses into multiple messages instead of dumping a
+        # .txt attachment nobody opens.
+        for chunk in chat_utils.chunk_message(text):
             if webhook:
-                msg = await webhook.send(
-                    "Response too long, attached as file:",
-                    file=file,
-                    username=webhook_name,
-                    wait=True,
-                )
+                msg = await webhook.send(chunk, username=webhook_name, wait=True)
             else:
-                msg = await channel.send("Response too long, attached as file:", file=file)
-            sent.append(msg)
-        else:
-            # Send text
-            if webhook:
-                msg = await webhook.send(text, username=webhook_name, wait=True)
-            else:
-                msg = await channel.send(text)
+                msg = await channel.send(chunk)
             sent.append(msg)
 
         # Send SVG files

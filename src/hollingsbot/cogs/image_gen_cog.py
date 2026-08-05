@@ -24,6 +24,7 @@ import os
 import random
 import re
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from io import BytesIO
 from pathlib import Path
@@ -920,6 +921,17 @@ class ImageGenCog(commands.Cog):
             if isinstance(result, Exception):
                 overall_success = False
                 _log.exception("Generation failed for %r: %s", prompt_variant, result)
+                # Tell the user what happened - a bare X reaction after a long
+                # wait gives them nothing to act on.
+                if isinstance(result, TimeoutError):
+                    detail = "the image service took too long to respond. Try again in a minute."
+                else:
+                    detail = "the image service returned an error. Try rewording your prompt or try again."
+                await self._send_error_message(
+                    message,
+                    f"Couldn't generate **{prompt_variant[:200]}** - {detail}",
+                    reply_to=reply_target if skip_caption else None,
+                )
                 continue
 
             prompt_text, images_bytes = result
@@ -944,7 +956,7 @@ class ImageGenCog(commands.Cog):
             except Exception as exc:
                 overall_success = False
                 _log.exception("Post-processing failed: %s", exc)
-                error_msg = f"Image post-processing failed for **{prompt_variant}**:\n> {exc}"
+                error_msg = f"Image post-processing failed for **{prompt_variant[:200]}**:\n> {str(exc)[:500]}"
                 await self._send_error_message(message, error_msg, reply_to=reply_target if skip_caption else None)
 
         return overall_success
@@ -963,9 +975,15 @@ class ImageGenCog(commands.Cog):
             raw_prompt: User's prompt text
             spec: Generator specification
         """
-        # Get thematic emoji for the prompt (runs in parallel with parsing)
-        working_emoji = await self._get_thematic_emoji(raw_prompt)
+        # React instantly so the user knows we're working; the thematic emoji
+        # is a nicety that must not gate first feedback (it's an LLM call with
+        # a 3s timeout). It's computed in the background and swapped in later.
+        working_emoji = THINKING
         await self._react(message, working_emoji)
+        thematic_emoji_task = asyncio.create_task(self._get_thematic_emoji(raw_prompt))
+        # No side effects until the swap point below, so early returns can
+        # simply abandon the task.
+        thematic_emoji_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
         # Parse seed and clean prompt
         raw_prompt, seed = self._parse_seed_from_prompt(raw_prompt)
@@ -982,7 +1000,7 @@ class ImageGenCog(commands.Cog):
         if not raw_prompt and not is_outpaint:
             await self._react(message, working_emoji, remove=True)
             await self._react(message, FAILURE)
-            await message.channel.send("Prompt may not be empty.")
+            await self._send_error_message(message, "Prompt may not be empty.")
             return
 
         # Validate prompt length to prevent abuse
@@ -1072,17 +1090,30 @@ class ImageGenCog(commands.Cog):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
             aspect_ratio_override = await self._get_aspect_ratio_for_prompt(prompts[0])
 
-        # Execute generation tasks
-        results = await self._execute_generation_tasks(
-            prompt_ids,
-            prompts,
-            spec,
-            seed,
-            all_edit_images if (do_edit or do_outpaint) else None,
-            outpaint_mask if do_outpaint else None,
-            do_edit or do_outpaint,
-            aspect_ratio_override,
+        # Execute generation tasks (as a task so the thematic-emoji swap below
+        # happens while generation runs, not before it)
+        generation_task = asyncio.create_task(
+            self._execute_generation_tasks(
+                prompt_ids,
+                prompts,
+                spec,
+                seed,
+                all_edit_images if (do_edit or do_outpaint) else None,
+                outpaint_mask if do_outpaint else None,
+                do_edit or do_outpaint,
+                aspect_ratio_override,
+            )
         )
+
+        # Swap the placeholder reaction for the thematic emoji, if we got one.
+        with suppress(Exception):
+            themed = await thematic_emoji_task
+            if themed and themed != working_emoji:
+                await self._react(message, themed)
+                await self._react(message, working_emoji, remove=True)
+                working_emoji = themed
+
+        results = await generation_task
 
         # Process and send results
         overall_success = await self._process_and_send_results(
