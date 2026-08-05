@@ -4,6 +4,7 @@ import time
 from inspect import signature
 from pathlib import Path
 
+import aiohttp
 from celery import Celery
 from celery.utils.log import get_task_logger
 
@@ -25,6 +26,15 @@ celery_app.conf.task_routes = {
     "tasks.generate_llm_chat_response": {"queue": "text"},
 }
 
+# Hard/soft time limits so a hung provider connection can never occupy a
+# worker slot forever (the bot gives up client-side after TEXT_TIMEOUT and
+# the task would otherwise keep running). Recycling children also clears any
+# state leaked across asyncio.run() event loops.
+celery_app.conf.task_time_limit = int(os.getenv("CELERY_TASK_TIME_LIMIT", "300"))
+celery_app.conf.task_soft_time_limit = int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "240"))
+celery_app.conf.worker_max_tasks_per_child = int(os.getenv("CELERY_MAX_TASKS_PER_CHILD", "100"))
+celery_app.conf.broker_connection_retry_on_startup = True
+
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
 
 
@@ -41,8 +51,14 @@ def _ensure_output_dir() -> None:
     name="tasks.generate_image",
     queue="image",
     bind=True,
-    autoretry_for=(Exception,),
+    # Only retry errors that plausibly resolve on their own. Retrying every
+    # Exception re-billed permanently-rejected prompts (content policy,
+    # invalid params) and kept flip-flopping their status rows.
+    autoretry_for=(ConnectionError, aiohttp.ClientError),
     retry_backoff=True,
+    retry_backoff_max=60,
+    retry_jitter=True,
+    max_retries=2,
 )
 def generate_image(
     self,
@@ -305,6 +321,30 @@ def _build_messages_for_generator(
     return messages
 
 
+def _redact_conversation_for_log(conversation: list[dict[str, object]]) -> list[dict[str, object]]:
+    """Replace base64 image payloads with size markers before persisting.
+
+    A single data_url can be several MB; logging them verbatim grew
+    llm_api_logs to ~1.8 GB (96% of the whole database).
+    """
+    redacted: list[dict[str, object]] = []
+    for entry in conversation:
+        entry = dict(entry)
+        images = entry.get("images")
+        if isinstance(images, list) and images:
+            entry["images"] = [
+                {
+                    **{k: v for k, v in img.items() if k != "data_url"},
+                    "data_url_bytes": len(img.get("data_url") or ""),
+                }
+                if isinstance(img, dict)
+                else img
+                for img in images
+            ]
+        redacted.append(entry)
+    return redacted
+
+
 def _conversation_to_text(conversation: list[dict[str, object]]) -> str:
     """Fallback string prompt for providers without structured chat support."""
 
@@ -353,7 +393,7 @@ def generate_llm_chat_response(
     import json
     import traceback
 
-    conversation_json = json.dumps(conversation, indent=2)
+    conversation_json = json.dumps(_redact_conversation_for_log(conversation))
     response_text = ""
     status = "error"
     error_message = None
@@ -365,12 +405,14 @@ def generate_llm_chat_response(
         else:
             payload = _conversation_to_text(conversation)
 
-        text = asyncio.run(generator.generate(payload, **kwargs))
+        _text_timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
+        text = asyncio.run(asyncio.wait_for(generator.generate(payload, **kwargs), _text_timeout))
         response_text = text
         status = "success"
     except TypeError:
         # Some generators insist on plain text; fall back to flattened transcript.
-        text = asyncio.run(generator.generate(_conversation_to_text(conversation)))
+        _text_timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
+        text = asyncio.run(asyncio.wait_for(generator.generate(_conversation_to_text(conversation)), _text_timeout))
         response_text = text
         status = "success"
     except Exception as exc:

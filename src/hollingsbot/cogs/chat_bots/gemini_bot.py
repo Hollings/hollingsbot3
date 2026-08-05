@@ -18,6 +18,7 @@ import discord
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.utils.file_utils import atomic_write_json
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
 if TYPE_CHECKING:
@@ -206,13 +207,11 @@ class GeminiBot:
     def _save_state(self) -> None:
         """Save model preferences and system prompts to state file."""
         try:
-            self.state_file.parent.mkdir(parents=True, exist_ok=True)
             state = {
                 "model_preferences": self.model_preferences,
                 "user_system_prompts": self.user_system_prompts,
             }
-            with self.state_file.open("w") as f:
-                json.dump(state, f, indent=2)
+            atomic_write_json(self.state_file, state)
         except Exception:
             _LOG.exception("Failed to save state to %s", self.state_file)
 
@@ -574,10 +573,12 @@ class GeminiBot:
         start = time.monotonic()
 
         while True:
-            if async_result.ready():
+            # ready()/revoke() are synchronous Redis round-trips; run them in a
+            # thread so a slow broker can't starve the Discord heartbeat.
+            if await asyncio.to_thread(async_result.ready):
                 break
             if (time.monotonic() - start) > self.text_timeout:
-                async_result.revoke(terminate=True)
+                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
                 raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
             await asyncio.sleep(0.5)
 
@@ -615,7 +616,7 @@ class GeminiBot:
 
             # Revoke the Celery task immediately
             if job.result:
-                job.result.revoke(terminate=True)
+                await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
                 _LOG.info("Revoked Celery task for channel %s (terminate=True)", channel_id)
 
             # Now wait for local task cleanup (TimeoutError if it takes >0.5s

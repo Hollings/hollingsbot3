@@ -10,13 +10,9 @@ from typing import Any, TypedDict, Union
 from anthropic import APIConnectionError, APIError, AsyncAnthropic, RateLimitError
 
 from .base import TextGeneratorAPI
+from .client_cache import get_client
 
 _log = logging.getLogger(__name__)
-
-# --------------------------------------------------------------------------- #
-# A single shared client is plenty; reuse it across all requests              #
-# --------------------------------------------------------------------------- #
-_CLIENT_CACHE: dict[str, AsyncAnthropic] = {}
 
 
 class _Message(TypedDict):
@@ -50,10 +46,8 @@ class AnthropicTextGenerator(TextGeneratorAPI):
     # ---------------------------------------------------------------- helpers
 
     def _get_client(self) -> AsyncAnthropic:
-        """Return (and cache) a shared ``AsyncAnthropic`` client instance."""
-        if "default" not in _CLIENT_CACHE:
-            _CLIENT_CACHE["default"] = AsyncAnthropic()  # picks up API key
-        return _CLIENT_CACHE["default"]
+        """Return a shared ``AsyncAnthropic`` client, cached per event loop."""
+        return get_client("anthropic", AsyncAnthropic)  # picks up API key
 
     # ---------------------------------------------------------------- public
 

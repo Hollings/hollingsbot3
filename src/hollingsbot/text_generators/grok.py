@@ -9,8 +9,8 @@ from typing import TypedDict, Union
 from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 
 from .base import TextGeneratorAPI
+from .client_cache import get_client
 
-_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -30,12 +30,13 @@ class GrokTextGenerator(TextGeneratorAPI):
         self.model = model
 
     def _get_client(self) -> AsyncOpenAI:
-        if "grok" not in _CLIENT_CACHE:
+        def _build() -> AsyncOpenAI:
             api_key = os.getenv("XAI_API_KEY")
             if not api_key:
                 raise ValueError("XAI_API_KEY environment variable is required for Grok")
-            _CLIENT_CACHE["grok"] = AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
-        return _CLIENT_CACHE["grok"]
+            return AsyncOpenAI(api_key=api_key, base_url="https://api.x.ai/v1")
+
+        return get_client("grok", _build)
 
     async def generate(
         self,

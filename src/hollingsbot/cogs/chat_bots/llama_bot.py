@@ -221,10 +221,12 @@ class LlamaBot:
         start = time.monotonic()
 
         while True:
-            if async_result.ready():
+            # ready()/revoke() are synchronous Redis round-trips; run them in a
+            # thread so a slow broker can't starve the Discord heartbeat.
+            if await asyncio.to_thread(async_result.ready):
                 break
             if (time.monotonic() - start) > self.text_timeout:
-                async_result.revoke(terminate=True)
+                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
                 raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
             await asyncio.sleep(0.5)
 
@@ -245,7 +247,7 @@ class LlamaBot:
         if job.task and not job.task.done():
             job.task.cancel()
             if job.result:
-                job.result.revoke(terminate=True)
+                await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
             with suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(job.task, timeout=0.5)
             self._active_generations.pop(channel_id, None)

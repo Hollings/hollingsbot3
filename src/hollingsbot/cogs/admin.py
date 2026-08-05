@@ -12,6 +12,7 @@ from discord.ext import commands
 
 from hollingsbot.cost_tracking import CostTracker
 from hollingsbot.settings import get_admin_user_ids
+from hollingsbot.utils.file_utils import atomic_write_json
 
 _LOG = logging.getLogger(__name__)
 
@@ -429,9 +430,8 @@ class Admin(commands.Cog):
             old_price = config[prefix].get("price_per_image", "not set")
             config[prefix]["price_per_image"] = price
 
-            # Save config
-            with open(config_path, "w", encoding="utf8") as f:
-                json.dump(config, f, indent=2)
+            # Save config (atomically - this file is read on every generation)
+            atomic_write_json(config_path, config)
 
             await ctx.send(
                 f"✅ Updated price for `{prefix}` from ${old_price} to ${price:.3f} per image.\n"
@@ -465,9 +465,8 @@ class Admin(commands.Cog):
             old_budget = config.get("daily_free_budget", "not set")
             config["daily_free_budget"] = budget
 
-            # Save config
-            with open(config_path, "w", encoding="utf8") as f:
-                json.dump(config, f, indent=2)
+            # Save config (atomically - this file is read on every generation)
+            atomic_write_json(config_path, config)
 
             # Update cost tracker
             self._cost_tracker.daily_free_budget = budget

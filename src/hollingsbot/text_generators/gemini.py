@@ -8,14 +8,12 @@ import os
 from typing import TYPE_CHECKING, Any, TypedDict, Union
 
 from .base import TextGeneratorAPI
+from .client_cache import get_client
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 _LOG = logging.getLogger(__name__)
-
-# Lazy load the client to avoid import errors if not installed
-_CLIENT_CACHE: dict[str, Any] = {}
 
 
 class _Message(TypedDict):
@@ -36,8 +34,9 @@ class GeminiTextGenerator(TextGeneratorAPI):
         self.model = model
 
     def _get_client(self) -> Any:
-        """Get or create the Gemini client."""
-        if "default" not in _CLIENT_CACHE:
+        """Get or create the Gemini client (cached per event loop)."""
+
+        def _build() -> Any:
             try:
                 from google import genai
             except ImportError:
@@ -48,8 +47,9 @@ class GeminiTextGenerator(TextGeneratorAPI):
             if not api_key:
                 raise ValueError("GEMINI_API_KEY or GOOGLE_API_KEY environment variable required")
 
-            _CLIENT_CACHE["default"] = genai.Client(api_key=api_key)
-        return _CLIENT_CACHE["default"]
+            return genai.Client(api_key=api_key)
+
+        return get_client("gemini", _build)
 
     def _convert_messages_to_contents(self, messages: list[dict[str, Any]]) -> tuple[str | None, list[Any]]:
         """Convert internal message format to Gemini content format.

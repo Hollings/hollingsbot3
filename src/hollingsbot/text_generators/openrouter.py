@@ -9,8 +9,8 @@ from typing import TypedDict, Union
 from openai import APIConnectionError, APIError, AsyncOpenAI, RateLimitError
 
 from .base import TextGeneratorAPI
+from .client_cache import get_client
 
-_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -20,13 +20,15 @@ class _Message(TypedDict):
 
 
 def _get_openrouter_client() -> AsyncOpenAI:
-    """Get or create the shared OpenRouter client."""
-    if "openrouter" not in _CLIENT_CACHE:
+    """Get or create the shared OpenRouter client (cached per event loop)."""
+
+    def _build() -> AsyncOpenAI:
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             raise ValueError("OPENROUTER_API_KEY environment variable is required for OpenRouter")
-        _CLIENT_CACHE["openrouter"] = AsyncOpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
-    return _CLIENT_CACHE["openrouter"]
+        return AsyncOpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+
+    return get_client("openrouter", _build)
 
 
 class OpenRouterTextGenerator(TextGeneratorAPI):

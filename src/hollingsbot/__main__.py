@@ -59,6 +59,8 @@ async def on_ready():
     print(f"Bot is ready. Logged in as {bot.user} (ID: {bot.user.id})")
     print(f"Loaded cogs: {list(bot.cogs.keys())}")
     print(f"Commands: {[c.name for c in bot.commands]}")
+    if not restart_task.is_running():
+        restart_task.start()
 
 
 RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
@@ -66,9 +68,20 @@ RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
 
 @tasks.loop(seconds=RESTART_INTERVAL)
 async def restart_task():
-    print("Restart interval reached; exiting for restart")
+    # tasks.loop runs its first iteration immediately on start; the restart
+    # should only happen once a full interval has elapsed.
+    if restart_task.current_loop == 0:
+        return
+    logger.warning("Restart interval (%ss) reached; exiting for supervisor restart", RESTART_INTERVAL)
     await bot.close()
+    # Hard-exit so Docker's restart policy (unless-stopped) brings up a fresh
+    # process even if some background task would keep the loop alive.
     os._exit(0)
+
+
+@restart_task.before_loop
+async def _before_restart_task():
+    await bot.wait_until_ready()
 
 
 async def main():

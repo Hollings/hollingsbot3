@@ -650,6 +650,14 @@ class TempBotManager:
                 )
                 _LOG.info("Saved debug log for cancelled temp bot generation (message %s)", request_message_id)
             raise
+        except (discord.NotFound, discord.Forbidden) as exc:
+            # The webhook was deleted (or we lost access). Refunding and
+            # retrying would burn a paid generation on every channel message
+            # forever, so deactivate the bot instead.
+            _LOG.warning("Webhook %s for temp bot '%s' is gone (%s); deactivating", webhook_id, bot_name, exc)
+            with suppress(Exception):
+                delete_temp_bot(webhook_id)
+            return None
         except Exception:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
             if not message_sent:
@@ -708,7 +716,7 @@ class TempBotManager:
         # Revoke the Celery task immediately (don't wait for local task)
         # terminate=True sends SIGTERM to worker, stopping the API call ASAP
         if job.result:
-            job.result.revoke(terminate=True)
+            await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
             _LOG.info("Revoked temp bot Celery task for channel %s (terminate=True)", channel_id)
 
         # Now wait for local task cleanup. Suppress TimeoutError too - if the
@@ -797,10 +805,12 @@ class TempBotManager:
 
         start = time.monotonic()
         while True:
-            if async_result.ready():
+            # ready()/revoke() are synchronous Redis round-trips; run them in a
+            # thread so a slow broker can't starve the Discord heartbeat.
+            if await asyncio.to_thread(async_result.ready):
                 break
             if (time.monotonic() - start) > self.text_timeout:
-                async_result.revoke(terminate=True)
+                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
                 raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
             await asyncio.sleep(0.5)
 
@@ -1158,11 +1168,24 @@ class TempBotManager:
                 # Bot depleted (determined atomically at decrement time)
                 await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
 
+        except (discord.NotFound, discord.Forbidden) as exc:
+            # Webhook already deleted - deactivate instead of refunding, or the
+            # bot would sit broken (and billing generations) forever.
+            _LOG.warning("Webhook %s for temp bot '%s' is gone (%s); deactivating", webhook_id, bot_name, exc)
+            with suppress(Exception):
+                delete_temp_bot(webhook_id)
+            with suppress(Exception):
+                await channel.send(f"**{bot_name}** spawned but its webhook disappeared, so it was removed.")
         except Exception:
             _LOG.exception(f"Failed to send initial response for temp bot '{bot_name}'")
             if not message_sent:
                 with suppress(Exception):
                     increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
+                with suppress(Exception):
+                    await channel.send(
+                        f"**{bot_name}** couldn't send its first message. It's still around - "
+                        f"say something to give it another shot, or remove it with `!despawn {bot_name}`."
+                    )
 
     async def handle_despawn_command(self, ctx: commands.Context, name: str | None = None) -> None:
         """Manually remove temporary bots.

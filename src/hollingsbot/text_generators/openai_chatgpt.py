@@ -10,8 +10,8 @@ from typing import Any, TypedDict, Union
 from openai import AsyncOpenAI
 
 from .base import TextGeneratorAPI
+from .client_cache import get_client
 
-_CLIENT_CACHE: dict[str, AsyncOpenAI] = {}
 _LOG = logging.getLogger(__name__)
 
 
@@ -34,9 +34,7 @@ class OpenAIChatTextGenerator(TextGeneratorAPI):
         self.model = model
 
     def _get_client(self) -> AsyncOpenAI:
-        if "default" not in _CLIENT_CACHE:
-            _CLIENT_CACHE["default"] = AsyncOpenAI()  # picks up OPENAI_API_KEY
-        return _CLIENT_CACHE["default"]
+        return get_client("openai", AsyncOpenAI)  # picks up OPENAI_API_KEY
 
     def _is_gpt5(self) -> bool:
         name = (self.model or "").lower()

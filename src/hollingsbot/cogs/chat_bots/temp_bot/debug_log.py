@@ -15,10 +15,37 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any
 
+from hollingsbot.utils.file_utils import atomic_write_json
+
 if TYPE_CHECKING:
     from pathlib import Path
 
 _LOG = logging.getLogger(__name__)
+
+
+def _redact_conversation(conversation: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Drop base64 image payloads before persisting.
+
+    Each data_url can be several MB; with up to ``max_size`` logs each holding
+    a full conversation, keeping them would balloon the file to hundreds of MB
+    and it gets rewritten on every temp bot reply.
+    """
+    redacted: list[dict[str, Any]] = []
+    for entry in conversation:
+        entry = dict(entry)
+        images = entry.get("images")
+        if isinstance(images, list) and images:
+            entry["images"] = [
+                {
+                    **{k: v for k, v in img.items() if k != "data_url"},
+                    "data_url_bytes": len(img.get("data_url") or ""),
+                }
+                if isinstance(img, dict)
+                else img
+                for img in images
+            ]
+        redacted.append(entry)
+    return redacted
 
 
 class DebugLogStore:
@@ -49,13 +76,11 @@ class DebugLogStore:
             self._logs = {}
 
     def _save(self) -> None:
-        """Persist current logs to disk."""
+        """Persist current logs to disk (atomically, so a crash can't corrupt them)."""
         try:
-            self._file_path.parent.mkdir(exist_ok=True)
             # Convert integer keys to strings for JSON serialization
             data = {str(k): v for k, v in self._logs.items()}
-            with self._file_path.open("w") as f:
-                json.dump(data, f, indent=2)
+            atomic_write_json(self._file_path, data, indent=None)
             _LOG.debug("Saved %d temp bot debug logs to disk", len(self._logs))
         except Exception as exc:
             _LOG.exception("Failed to save temp bot debug logs: %s", exc)
@@ -72,7 +97,7 @@ class DebugLogStore:
     ) -> None:
         """Store debug log for a response, evicting oldest entries past the cap."""
         self._logs[message_id] = {
-            "conversation": conversation,
+            "conversation": _redact_conversation(conversation),
             "response_text": response_text,
             "llm_debug": llm_debug,
             "tool_debug": tool_debug,
