@@ -38,14 +38,7 @@ stderr.txt
 dump.json
 debug_*.json
 level2_summaries_dump.txt
-generated/messages_*.txt
-generated/debug_logs.json
-generated/test_image.*
-generated/llm_chat_new_state.json
-generated/notebook_state.json
-generated/*.png
-generated/*.jpg
-generated/*.jpeg
+generated/
 
 # Database backups
 *.backup
