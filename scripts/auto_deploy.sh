@@ -4,7 +4,7 @@
 
 set -e
 
-REPO_DIR="/home/jhol/hollingsbot3"  # Adjust this path for your Pi
+REPO_DIR="/home/ubuntu/hollingsbot3"
 BRANCH="main"
 LOG_FILE="/var/log/hollingsbot-deploy.log"
 
@@ -32,7 +32,7 @@ log "Pulling changes..."
 git pull origin "$BRANCH"
 
 log "Restarting containers..."
-docker compose down
-docker compose up -d --build
+docker compose -f docker-compose.orange-pi.yml down
+docker compose -f docker-compose.orange-pi.yml up -d --build
 
 log "Deploy complete!"

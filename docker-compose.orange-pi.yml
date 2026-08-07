@@ -11,7 +11,7 @@ services:
     volumes:
       - ./:/app
       - ./generated:/app/generated
-      - prompt_db_data:/data
+      - ./data:/data
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       - redis
@@ -24,7 +24,7 @@ services:
     env_file: .env
     volumes:
       - ./:/app
-      - prompt_db_data:/data
+      - ./data:/data
     depends_on:
       - redis
 
@@ -38,7 +38,7 @@ services:
     volumes:
       - ./:/app
       - ./generated:/app/generated
-      - prompt_db_data:/data
+      - ./data:/data
     depends_on:
       - redis
     # No GPU config - using cloud APIs (Replicate, etc.)
@@ -49,6 +49,3 @@ services:
     volumes:
       - ./docker/redis.conf:/usr/local/etc/redis/redis.conf:ro
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
-
-volumes:
-  prompt_db_data:
