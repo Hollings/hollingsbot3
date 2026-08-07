@@ -253,7 +253,6 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 **Configuration Files**:
 - `config/system_prompt.txt` - Default system prompt (cached with mtime checking)
 - `generated/llm_chat_new_state.json` - Persisted system prompt and model preferences
-- `generated/notebook_state.json` - Tool/notebook context storage
 
 **Size Limits**:
 - `_MAX_TEXT_ATTACHMENT_BYTES = 120_000` - Max text attachment size
@@ -679,8 +678,6 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
   }
 }
 ```
-
-**`generated/notebook_state.json`** - Tool/notebook context (managed by tool system)
 
 ### Database (`prompts.db`)
 
