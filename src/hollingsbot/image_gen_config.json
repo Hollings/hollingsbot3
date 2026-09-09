@@ -37,9 +37,14 @@
   },
   "edit:": {
     "api": "replicate",
-    "model": "google/nano-banana-2",
+    "model": "openai/gpt-image-2.5-sunburst",
     "mode": "edit",
-    "price_per_image": 0.04
+    "quality": "medium",
+    "price_per_image": 0.04,
+    "fallback": {
+      "api": "replicate",
+      "model": "google/nano-banana-2"
+    }
   },
   "edit high:": {
     "api": "replicate",

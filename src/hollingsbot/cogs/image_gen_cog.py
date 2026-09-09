@@ -25,10 +25,10 @@ import random
 import re
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import discord
 import emoji
@@ -164,6 +164,33 @@ class GeneratorSpec:
     aspect_ratio: str | None = None  # For OpenAI: "1:1", "3:2", "2:3", etc.
     default_prompt: str | None = None  # Default prompt if user provides none
     model_options: dict | None = None  # Extra model-specific options (go_fast, safety_tolerance, etc.)
+    fallback: GeneratorSpec | None = None  # Tried if this generator raises (refusal, timeout, API error)
+
+
+_SPEC_KNOWN_KEYS = frozenset({"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"})
+
+
+def spec_from_dict(raw: Mapping[str, Any], *, parent: GeneratorSpec | None = None) -> GeneratorSpec:
+    """Build a GeneratorSpec from a config dict.
+
+    Keys outside the known GeneratorSpec fields become ``model_options``. A nested
+    ``fallback`` dict is parsed recursively; it inherits ``mode`` and ``quality``
+    from its parent unless it overrides them, so a config only has to say what
+    differs. ``price_per_image`` is never inherited: the user is charged the
+    prefix's price regardless of which generator ends up producing the image.
+    """
+    spec_kwargs: dict[str, Any] = {k: v for k, v in raw.items() if k in _SPEC_KNOWN_KEYS}
+    extra_opts = {k: v for k, v in raw.items() if k not in _SPEC_KNOWN_KEYS and k != "fallback"}
+    if extra_opts:
+        spec_kwargs["model_options"] = extra_opts
+    if parent is not None:
+        spec_kwargs.setdefault("mode", parent.mode)
+        spec_kwargs.setdefault("quality", parent.quality)
+    spec = GeneratorSpec(**spec_kwargs)
+    fallback_raw = raw.get("fallback")
+    if isinstance(fallback_raw, dict):
+        spec = replace(spec, fallback=spec_from_dict(fallback_raw, parent=spec))
+    return spec
 
 
 # ============================================================================
@@ -204,9 +231,7 @@ class ImageGenCog(commands.Cog):
         self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
 
         if config is not None:
-            self._prefix_map: dict[str, GeneratorSpec] = {
-                p.strip(): GeneratorSpec(**spec) for p, spec in config.items()
-            }
+            self._prefix_map: dict[str, GeneratorSpec] = {p.strip(): spec_from_dict(spec) for p, spec in config.items()}
             self._cfg_path: Path | None = None
             self._cfg_mtime: float = 0.0
             self._daily_free_budget: float = 0.50  # Default
@@ -249,17 +274,11 @@ class ImageGenCog(commands.Cog):
 
         # Build prefix map, excluding non-prefix keys
         self._prefix_map = {}
-        known_keys = {"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"}
         for key, spec in raw_cfg.items():
             if key in ("daily_free_budget", "default_price_per_image"):
                 continue
             if isinstance(spec, dict):
-                # Separate known GeneratorSpec fields from extra model options
-                spec_kwargs = {k: v for k, v in spec.items() if k in known_keys}
-                extra_opts = {k: v for k, v in spec.items() if k not in known_keys}
-                if extra_opts:
-                    spec_kwargs["model_options"] = extra_opts
-                self._prefix_map[key.strip()] = GeneratorSpec(**spec_kwargs)
+                self._prefix_map[key.strip()] = spec_from_dict(spec)
 
         # Update cost tracker with new budget
         if hasattr(self, "_cost_tracker"):
@@ -283,7 +302,10 @@ class ImageGenCog(commands.Cog):
             mode_display = f" / mode={spec.mode}" if getattr(spec, "mode", "generate") != "generate" else ""
             price = getattr(spec, "price_per_image", self._default_price)
             price_display = f" / ${price:.3f}" if price < 0.01 else f" / ${price:.2f}"
-            lines.append(f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}")
+            fallback_display = f" (falls back to {spec.fallback.api} / {spec.fallback.model})" if spec.fallback else ""
+            lines.append(
+                f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}{fallback_display}"
+            )
         lines.append(f"\nDM support: {'enabled' if self._allow_dms else 'disabled'}")
         allowlist_desc = (
             "all guild channels"
@@ -796,33 +818,50 @@ class ImageGenCog(commands.Cog):
         Returns:
             List of results (prompt, images) or exceptions
         """
-        aspect_ratio = aspect_ratio_override if aspect_ratio_override else spec.aspect_ratio
+
+        async def _run_with_spec(prompt_id: int, prompt: str, active: GeneratorSpec) -> list[bytes]:
+            aspect_ratio = aspect_ratio_override if aspect_ratio_override else active.aspect_ratio
+            result = await self._run_task(
+                prompt_id,
+                active.api,
+                active.model,
+                prompt,
+                seed,
+                image_input=image_input,
+                mask=mask,
+                output_format="png" if use_png_format else None,
+                quality=active.quality,
+                aspect_ratio=aspect_ratio,
+                model_options=active.model_options,
+            )
+            if isinstance(result, list):
+                return [self._load_generation_result(x) for x in result]
+            return [self._load_generation_result(result)]
 
         async def _launch_single(prompt_id: int, prompt: str) -> tuple[str, list[bytes]] | Exception:
-            try:
-                result = await self._run_task(
-                    prompt_id,
-                    spec.api,
-                    spec.model,
-                    prompt,
-                    seed,
-                    image_input=image_input,
-                    mask=mask,
-                    output_format="png" if use_png_format else None,
-                    quality=spec.quality,
-                    aspect_ratio=aspect_ratio,
-                    model_options=spec.model_options,
-                )
-
-                # Convert result to bytes
-                if isinstance(result, list):
-                    images_bytes = [self._load_generation_result(x) for x in result]
-                else:
-                    images_bytes = [self._load_generation_result(result)]
-
-                return prompt, images_bytes
-            except Exception as exc:
-                return exc
+            # Walk the fallback chain: primary first, then each configured fallback
+            # in turn. Refusals, timeouts and API errors all surface as exceptions,
+            # so any failure hands the same job to the next generator.
+            active: GeneratorSpec | None = spec
+            last_exc: Exception | None = None
+            while active is not None:
+                try:
+                    return prompt, await _run_with_spec(prompt_id, prompt, active)
+                except Exception as exc:
+                    last_exc = exc
+                    if active.fallback is not None:
+                        _log.warning(
+                            "Generator %s/%s failed for %r (%s); falling back to %s/%s",
+                            active.api,
+                            active.model,
+                            prompt[:80],
+                            str(exc)[:200],
+                            active.fallback.api,
+                            active.fallback.model,
+                        )
+                    active = active.fallback
+            assert last_exc is not None
+            return last_exc
 
         return await asyncio.gather(
             *(_launch_single(pid, p) for pid, p in zip(prompt_ids, prompts, strict=False)),
