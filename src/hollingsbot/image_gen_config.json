@@ -21,7 +21,7 @@
   },
   "$$$": {
     "api": "replicate",
-    "model": "openai/gpt-image-2",
+    "model": "openai/gpt-image-2.5-flare",
     "quality": "medium",
     "price_per_image": 0.08
   },
@@ -43,7 +43,7 @@
   },
   "edit high:": {
     "api": "replicate",
-    "model": "openai/gpt-image-2",
+    "model": "openai/gpt-image-2.5-sunburst",
     "mode": "edit",
     "quality": "high",
     "price_per_image": 0.05
@@ -56,7 +56,7 @@
   },
   "zoom out": {
     "api": "replicate",
-    "model": "openai/gpt-image-2",
+    "model": "openai/gpt-image-2.5-sunburst",
     "mode": "edit",
     "quality": "low",
     "price_per_image": 0.02,

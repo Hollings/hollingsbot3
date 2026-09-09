@@ -118,6 +118,8 @@ class TestModelCapabilityFlags:
         [
             ("openai/gpt-image-2", True),
             ("openai/gpt-image-1.5", True),
+            ("openai/gpt-image-2.5-flare", True),
+            ("openai/gpt-image-2.5-sunburst", True),
             ("black-forest-labs/flux-schnell", False),
         ],
     )
