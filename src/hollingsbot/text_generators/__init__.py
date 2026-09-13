@@ -28,12 +28,14 @@ from .gemini import GeminiTextGenerator
 from .grok import GrokTextGenerator
 from .openai_chatgpt import OpenAIChatTextGenerator
 from .openrouter import OpenRouterLoomGenerator, OpenRouterTextGenerator
+from .openrouter_completion import OpenRouterCompletionGenerator
 
 __all__ = [
     "AnthropicTextGenerator",
     "GeminiTextGenerator",
     "GrokTextGenerator",
     "OpenAIChatTextGenerator",
+    "OpenRouterCompletionGenerator",
     "OpenRouterLoomGenerator",
     "OpenRouterTextGenerator",
     "TextGeneratorAPI",
@@ -52,6 +54,8 @@ def get_text_generator(api: str, model: str) -> TextGeneratorAPI:
         return OpenRouterTextGenerator(model)
     if api == "openrouter-loom":
         return OpenRouterLoomGenerator(model)
+    if api == "openrouter-completion":
+        return OpenRouterCompletionGenerator(model)
     if api == "gemini":
         return GeminiTextGenerator(model)
     raise ValueError(f"Unknown API: {api}")

@@ -1,4 +1,4 @@
-"""LlamaBot - Llama 3.1 405B via OpenRouter with webhook support."""
+"""LlamaBot - raw text-completion bot (Hermes 4 405B via OpenRouter) with webhook support."""
 
 from __future__ import annotations
 
@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from hollingsbot.cogs import chat_utils
+from hollingsbot.cogs.chat_bots.completion_trim import trim_completion
 from hollingsbot.tasks import generate_text
 
 if TYPE_CHECKING:
@@ -30,17 +31,19 @@ class GenerationJob:
 
 
 class LlamaBot:
-    """Llama 3.1 405B via OpenRouter with webhook support."""
+    """Raw text-completion bot: continues the user's message verbatim, no assistant framing."""
 
     def __init__(self, bot: commands.Bot, coordinator: Any, typing_tracker: Any):
         self.bot = bot
         self.coordinator = coordinator
         self.typing_tracker = typing_tracker
 
-        # Configuration - using Loom technique for Gemini completions
+        # Configuration - raw /completions endpoint on a base-like model.
+        # Hermes 4 is a light tune on Llama 3.1 405B base and takes bare
+        # prompts without any chat framing (see text_generators/openrouter_completion.py).
         self.text_timeout = int(os.getenv("TEXT_TIMEOUT", "180"))
-        self.default_provider = "openrouter-loom"
-        self.default_model = "google/gemini-3-flash-preview"
+        self.default_provider = "openrouter-completion"
+        self.default_model = "nousresearch/hermes-4-405b"
 
         # Channel whitelist - only respond in configured channels
         whitelist_str = os.getenv("LLAMA_BOT_CHANNELS", "")
@@ -176,11 +179,19 @@ class LlamaBot:
         if not text.strip():
             return None
 
-        # Prepend the prompt if not already included in response
+        # The generator returns only the continuation, with its leading
+        # whitespace intact, so join with no separator: the model already
+        # decided whether the next token starts a new word.
         if text.strip().startswith(prompt.strip()):
             full_text = text
         else:
-            full_text = prompt + " " + text
+            full_text = prompt + text
+
+        # One Discord message max, and drop the fragment line max_tokens cut off.
+        full_text = trim_completion(full_text, len(prompt))
+        if full_text.strip() == prompt.strip():
+            _LOG.info("Completion added nothing after trimming; not sending")
+            return None
 
         # Wait for typing to clear
         await self._wait_for_typing_to_clear(channel.id)
