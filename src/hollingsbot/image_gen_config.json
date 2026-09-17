@@ -43,7 +43,8 @@
     "price_per_image": 0.04,
     "fallback": {
       "api": "replicate",
-      "model": "google/nano-banana-2"
+      "model": "google/nano-banana-2",
+      "fallback": "edit low:"
     }
   },
   "edit low:": {

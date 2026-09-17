@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from hollingsbot.cogs.image_gen_cog import GeneratorSpec, ImageGenCog, spec_from_dict
+from hollingsbot.cogs.image_gen_cog import GeneratorSpec, ImageGenCog, build_prefix_map, spec_from_dict
 
 
 class TestSpecFromDict:
@@ -86,6 +86,140 @@ class TestSpecFromDict:
         assert spec.fallback.mode == "edit"
 
 
+class TestPrefixReferenceFallback:
+    def test_string_fallback_resolves_to_named_prefix(self):
+        specs = build_prefix_map(
+            {
+                "a:": {"api": "replicate", "model": "one", "mode": "edit", "fallback": "b:"},
+                "b:": {"api": "replicate", "model": "two", "mode": "edit", "some_opt": 1, "price_per_image": 0.04},
+            }
+        )
+        assert specs["a:"].fallback == specs["b:"]
+        assert specs["a:"].fallback.model_options == {"some_opt": 1}
+        # The top-level prefix's price is what gets charged; "a:" has none of its own
+        assert specs["a:"].price_per_image is None
+
+    def test_reference_inside_nested_fallback(self):
+        specs = build_prefix_map(
+            {
+                "a:": {"api": "x", "model": "one", "fallback": {"api": "x", "model": "two", "fallback": "b:"}},
+                "b:": {"api": "x", "model": "three"},
+            }
+        )
+        assert specs["a:"].fallback.model == "two"
+        assert specs["a:"].fallback.fallback.model == "three"
+        assert specs["a:"].fallback.fallback.fallback is None
+
+    def test_referenced_prefix_brings_its_own_chain(self):
+        specs = build_prefix_map(
+            {
+                "a:": {"api": "x", "model": "one", "fallback": "b:"},
+                "b:": {"api": "x", "model": "two", "fallback": {"api": "x", "model": "three"}},
+            }
+        )
+        assert specs["a:"].fallback.fallback.model == "three"
+
+    def test_referenced_prefix_does_not_inherit_from_referrer(self):
+        specs = build_prefix_map(
+            {
+                "a:": {"api": "x", "model": "one", "mode": "edit", "quality": "high", "fallback": "b:"},
+                "b:": {"api": "x", "model": "two"},
+            }
+        )
+        assert specs["a:"].fallback.mode == "generate"
+        assert specs["a:"].fallback.quality == "medium"
+
+    def test_unknown_reference_is_dropped(self, caplog):
+        specs = build_prefix_map({"a:": {"api": "x", "model": "one", "fallback": "nope:"}})
+        assert specs["a:"].fallback is None
+        assert "unknown prefix 'nope:'" in caplog.text
+
+    def test_self_reference_is_dropped(self, caplog):
+        specs = build_prefix_map({"a:": {"api": "x", "model": "one", "fallback": "a:"}})
+        assert specs["a:"].fallback is None
+        assert "Circular" in caplog.text
+
+    def test_mutual_cycle_terminates(self, caplog):
+        specs = build_prefix_map(
+            {
+                "a:": {"api": "x", "model": "one", "fallback": "b:"},
+                "b:": {"api": "x", "model": "two", "fallback": "a:"},
+            }
+        )
+        # Each prefix still gets the other as a fallback; only the closing edge is cut
+        assert specs["a:"].fallback.model == "two"
+        assert specs["a:"].fallback.fallback is None
+        assert specs["b:"].fallback.model == "one"
+        assert specs["b:"].fallback.fallback is None
+        assert "Circular" in caplog.text
+
+    def test_prefix_keys_are_stripped(self):
+        specs = build_prefix_map(
+            {" a: ": {"api": "x", "model": "one", "fallback": " b:"}, "b: ": {"api": "x", "model": "two"}}
+        )
+        assert set(specs) == {"a:", "b:"}
+        assert specs["a:"].fallback.model == "two"
+
+
+class TestShippedEditChain:
+    def _specs(self) -> dict[str, GeneratorSpec]:
+        from hollingsbot.cogs.image_gen_cog import _DEFAULT_CONFIG_PATH
+
+        raw = json.loads(_DEFAULT_CONFIG_PATH.read_text("utf8"))
+        return build_prefix_map({k: v for k, v in raw.items() if isinstance(v, dict)})
+
+    def test_edit_ends_in_edit_low(self):
+        specs = self._specs()
+        chain = []
+        spec = specs["edit:"]
+        while spec is not None:
+            chain.append(spec.model)
+            spec = spec.fallback
+        assert chain[0].startswith("openai/gpt-image-2.5")
+        assert chain[1:] == ["google/nano-banana-2", "bytedance/seedream-4.5"]
+        # The tail really is the edit low: spec, single-image options and all
+        assert specs["edit:"].fallback.fallback == specs["edit low:"]
+        # Still charged the base edit price, not edit low's
+        assert specs["edit:"].price_per_image == 0.04
+
+    def test_every_shipped_fallback_reference_resolves(self, caplog):
+        self._specs()
+        assert "fallback" not in caplog.text
+
+    def test_chain_runs_through_to_seedream_with_its_options(self):
+        seen: dict[str, dict] = {}
+        specs = self._specs()
+        primary = specs["edit:"].model
+
+        class _Cog(_FakeCog):
+            async def _run_task(self, prompt_id, api, model, prompt, seed, **kwargs):  # type: ignore[override]
+                seen[model] = kwargs
+                return await super()._run_task(prompt_id, api, model, prompt, seed, **kwargs)
+
+        cog = _Cog(
+            {
+                primary: RuntimeError("moderation blocked"),
+                "google/nano-banana-2": RuntimeError("also refused"),
+                "bytedance/seedream-4.5": "sd.png",
+            }
+        )
+        results = _run(cog, specs["edit:"])
+        assert results == [("a cat", [b"sd.png"])]
+        assert cog.calls == [primary, "google/nano-banana-2", "bytedance/seedream-4.5"]
+        assert seen["bytedance/seedream-4.5"]["model_options"]["sequential_image_generation"] == "disabled"
+
+    def test_model_listing_shows_full_chain(self):
+        cog = _FakeCog({})
+        cog._prefix_map = self._specs()
+        cog._cfg_path = None
+        cog._default_price = 0.03
+        cog._allow_dms = True
+        cog._allowed_channel_ids = set()
+        cog._edit_channel_ids = set()
+        listing = cog._format_model_listing()
+        assert "replicate / google/nano-banana-2, then replicate / bytedance/seedream-4.5" in listing
+
+
 class TestShippedEditLowPrefix:
     def _raw(self) -> dict:
         from hollingsbot.cogs.image_gen_cog import _DEFAULT_CONFIG_PATH
@@ -104,7 +238,7 @@ class TestShippedEditLowPrefix:
         raw = self._raw()
         prefixes = {k: v for k, v in raw.items() if isinstance(v, dict)}
         cog = _FakeCog({})
-        cog._prefix_map = {p: spec_from_dict(s) for p, s in prefixes.items()}
+        cog._prefix_map = build_prefix_map(prefixes)
         cog._cfg_path = None
         prompt, spec = cog._split_prompt("Edit Low: make the bird purple")
         assert prompt == "make the bird purple"

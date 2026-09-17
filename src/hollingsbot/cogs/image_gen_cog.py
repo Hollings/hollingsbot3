@@ -170,14 +170,27 @@ class GeneratorSpec:
 _SPEC_KNOWN_KEYS = frozenset({"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"})
 
 
-def spec_from_dict(raw: Mapping[str, Any], *, parent: GeneratorSpec | None = None) -> GeneratorSpec:
+def spec_from_dict(
+    raw: Mapping[str, Any],
+    *,
+    parent: GeneratorSpec | None = None,
+    prefixes: Mapping[str, Mapping[str, Any]] | None = None,
+    _ref_chain: tuple[str, ...] = (),
+) -> GeneratorSpec:
     """Build a GeneratorSpec from a config dict.
 
-    Keys outside the known GeneratorSpec fields become ``model_options``. A nested
-    ``fallback`` dict is parsed recursively; it inherits ``mode`` and ``quality``
-    from its parent unless it overrides them, so a config only has to say what
-    differs. ``price_per_image`` is never inherited: the user is charged the
-    prefix's price regardless of which generator ends up producing the image.
+    Keys outside the known GeneratorSpec fields become ``model_options``. A
+    ``fallback`` is either:
+
+    - a nested dict, parsed recursively; it inherits ``mode`` and ``quality`` from
+      its parent unless it overrides them, so a config only has to say what differs.
+    - a string naming another prefix (e.g. ``"edit low:"``), resolved against
+      *prefixes*. That prefix's spec is used as-is - including its own fallback
+      chain - so the two stay in sync. Unknown or circular references are logged
+      and dropped rather than breaking the whole config.
+
+    ``price_per_image`` is never inherited: the user is charged the prefix's price
+    regardless of which generator ends up producing the image.
     """
     spec_kwargs: dict[str, Any] = {k: v for k, v in raw.items() if k in _SPEC_KNOWN_KEYS}
     extra_opts = {k: v for k, v in raw.items() if k not in _SPEC_KNOWN_KEYS and k != "fallback"}
@@ -189,8 +202,25 @@ def spec_from_dict(raw: Mapping[str, Any], *, parent: GeneratorSpec | None = Non
     spec = GeneratorSpec(**spec_kwargs)
     fallback_raw = raw.get("fallback")
     if isinstance(fallback_raw, dict):
-        spec = replace(spec, fallback=spec_from_dict(fallback_raw, parent=spec))
+        fallback = spec_from_dict(fallback_raw, parent=spec, prefixes=prefixes, _ref_chain=_ref_chain)
+        spec = replace(spec, fallback=fallback)
+    elif isinstance(fallback_raw, str):
+        name = fallback_raw.strip()
+        target = (prefixes or {}).get(name)
+        if name in _ref_chain:
+            _log.error("Circular image-gen fallback %s; dropping it", " -> ".join((*_ref_chain, name)))
+        elif not isinstance(target, dict):
+            _log.error("Image-gen fallback references unknown prefix %r; dropping it", name)
+        else:
+            fallback = spec_from_dict(target, prefixes=prefixes, _ref_chain=(*_ref_chain, name))
+            spec = replace(spec, fallback=fallback)
     return spec
+
+
+def build_prefix_map(raw_prefixes: Mapping[str, Mapping[str, Any]]) -> dict[str, GeneratorSpec]:
+    """Parse every prefix entry, resolving prefix-name fallback references between them."""
+    prefixes = {prefix.strip(): raw for prefix, raw in raw_prefixes.items()}
+    return {prefix: spec_from_dict(raw, prefixes=prefixes, _ref_chain=(prefix,)) for prefix, raw in prefixes.items()}
 
 
 # ============================================================================
@@ -231,7 +261,7 @@ class ImageGenCog(commands.Cog):
         self._allow_dms: bool = allow_str in {"1", "true", "yes", "on"}
 
         if config is not None:
-            self._prefix_map: dict[str, GeneratorSpec] = {p.strip(): spec_from_dict(spec) for p, spec in config.items()}
+            self._prefix_map: dict[str, GeneratorSpec] = build_prefix_map(config)
             self._cfg_path: Path | None = None
             self._cfg_mtime: float = 0.0
             self._daily_free_budget: float = 0.50  # Default
@@ -273,12 +303,13 @@ class ImageGenCog(commands.Cog):
         self._default_price = raw_cfg.get("default_price_per_image", 0.03)
 
         # Build prefix map, excluding non-prefix keys
-        self._prefix_map = {}
-        for key, spec in raw_cfg.items():
-            if key in ("daily_free_budget", "default_price_per_image"):
-                continue
-            if isinstance(spec, dict):
-                self._prefix_map[key.strip()] = spec_from_dict(spec)
+        self._prefix_map = build_prefix_map(
+            {
+                key: spec
+                for key, spec in raw_cfg.items()
+                if key not in ("daily_free_budget", "default_price_per_image") and isinstance(spec, dict)
+            }
+        )
 
         # Update cost tracker with new budget
         if hasattr(self, "_cost_tracker"):
@@ -302,7 +333,12 @@ class ImageGenCog(commands.Cog):
             mode_display = f" / mode={spec.mode}" if getattr(spec, "mode", "generate") != "generate" else ""
             price = getattr(spec, "price_per_image", self._default_price)
             price_display = f" / ${price:.3f}" if price < 0.01 else f" / ${price:.2f}"
-            fallback_display = f" (falls back to {spec.fallback.api} / {spec.fallback.model})" if spec.fallback else ""
+            chain: list[str] = []
+            fallback = spec.fallback
+            while fallback is not None:
+                chain.append(f"{fallback.api} / {fallback.model}")
+                fallback = fallback.fallback
+            fallback_display = f" (falls back to {', then '.join(chain)})" if chain else ""
             lines.append(
                 f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}{fallback_display}"
             )
