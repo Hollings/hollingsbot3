@@ -90,6 +90,7 @@ Codebase mounted at `/app`, state in `./data/` bind mount.
 - `image_gen_cog.py` - Image generation/editing via Celery
 - `starboard.py` - Message reposting on reactions
 - `temp_bot_commands.py` - Temporary webhook-based bots
+- `presence.py` - Custom status showing the live commit and start time (`v<sha> · up <time>`, via `version.py`, which reads `.git` directly since the ARM image has no git binary)
 
 **Task Queue** (`tasks.py`): Celery tasks with queue routing:
 - `generate_image` -> `image` queue (GPU)

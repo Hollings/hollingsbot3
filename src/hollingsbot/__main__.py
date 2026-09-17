@@ -153,6 +153,7 @@ async def main():
                 return
             await bot.load_extension(name)
 
+        await _ensure_loaded("hollingsbot.cogs.presence")
         await _ensure_loaded("hollingsbot.cogs.message_logger")
         await _ensure_loaded("hollingsbot.cogs.general")
         await _ensure_loaded("hollingsbot.cogs.image_gen_cog")
