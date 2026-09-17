@@ -86,6 +86,33 @@ class TestSpecFromDict:
         assert spec.fallback.mode == "edit"
 
 
+class TestShippedEditLowPrefix:
+    def _raw(self) -> dict:
+        from hollingsbot.cogs.image_gen_cog import _DEFAULT_CONFIG_PATH
+
+        return json.loads(_DEFAULT_CONFIG_PATH.read_text("utf8"))
+
+    def test_edit_low_is_single_image_seedream_edit_at_four_cents(self):
+        spec = spec_from_dict(self._raw()["edit low:"])
+        assert spec.model == "bytedance/seedream-4.5"
+        assert spec.mode == "edit"
+        assert spec.price_per_image == 0.04
+        # One image per charge: grouped generation must be off
+        assert spec.model_options["sequential_image_generation"] == "disabled"
+
+    def test_edit_low_prefix_wins_over_plain_edit(self):
+        raw = self._raw()
+        prefixes = {k: v for k, v in raw.items() if isinstance(v, dict)}
+        cog = _FakeCog({})
+        cog._prefix_map = {p: spec_from_dict(s) for p, s in prefixes.items()}
+        cog._cfg_path = None
+        prompt, spec = cog._split_prompt("Edit Low: make the bird purple")
+        assert prompt == "make the bird purple"
+        assert spec.model == "bytedance/seedream-4.5"
+        _, plain = cog._split_prompt("edit: make the bird purple")
+        assert plain.model.startswith("openai/gpt-image")
+
+
 class _FakeCog(ImageGenCog):
     """ImageGenCog with __init__ bypassed and _run_task scripted."""
 

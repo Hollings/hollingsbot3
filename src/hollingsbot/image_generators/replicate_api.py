@@ -100,6 +100,25 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         m = self.model.lower()
         return "openai/gpt-image" in m or "gpt-image-1" in m
 
+    @staticmethod
+    def _apply_seedream_defaults(inputs: dict[str, Any], *, n_input_images: int = 0) -> None:
+        """Fill in Seedream-4 defaults: max resolution, grouped generation of up to 4 images.
+
+        Values already present (from the config's model options) win, so a prefix can
+        opt out, e.g. ``"sequential_image_generation": "disabled"`` for a single image.
+        """
+        inputs.setdefault("size", "4K")
+        inputs.setdefault("sequential_image_generation", "auto")
+        if inputs["sequential_image_generation"] != "auto":
+            return
+        # Seedream requires (input + generated) <= 15
+        allowed = 15 - n_input_images
+        if allowed >= 1:
+            inputs["max_images"] = min(inputs.get("max_images", 4), allowed)
+        else:
+            # No room to generate a group; disable grouping to avoid an API error
+            inputs["sequential_image_generation"] = "disabled"
+
     async def generate(  # type: ignore[override]
         self,
         prompt: str,
@@ -137,11 +156,6 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     self._cleanup_files(cleanup)
                 return await self._normalise_output(raw_output)
 
-            # Prefer maximum resolution and sequential generation by default for Seedream-4
-            if self._is_seedream():
-                inputs["size"] = "4K"
-                inputs["sequential_image_generation"] = "auto"
-
             if image_input:
                 prepared, cleanup = self._prepare_image_inputs(image_input)
                 try:
@@ -159,16 +173,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         # Standard edit mode with image_input array
                         inputs["image_input"] = prepared
 
-                    if output_format:
+                    # Seedream has no output_format input
+                    if output_format and not self._is_seedream():
                         inputs["output_format"] = output_format
-                    # For Seedream, cap max_images so (input + generated) <= 15, default target = 4
-                    if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
-                        allowed = max(0, 15 - len(prepared))
-                        if allowed >= 1:
-                            inputs["max_images"] = min(4, allowed)
-                        else:
-                            # No room to generate; disable grouping to avoid API error
-                            inputs["sequential_image_generation"] = "disabled"
+                    if self._is_seedream():
+                        self._apply_seedream_defaults(inputs, n_input_images=len(prepared))
                     # Add seed only for models that are known to support it
                     if seed is not None and self._supports_seed():
                         inputs["seed"] = seed
@@ -179,9 +188,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             else:
                 if self._supports_disable_safety() and "disable_safety_checker" not in inputs:
                     inputs["disable_safety_checker"] = True
-                # For Seedream default to up to 4 images when sequential generation is auto
-                if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
-                    inputs["max_images"] = 4
+                if self._is_seedream():
+                    self._apply_seedream_defaults(inputs)
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
                 # Pass aspect_ratio for models that support it (FLUX, etc.)
@@ -357,11 +365,6 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 await self._normalise_output(raw_output)
             return results
 
-        if self._is_seedream():
-            inputs["size"] = "4K"
-            inputs["sequential_image_generation"] = "auto"
-            inputs.setdefault("max_images", 4)
-
         if image_input:
             prepared, cleanup = self._prepare_image_inputs(image_input)
             try:
@@ -379,14 +382,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     # Standard edit mode with image_input array
                     inputs["image_input"] = prepared
 
-                if output_format:
+                # Seedream has no output_format input
+                if output_format and not self._is_seedream():
                     inputs["output_format"] = output_format
-                if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
-                    allowed = max(0, 15 - len(prepared))
-                    if allowed >= 1:
-                        inputs["max_images"] = min(inputs.get("max_images", 4), allowed)
-                    else:
-                        inputs["sequential_image_generation"] = "disabled"
+                if self._is_seedream():
+                    self._apply_seedream_defaults(inputs, n_input_images=len(prepared))
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
                 self._log.info("Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys()))
@@ -396,8 +396,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         else:
             if self._supports_disable_safety() and "disable_safety_checker" not in inputs:
                 inputs["disable_safety_checker"] = True
-            if self._is_seedream() and inputs.get("sequential_image_generation") == "auto":
-                inputs.setdefault("max_images", 4)
+            if self._is_seedream():
+                self._apply_seedream_defaults(inputs)
             if seed is not None and self._supports_seed():
                 inputs["seed"] = seed
             # Pass aspect_ratio for models that support it (FLUX, etc.)

@@ -109,6 +109,10 @@ def clean_mentions(message: discord.Message, bot: discord.Client) -> str:
     return content
 
 
+# Image edit prefixes: "edit:" plus tiered variants like "edit low:", "edit high:", "edit pro:"
+_EDIT_PREFIX_RE = re.compile(r"edit(\s+\w+)?:", re.IGNORECASE)
+
+
 def should_ignore_message(content: str | None) -> bool:
     """Check if message should be ignored (bot commands or image generation)."""
     if not content:
@@ -116,8 +120,7 @@ def should_ignore_message(content: str | None) -> bool:
     stripped = content.lstrip()
     if not stripped:
         return False
-    lowered = stripped.lower()
-    return stripped.startswith("!") or stripped.startswith("-") or lowered.startswith("edit:")
+    return stripped.startswith("!") or stripped.startswith("-") or bool(_EDIT_PREFIX_RE.match(stripped))
 
 
 # ==================== Attachment Detection ====================

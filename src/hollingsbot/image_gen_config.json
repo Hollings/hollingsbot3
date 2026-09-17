@@ -46,6 +46,14 @@
       "model": "google/nano-banana-2"
     }
   },
+  "edit low:": {
+    "api": "replicate",
+    "model": "bytedance/seedream-4.5",
+    "mode": "edit",
+    "disable_safety_checker": true,
+    "sequential_image_generation": "disabled",
+    "price_per_image": 0.04
+  },
   "edit high:": {
     "api": "replicate",
     "model": "openai/gpt-image-2.5-sunburst",

@@ -110,6 +110,7 @@ class General(commands.Cog):
             "- `$ prompt` higher quality; `$$ prompt` premium.\n"
             "- `^ prompt` SVG generator.\n"
             "- `edit: ...` reply to a message with an image (or attach one) to edit; the bot replies to your prompt message.\n"
+            "- `edit low: ...` / `edit high: ...` / `edit pro: ...` same, with other models (see `!models` for prices).\n"
             "- Tips: `{123}` sets seed; `<a, b, c>` expands to multiple prompts.\n"
             "- `!models` list available image generators (image channels only).\n"
             "- `!usage` your budget and credits; `!redeem` trade tokens for credits; `!balance` full status.\n\n"

@@ -1189,15 +1189,10 @@ class ImageGenCog(commands.Cog):
             # Check content early to allow a separate allowlist for edit: and zoom out
             cleaned = (message.content or "").strip()
             if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
-                # Not in general image channels. Allow if this is an edit prompt or zoom out
-                # and the channel is in EDIT_CHANNEL_IDS.
-                cleaned_lower = cleaned.lower()
-                is_edit_cmd = (
-                    cleaned_lower.startswith("edit:")
-                    or cleaned_lower.startswith("edit high:")
-                    or cleaned_lower.startswith("edit pro:")
-                    or cleaned_lower.startswith("zoom out")
-                )
+                # Not in general image channels. Allow if this is an edit-mode prefix
+                # (edit:, edit low:, zoom out, ...) and the channel is in EDIT_CHANNEL_IDS.
+                split = self._split_prompt(cleaned)
+                is_edit_cmd = split is not None and split[1].mode in ("edit", "outpaint")
                 if not (is_edit_cmd and message.channel.id in self._edit_channel_ids):
                     return
         # For DMs or allowed guild messages, continue.

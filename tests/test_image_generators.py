@@ -127,6 +127,59 @@ class TestModelCapabilityFlags:
         assert _make_gen(model=model)._is_gpt_image() is expected
 
 
+class TestSeedreamDefaults:
+    def test_defaults_to_4k_grouped_up_to_four(self):
+        inputs: dict = {"prompt": "p"}
+        ReplicateImageGenerator._apply_seedream_defaults(inputs)
+        assert inputs["size"] == "4K"
+        assert inputs["sequential_image_generation"] == "auto"
+        assert inputs["max_images"] == 4
+
+    def test_config_can_disable_grouping_for_single_image(self):
+        inputs: dict = {"prompt": "p", "sequential_image_generation": "disabled"}
+        ReplicateImageGenerator._apply_seedream_defaults(inputs, n_input_images=1)
+        assert inputs["sequential_image_generation"] == "disabled"
+        assert "max_images" not in inputs
+
+    def test_config_size_and_max_images_win(self):
+        inputs: dict = {"prompt": "p", "size": "2K", "max_images": 2}
+        ReplicateImageGenerator._apply_seedream_defaults(inputs)
+        assert inputs["size"] == "2K"
+        assert inputs["max_images"] == 2
+
+    def test_max_images_capped_by_input_count(self):
+        inputs: dict = {"prompt": "p"}
+        ReplicateImageGenerator._apply_seedream_defaults(inputs, n_input_images=13)
+        assert inputs["max_images"] == 2
+
+    def test_grouping_disabled_when_no_room(self):
+        inputs: dict = {"prompt": "p"}
+        ReplicateImageGenerator._apply_seedream_defaults(inputs, n_input_images=15)
+        assert inputs["sequential_image_generation"] == "disabled"
+        assert "max_images" not in inputs
+
+    async def test_edit_run_sends_single_image_inputs(self):
+        """End to end through generate_many: the `edit low:` options reach Replicate intact."""
+        gen = _make_gen(
+            model="bytedance/seedream-4.5",
+            model_options={"disable_safety_checker": True, "sequential_image_generation": "disabled"},
+        )
+        captured: dict = {}
+
+        async def fake_run(model, input):
+            captured.update(input)
+            return [b"edited"]
+
+        gen._client.async_run = fake_run  # type: ignore[method-assign]
+        out = await gen.generate_many("make it blue", image_input=[_png_bytes(8, 8)], output_format="png")
+        assert out == [b"edited"]
+        assert captured["sequential_image_generation"] == "disabled"
+        assert captured["size"] == "4K"
+        assert "max_images" not in captured
+        assert "output_format" not in captured  # not part of Seedream's input schema
+        assert len(captured["image_input"]) == 1
+
+
 class TestScaleImage:
     def test_no_scale_when_within_limit(self):
         out = _scale_image_to_max_dimension(_png_bytes(100, 80), 1024)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from hollingsbot.cogs.chat_utils import webhook_id_from_url
+from hollingsbot.cogs.chat_utils import should_ignore_message, webhook_id_from_url
 
 
 @pytest.mark.parametrize(
@@ -40,3 +40,23 @@ def test_token_with_digit_run_does_not_confuse_id():
     url = "https://discord.com/api/webhooks/123456789012345678/x999xToken"
     assert webhook_id_from_url(url) == 123456789012345678
     assert webhook_id_from_url(url) != 999
+
+
+@pytest.mark.parametrize(
+    "content,expected",
+    [
+        ("!a cat", True),
+        ("-hidden", True),
+        ("edit: make it blue", True),
+        ("Edit Low: make it blue", True),
+        ("edit high: make it blue", True),
+        ("  edit pro: make it blue", True),
+        ("edit the config for me: thanks", False),
+        ("editing is fun", False),
+        ("hello there", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_should_ignore_message(content, expected):
+    assert should_ignore_message(content) is expected
