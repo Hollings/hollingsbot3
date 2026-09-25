@@ -66,6 +66,33 @@ bring copies"*. Born with only 500 words, strict mode collapses into "something
 great big be ever food thing"; with an LLM prior blended in
 (`suggest_weight` 0.5) it reads most fluently but least like Jev.
 
+## Stopping (`JEV_STOP`)
+
+- **`threshold` (default):** each word's request also asks "send the message
+  as it is" vs "keep typing"; it sends at P(send) >= 0.6, and between 0.2 and
+  0.6 with probability P(send)^2.
+- **`sample`:** the same question, sampled like a word (temperature, no
+  floor or ceiling).
+- **`choice`:** STOP is an option on the word menu from `min_words` on,
+  shuffled in with the words. Its fit Noul is "is the end of `text` a natural
+  place to stop?", and the word question asks "which word goes in the blank,
+  or is the message finished?" (the plain blank question gave STOP at most
+  0.29 even at a finished sentence; this wording up to 0.49). No separate stop
+  check. One-request modes only; the tournament keeps `threshold`.
+
+Measured on the live LLM-pages config, 100-word cap (9 prompts x 2 seeds):
+
+| stop | mean words (min-max) | $/reply | ended |
+|---|---|---|---|
+| threshold | 27.9 (9-68) | 0.0035 | 17 sent, 1 gave up |
+| sample | 20.8 (8-46) | 0.0023 | all sent, often mid-sentence ("...ideas to name her for your") |
+| choice | 35.6 (8-100) | 0.0049 | 14 STOP, 3 gave up, 1 cap |
+
+With `choice`, STOP won with 0.06-0.30 of the menu's probability, at
+natural endings ("paris is the capital of france yeah actually", "nothing
+really i am just sleeping too..."); a ramble that never wants to stop runs
+until the give-up rule or the cap ends it. Live since 2026-09-25.
+
 ## Default: a lobotomized parrot that learns (one request per word)
 
 Jev is born knowing only the 100 most common English words (almost all glue:
