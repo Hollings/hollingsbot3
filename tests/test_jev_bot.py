@@ -331,10 +331,21 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("JEV_TOP_P", "0.8")
     monkeypatch.setenv("JEV_MIN_WORDS", "10")
     monkeypatch.setenv("JEV_STYLE", "  Jev rambles.  ")
+    monkeypatch.setenv("JEV_LLM_PAGES", "3")
+    monkeypatch.setenv("JEV_OWN_PAGE", "1")
+    monkeypatch.setenv("JEV_SHUFFLE", "0")
     s = JevBotSettings.from_env()
     assert s.channels == {CHANNEL, 7}
     assert (s.name, s.context_messages, s.daily_budget, s.writer.top_p) == ("Jevvy", 3, 0.5, 0.8)
     assert (s.writer.min_words, s.writer.style) == (10, "Jev rambles.")
+    assert (s.writer.llm_pages, s.writer.own_page, s.writer.shuffle) == (3, True, False)
+
+
+def test_paging_defaults_off_and_shuffle_on(monkeypatch):
+    for var in ("JEV_LLM_PAGES", "JEV_OWN_PAGE", "JEV_SHUFFLE"):
+        monkeypatch.delenv(var, raising=False)
+    w = JevBotSettings.from_env().writer
+    assert (w.llm_pages, w.own_page, w.shuffle) == (1, False, True)
 
 
 def test_settings_default_to_no_channels(monkeypatch):

@@ -22,6 +22,11 @@ Config (env):
                               suggester: rare words must be taught first); 0 = any proposal
     JEV_VOCAB_SIZE            words Jev is born knowing (default 1000 with a suggester, 100 without;
                               without one, >= 250 means the full-vocabulary tournament)
+    JEV_LLM_PAGES             with a suggester: pages of the LLM's words Jev can turn through by
+                              saying it would rather type a word that isn't listed (default 1)
+    JEV_OWN_PAGE              with a suggester: 1 = after the LLM's pages, a last page of Jev's own
+                              vocabulary, minus what it passed (default 0)
+    JEV_SHUFFLE               0 = show the LLM's words in its own rank order (default 1: shuffled)
     JEV_FLUENCY_CHECK         0 to skip the per-option naturalness check (cheaper, more scrambled)
     JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
     JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
@@ -113,6 +118,9 @@ class JevBotSettings:
             temperature=_env_float("JEV_TEMPERATURE", base.temperature),
             top_p=_env_float("JEV_TOP_P", base.top_p),
             style=os.getenv("JEV_STYLE", base.style).strip(),
+            llm_pages=max(1, int(_env_float("JEV_LLM_PAGES", base.llm_pages))),
+            own_page=_env_flag("JEV_OWN_PAGE", base.own_page),
+            shuffle=_env_flag("JEV_SHUFFLE", base.shuffle),
         )
         return cls(
             channels=frozenset(parse_id_set(os.getenv("JEV_BOT_CHANNELS"))),
@@ -165,7 +173,17 @@ class JevBot:
         self._webhooks: dict[int, discord.Webhook | None] = {}
         self._active: dict[int, asyncio.Task] = {}
         self._cleanups: set[asyncio.Task] = set()
-        _LOG.info("JevBot initialized (name=%s, channels=%s)", self.settings.name, sorted(self.whitelist_channels))
+        w = self.settings.writer
+        _LOG.info(
+            "JevBot initialized (name=%s, channels=%s, suggest=%s, born=%d, known_only=%s, llm_pages=%d, own_page=%s)",
+            self.settings.name,
+            sorted(self.whitelist_channels),
+            self.settings.suggest_model or "off",
+            w.vocab_size,
+            w.known_only,
+            w.llm_pages,
+            w.own_page,
+        )
 
     # ------------------------------------------------------------ coordinator API
 
