@@ -12,7 +12,10 @@ terminal with `python scripts/jev_try.py "Jev, what's your favorite food?"`
 (add `--trace` to see every step's scores, `--samples` for the prompt set the
 numbers below come from).
 
-## Default: an LLM proposes, Jev chooses (two quick requests per word)
+## Opt-in: an LLM proposes, Jev chooses (`JEV_SUGGEST_MODEL=on`)
+
+Off by default since 2026-09-25: it reads well, but every word then comes from
+another model and Jev is only its filter.
 
 Jev's weakness is word order; a small LLM's is nothing Jev cares about. So
 per word, `llama-3.1-8b-instruct` (OpenRouter, ~0.4 s, max_tokens 1,
@@ -43,7 +46,7 @@ bring copies"*. Born with only 500 words, strict mode collapses into "something
 great big be ever food thing"; with an LLM prior blended in
 (`suggest_weight` 0.5) it reads most fluently but least like Jev.
 
-## Without a suggester: a lobotomized parrot (one request per word)
+## Default: a lobotomized parrot that learns (one request per word)
 
 Jev is born knowing only the 100 most common English words (almost all glue:
 the, is, you, like, good). Every word a human says in its channel is learned

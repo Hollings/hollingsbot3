@@ -1,10 +1,11 @@
 """JevBot - TypeSafe's Jev decision model, chatting one word at a time.
 
 Jev cannot generate text; hollingsbot.jev.writer makes it pick a reply word by
-word. By default a small LLM proposes each next word (hollingsbot.jev.suggest)
-and Jev chooses among the proposals it knows: two quick API calls per word. The
-reply is posted through a "Jev" webhook as soon as the first word is picked and
-edited as the rest arrive, so the channel watches it think.
+word from its own vocabulary, one API call per word. (Optionally a small LLM
+proposes each next word and Jev only chooses, see hollingsbot.jev.suggest; off
+by default because Jev then mostly filters another model's text.) The reply is
+posted through a "Jev" webhook as soon as the first word is picked and edited
+as the rest arrive, so the channel watches it think.
 
 Jev is born knowing only the most common words and learns every word a human
 says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
@@ -14,8 +15,8 @@ Config (env):
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
-    JEV_SUGGEST_MODEL         OpenRouter model proposing next words (default llama-3.1-8b-instruct;
-                              "off" = Jev alone picks from its own vocabulary)
+    JEV_SUGGEST_MODEL         "on" or an OpenRouter model slug: an LLM proposes next words and Jev
+                              chooses (default off: Jev alone picks from its own vocabulary)
     JEV_KNOWN_ONLY            1 = Jev only says proposals it knows (born or learned) (default 1 with a
                               suggester: rare words must be taught first); 0 = any proposal
     JEV_VOCAB_SIZE            words Jev is born knowing (default 1000 with a suggester, 100 without;
@@ -93,7 +94,11 @@ class JevBotSettings:
     @classmethod
     def from_env(cls) -> JevBotSettings:
         base = WriterConfig()
-        model = os.getenv("JEV_SUGGEST_MODEL", DEFAULT_SUGGEST_MODEL).strip()
+        # Off by default: with an LLM proposing every word, Jev is only a filter on another
+        # model's text. Opt in with JEV_SUGGEST_MODEL=on (or a model slug).
+        model = os.getenv("JEV_SUGGEST_MODEL", "off").strip()
+        if model.lower() in ("1", "on", "true", "yes"):
+            model = DEFAULT_SUGGEST_MODEL
         suggest_model = None if model.lower() in ("", "0", "off", "none", "false") else model
         # With a suggester, Jev is born with the 1000 commonest words (grammar is always
         # available) and may only say proposals it knows, so rarer words must be taught.

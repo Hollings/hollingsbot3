@@ -614,7 +614,7 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `JEV_BOT_NAME` - Webhook display name, and the name Jev is told it has (default: Jev)
 - `JEV_CONTEXT_MESSAGES` - Chat messages Jev sees, the latest included (default: 5)
 - `JEV_DAILY_BUDGET_USD` - Stop replying for the rest of the UTC day past this spend (default: 2.00)
-- `JEV_SUGGEST_MODEL` - OpenRouter model that proposes each next word for Jev to choose from (default: `meta-llama/llama-3.1-8b-instruct`; `off` = Jev picks from its own vocabulary alone)
+- `JEV_SUGGEST_MODEL` - `on` (llama-3.1-8b-instruct) or an OpenRouter model slug: an LLM proposes each next word and Jev only chooses (default: off, Jev picks from its own vocabulary)
 - `JEV_KNOWN_ONLY` - `1` = Jev only says proposals it knows, so rarer words must be taught first (default: 1 with a suggester)
 - `JEV_VOCAB_SIZE` - Words Jev is born knowing; it learns the rest from the chat, `!jev` shows what it knows (default: 1000 with a suggester, 100 without; without one, >= 250 switches to the full-vocabulary tournament)
 - `JEV_FLUENCY_CHECK` - `0` skips the per-option naturalness check (~7x cheaper, more scrambled; default on)

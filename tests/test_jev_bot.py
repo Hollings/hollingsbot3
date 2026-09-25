@@ -142,12 +142,12 @@ def test_reachable_learned_depends_on_mode():
 def test_suggester_defaults(monkeypatch):
     for var in ("JEV_SUGGEST_MODEL", "JEV_KNOWN_ONLY", "JEV_VOCAB_SIZE"):
         monkeypatch.delenv(var, raising=False)
+    alone = JevBotSettings.from_env()  # default: Jev alone, no LLM
+    assert alone.suggest_model is None and (alone.writer.vocab_size, alone.writer.known_only) == (100, False)
+    monkeypatch.setenv("JEV_SUGGEST_MODEL", "on")
     on = JevBotSettings.from_env()
     assert on.suggest_model == "meta-llama/llama-3.1-8b-instruct"
     assert (on.writer.vocab_size, on.writer.known_only) == (1000, True)
-    monkeypatch.setenv("JEV_SUGGEST_MODEL", "off")
-    off = JevBotSettings.from_env()
-    assert off.suggest_model is None and (off.writer.vocab_size, off.writer.known_only) == (100, False)
     monkeypatch.setenv("JEV_SUGGEST_MODEL", "some/model")
     monkeypatch.setenv("JEV_KNOWN_ONLY", "0")
     free = JevBotSettings.from_env()
