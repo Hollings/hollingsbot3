@@ -1,5 +1,6 @@
 """Track typing indicators to enable typing-aware bot responses."""
 
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -72,3 +73,16 @@ class TypingTracker:
             _LOG.debug("Expired stale typing state for channel %d (age: %s)", channel_id, age)
 
         return is_recent
+
+    async def wait_until_quiet(
+        self, channel_id: int, bot_user_id: int, *, max_wait: float = 10.0, poll: float = 0.5
+    ) -> None:
+        """Return once no human is typing in the channel, or after ``max_wait`` seconds.
+
+        For a bot about to post: it holds its message while someone is mid-message. If
+        they send, the bot's own cancel-on-new-message logic takes over.
+        """
+        waited = 0.0
+        while waited < max_wait and self.is_human_typing(channel_id, bot_user_id):
+            await asyncio.sleep(poll)
+            waited += poll

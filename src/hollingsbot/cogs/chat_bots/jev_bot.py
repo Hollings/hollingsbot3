@@ -3,9 +3,10 @@
 Jev cannot generate text; hollingsbot.jev.writer makes it pick a reply word by
 word from its own vocabulary, one API call per word. (Optionally a small LLM
 proposes each next word and Jev only chooses, see hollingsbot.jev.suggest; off
-by default because Jev then mostly filters another model's text.) The reply is
-posted through a "Jev" webhook as soon as the first word is picked and edited
-as the rest arrive, so the channel watches it think.
+by default because Jev then mostly filters another model's text.) The whole
+reply is written behind a typing indicator (shown under the bot's own name:
+webhooks cannot type), held while a human is mid-message, then posted once
+through a "Jev" webhook. Someone speaking first cancels it unposted.
 
 Jev is born knowing only the most common words and learns every word a human
 says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
@@ -49,7 +50,6 @@ from hollingsbot.jev.lexicon import Lexicon
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
-from hollingsbot.utils.live_message import LiveMessage
 
 if TYPE_CHECKING:
     from discord.ext import commands
@@ -61,7 +61,7 @@ _LOG = logging.getLogger(__name__)
 AVATAR_FILE = Path(__file__).resolve().parents[2] / "assets" / "jev_avatar.png"
 _NAME_PREFIX = re.compile(r"^<[^>]+>:\s*")
 _MAX_LINE_CHARS = 500
-INTERRUPTED_MARK = " \u2014"  # em dash: someone spoke before Jev finished
+CUT_OFF_MARK = " \u2014"  # em dash: the reply broke off mid-way (an API error)
 
 OVER_BUDGET_REACTION = "\N{SLEEPING SYMBOL}"
 ERROR_REACTION = "\N{WARNING SIGN}"
@@ -243,32 +243,21 @@ class JevBot:
         return self._writer
 
     async def _write_and_send(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
+        """Write the whole reply behind a typing indicator, then post it once."""
         channel = message.channel
         webhook = await self._webhook_for(channel)
         name = self.settings.name
         draft = Reply()
 
-        if webhook is not None:
-            live = LiveMessage(
-                send=lambda text: webhook.send(text, username=name, wait=True),
-                edit=lambda msg, text: webhook.edit_message(msg.id, content=text),
-            )
-            on_word = live.update
-        else:
-            # No webhook permission: post once at the end as the bot itself. Streaming
-            # would put a one-word message into history via on_message.
-            live = LiveMessage(send=lambda text: channel.send(text), edit=lambda msg, text: msg.edit(content=text))
-            on_word = None
-
         try:
             learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.learned_limit)
-            if webhook is None:
-                async with channel.typing():
-                    reply = await self._get_writer().write(chat, draft=draft, learned=learned)
-            else:
-                reply = await self._get_writer().write(chat, on_word=on_word, draft=draft, learned=learned)
+            async with channel.typing():
+                reply = await self._get_writer().write(chat, draft=draft, learned=learned)
+                # Don't talk over someone mid-message (if they send, this task is cancelled).
+                await self.typing_tracker.wait_until_quiet(channel.id, self.bot.user.id)
         except asyncio.CancelledError:
-            cleanup = asyncio.create_task(self._finish_interrupted(channel, live, webhook, chat, draft))
+            # Someone spoke first. Nothing was posted, but the words Jev picked were paid for.
+            cleanup = asyncio.create_task(self._log_interrupted(channel.id, chat, draft))
             self._cleanups.add(cleanup)
             cleanup.add_done_callback(self._cleanups.discard)
             raise
@@ -278,7 +267,8 @@ class JevBot:
                 self.ledger.record, draft, chat, channel_id=channel.id, message_id=None, stop_reason="error"
             )
             with contextlib.suppress(discord.HTTPException):
-                await live.finish(draft.text + INTERRUPTED_MARK if draft.text else "")
+                if draft.text:
+                    await self._post(channel, webhook, draft.text + CUT_OFF_MARK)
                 await message.add_reaction(ERROR_REACTION)
             return None
 
@@ -293,9 +283,9 @@ class JevBot:
         )
         sent: discord.Message | None = None
         try:
-            sent = await live.finish(reply.text)
+            sent = await self._post(channel, webhook, reply.text)
         except discord.HTTPException:
-            _LOG.exception("JevBot could not post its final text in channel %s", channel.id)
+            _LOG.exception("JevBot could not post its reply in channel %s", channel.id)
         finally:
             await asyncio.to_thread(
                 self.ledger.record, reply, chat, channel_id=channel.id, message_id=sent.id if sent else None
@@ -309,37 +299,23 @@ class JevBot:
             "bot_name": name,
         }
 
-    async def _finish_interrupted(
-        self,
-        channel: discord.abc.Messageable,
-        live: LiveMessage,
-        webhook: discord.Webhook | None,
-        chat: list[ChatLine],
-        draft: Reply,
-    ) -> None:
-        """Someone spoke mid-reply: mark the partial message cut off and remember it."""
+    async def _post(
+        self, channel: discord.abc.Messageable, webhook: discord.Webhook | None, text: str
+    ) -> discord.Message | None:
+        """Post ``text`` as Jev (its webhook, or the bot itself without one); nothing if empty."""
+        if not text:
+            return None
+        if webhook is not None:
+            return await webhook.send(text, username=self.settings.name, wait=True)
+        return await channel.send(text)
+
+    async def _log_interrupted(self, channel_id: int, chat: list[ChatLine], draft: Reply) -> None:
         try:
-            sent = None
-            if live.message is not None:
-                sent = await live.finish(draft.text + INTERRUPTED_MARK)
             await asyncio.to_thread(
-                self.ledger.record,
-                draft,
-                chat,
-                channel_id=channel.id,
-                message_id=sent.id if sent else None,
-                stop_reason="interrupted",
+                self.ledger.record, draft, chat, channel_id=channel_id, message_id=None, stop_reason="interrupted"
             )
-            if sent is not None:
-                await self.coordinator._add_response_to_history(
-                    channel.id,
-                    sent.id,
-                    draft.text + INTERRUPTED_MARK,
-                    webhook.id if webhook else None,
-                    self.settings.name,
-                )
         except Exception:
-            _LOG.exception("JevBot failed to wrap up an interrupted reply")
+            _LOG.exception("JevBot failed to log an interrupted reply")
 
     # ------------------------------------------------------------------ webhook
 

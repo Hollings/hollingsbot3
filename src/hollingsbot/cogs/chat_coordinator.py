@@ -107,12 +107,11 @@ class ChatCoordinator(commands.Cog):
     def claim_webhook(self, webhook_id: int) -> None:
         """Hand a webhook's messages to the bot that posts through it.
 
-        A bot that streams a reply (send once, then edit as it is written)
-        fires on_message with only the first word in it. For a claimed webhook
-        on_message ignores that event entirely - no history turn, no other bot
-        answering a half-written message - and the owning bot returns the
-        finished text from receive_message as usual (or calls
-        _add_response_to_history itself if it was interrupted).
+        on_message ignores a claimed webhook's messages entirely - no history
+        turn of their own, no other bot answering them - and the owning bot's
+        text reaches history through receive_message's return value as usual.
+        (Jev claims its webhook; it once streamed replies by editing, which
+        fired on_message with only the first word.)
         """
         self._bot_owned_webhooks.add(webhook_id)
 
@@ -280,7 +279,7 @@ class ChatCoordinator(commands.Cog):
         if not message.content.strip() and not message.attachments:
             return
 
-        # A streaming bot's own message: it records the finished text itself
+        # A claimed webhook's message: its bot records the text itself (see claim_webhook)
         if message.webhook_id is not None and message.webhook_id in self._bot_owned_webhooks:
             return
 

@@ -1,7 +1,7 @@
 """Post a test prompt and a real Jev reply in a channel, without joining the gateway.
 
 Checks the Discord half of JevBot end to end (webhook found or created with its
-avatar, the reply streamed by edits, the final text) using the bot's REST API
+avatar, the typing indicator, the reply posted once) using the bot's REST API
 only, so it can run while the real bot is online. What it cannot check is the
 on_message trigger: that needs a human to type in the channel.
 
@@ -27,6 +27,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hollingsbot.cogs.chat_bots.jev_bot import JevBot, JevBotSettings
+from hollingsbot.cogs.typing_tracker import TypingTracker
 from hollingsbot.jev import ChatLine
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
@@ -51,7 +52,7 @@ async def run(channel_id: int, prompt: str, speaker: str) -> None:
         await channel.send(f"(Jev smoke test, asking as {speaker}) {prompt}")
 
         settings = dataclasses.replace(JevBotSettings.from_env(), channels=frozenset({channel_id}))
-        jev = JevBot(client, _Coordinator(), None, settings)
+        jev = JevBot(client, _Coordinator(), TypingTracker(), settings)  # no gateway: never sees typing
         with tempfile.TemporaryDirectory() as tmp:
             jev.ledger = JevLedger(Path(tmp) / "smoke.db")
             jev.lexicon = Lexicon(Path(tmp) / "smoke.db")
@@ -66,6 +67,7 @@ async def run(channel_id: int, prompt: str, speaker: str) -> None:
             if result:
                 sent = await channel.fetch_message(result["message_id"])
                 print(f"in channel: {sent.author} (webhook {sent.webhook_id}): {sent.content!r}")
+                print(f"  edited: {sent.edited_at}")  # None: posted once, whole
             print(f"spent ${jev.ledger.spent_today():.4f}")
     finally:
         await client.close()

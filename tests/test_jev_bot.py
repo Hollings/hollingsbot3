@@ -3,17 +3,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
 
 from hollingsbot.cogs.chat_bots import jev_bot as jev_bot_mod
-from hollingsbot.cogs.chat_bots.jev_bot import INTERRUPTED_MARK, JevBot, JevBotSettings, chat_lines
+from hollingsbot.cogs.chat_bots.jev_bot import CUT_OFF_MARK, JevBot, JevBotSettings, chat_lines
 from hollingsbot.cogs.chat_coordinator import ChatCoordinator
 from hollingsbot.cogs.conversation import ConversationTurn
 from hollingsbot.cogs.jev_commands import describe
-from hollingsbot.jev.client import Usage
+from hollingsbot.jev.client import JevError, Usage
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon, LexiconSummary
 from hollingsbot.jev.writer import ChatLine, Reply, WriterConfig
@@ -22,11 +24,12 @@ CHANNEL = 1473033550805598253
 
 
 class FakeWriter:
-    """Says ``words`` one at a time; optionally hangs after ``hang_after`` words."""
+    """Says ``words`` one at a time; optionally hangs (or fails) after that many words."""
 
-    def __init__(self, words, hang_after=None):
+    def __init__(self, words, hang_after=None, fail_after=None):
         self.words = words
         self.hang_after = hang_after
+        self.fail_after = fail_after
         self.chats: list[list[ChatLine]] = []
         self.learned: list[list[str]] = []
 
@@ -37,6 +40,8 @@ class FakeWriter:
         for i, w in enumerate(self.words):
             if self.hang_after is not None and i == self.hang_after:
                 await asyncio.Event().wait()
+            if self.fail_after is not None and i == self.fail_after:
+                raise JevError("decisions API down")
             reply.words.append(w)
             reply.text = " ".join(reply.words)
             reply.usage.record({"input_tokens": 1000, "cost": 0.002}, 0.5)
@@ -56,11 +61,28 @@ def make_webhook():
     return webhook, sent
 
 
+class TypingSpy:
+    """Stands in for ``channel.typing()``: remembers whether the indicator is on."""
+
+    def __init__(self):
+        self.active = False
+        self.times = 0
+
+    async def __aenter__(self):
+        self.active = True
+        self.times += 1
+
+    async def __aexit__(self, *exc):
+        self.active = False
+
+
 def make_channel(webhook):
     channel = MagicMock(spec=discord.TextChannel)
     channel.id = CHANNEL
     channel.webhooks = AsyncMock(return_value=[])
     channel.create_webhook = AsyncMock(return_value=webhook)
+    channel.typing_spy = TypingSpy()
+    channel.typing = MagicMock(return_value=channel.typing_spy)
     return channel
 
 
@@ -92,7 +114,10 @@ def turn(message, name="Hollings"):
 def jev(temp_db, mock_bot):
     coordinator = MagicMock()
     coordinator._add_response_to_history = AsyncMock()
-    bot = JevBot(mock_bot, coordinator, MagicMock(), JevBotSettings(channels=frozenset({CHANNEL}), daily_budget=1.0))
+    typing_tracker = MagicMock()
+    typing_tracker.wait_until_quiet = AsyncMock()
+    settings = JevBotSettings(channels=frozenset({CHANNEL}), daily_budget=1.0)
+    bot = JevBot(mock_bot, coordinator, typing_tracker, settings)
     bot.ledger = JevLedger(temp_db)
     bot.lexicon = Lexicon(temp_db)
     return bot
@@ -167,8 +192,47 @@ async def test_replies_through_a_new_jev_webhook_and_logs_the_reply(jev):
     assert channel.create_webhook.await_args.kwargs["name"] == "Jev"
     jev.coordinator.claim_webhook.assert_called_once_with(555)
     webhook.send.assert_awaited_once_with("paris", username="Jev", wait=True)
+    webhook.edit_message.assert_not_awaited()  # one finished message, never edited
     assert jev._writer.chats[0][-1] == ChatLine("Hollings", "Jev what is the capital of France?")
     assert jev.ledger.spent_today() == pytest.approx(0.002)
+
+
+async def test_types_while_writing_then_posts_the_whole_reply_once(jev, mock_bot):
+    webhook, sent = make_webhook()
+    channel = make_channel(webhook)
+    message = make_message(channel)
+    writer = FakeWriter(["it's", "paris", "obviously"])
+    jev._writer = writer
+    events = []
+    write = writer.write
+
+    async def spying_write(*args, **kwargs):
+        events.append(("write", channel.typing_spy.active, kwargs.get("on_word")))
+        return await write(*args, **kwargs)
+
+    writer.write = spying_write
+    jev.typing_tracker.wait_until_quiet.side_effect = lambda *a: events.append(("wait", *a))
+    webhook.send.side_effect = lambda text, **kw: events.append(("send", text, channel.typing_spy.active)) or sent
+
+    await jev.receive_message(message, [turn(message)])
+
+    assert events == [
+        ("write", True, None),  # typing on, no per-word callback
+        ("wait", CHANNEL, mock_bot.user.id),  # hold while a human is mid-message
+        ("send", "it's paris obviously", False),  # then one post, typing off
+    ]
+    assert channel.typing_spy.times == 1
+
+
+async def test_api_error_posts_what_it_had_cut_off_and_reacts(jev):
+    webhook, _ = make_webhook()
+    channel = make_channel(webhook)
+    message = make_message(channel)
+    jev._writer = FakeWriter(["well", "the", "capital"], fail_after=2)
+
+    assert await jev.receive_message(message, [turn(message)]) is None
+    webhook.send.assert_awaited_once_with("well the" + CUT_OFF_MARK, username="Jev", wait=True)
+    message.add_reaction.assert_awaited_once_with(jev_bot_mod.ERROR_REACTION)
 
 
 async def test_reuses_its_existing_webhook(jev, mock_bot):
@@ -184,14 +248,14 @@ async def test_reuses_its_existing_webhook(jev, mock_bot):
     channel.create_webhook.assert_not_awaited()
 
 
-async def test_interrupted_reply_is_marked_logged_and_remembered(jev):
+async def test_interrupted_reply_is_never_posted_but_is_logged(jev, temp_db):
     webhook, _ = make_webhook()
     channel = make_channel(webhook)
     message = make_message(channel, "Jev tell me a joke")
     jev._writer = FakeWriter(["knock", "knock", "who"], hang_after=2)
 
     task = asyncio.create_task(jev.receive_message(message, [turn(message)]))
-    while webhook.send.await_count == 0 or not jev._writer.chats:
+    while not jev._writer.chats:
         await asyncio.sleep(0)
     for _ in range(20):
         await asyncio.sleep(0)
@@ -200,10 +264,12 @@ async def test_interrupted_reply_is_marked_logged_and_remembered(jev):
         await task
     await asyncio.gather(*list(jev._cleanups))
 
-    final_text = "knock knock" + INTERRUPTED_MARK
-    assert webhook.edit_message.await_args_list[-1].kwargs["content"] == final_text
-    jev.coordinator._add_response_to_history.assert_awaited_once_with(CHANNEL, 999, final_text, 555, "Jev")
-    assert jev.ledger.spent_today() == pytest.approx(0.004)
+    webhook.send.assert_not_awaited()  # someone spoke first: Jev starts over on their message
+    jev.coordinator._add_response_to_history.assert_not_awaited()
+    assert jev.ledger.spent_today() == pytest.approx(0.004)  # the two words it picked were paid for
+    with contextlib.closing(sqlite3.connect(temp_db)) as conn:
+        rows = conn.execute("SELECT reply, stop_reason, message_id FROM jev_replies").fetchall()
+    assert rows == [("knock knock", "interrupted", None)]
 
 
 async def test_over_budget_reacts_instead_of_replying(jev):
