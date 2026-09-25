@@ -85,6 +85,37 @@ async def test_suggest_asks_for_top_logprobs_and_maps_them():
     assert usage.calls == 1
 
 
+async def test_a_deeper_list_goes_only_to_providers_that_serve_one():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json=_logprobs_response([("both", 1.0)]))
+
+    s = NextWordSuggester(api_key="k", transport=httpx.MockTransport(handler))
+    await s.suggest([ChatLine("A", "hi")], "Jev", [], whole_words=DICT, complete_from=[], top=200)
+    await s.suggest([ChatLine("A", "hi")], "Jev", [], whole_words=DICT, complete_from=[])
+    deep, usual = seen
+    assert deep["top_logprobs"] == 200 and deep["provider"]["only"] == ["novita"]
+    assert usual["top_logprobs"] == 20 and "only" not in usual["provider"]  # the constructor's default
+
+
+async def test_a_failed_deeper_list_is_asked_again_at_the_usual_depth():
+    seen = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        seen.append(body["top_logprobs"])
+        if body["top_logprobs"] > 20:  # a provider that caps at 20 answers 200 with an error body
+            return httpx.Response(200, json={"error": {"message": "Requested sample logprobs of 200"}})
+        return httpx.Response(200, json=_logprobs_response([("both", 1.0)]))
+
+    s = NextWordSuggester(api_key="k", transport=httpx.MockTransport(handler))
+    got = await s.suggest([ChatLine("A", "hi")], "Jev", [], whole_words=DICT, complete_from=[], top=200)
+    assert seen == [200, 20]
+    assert got.options == [("both", pytest.approx(1.0))]
+
+
 async def test_suggest_without_logprobs_is_an_error():
     s = NextWordSuggester(
         api_key="k", transport=httpx.MockTransport(lambda r: httpx.Response(200, json={"choices": [{}]}))

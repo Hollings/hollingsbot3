@@ -63,6 +63,9 @@ class ScriptedJev:
                 answers[key] = {"type": "choice", "probabilities": {"send": send, "keep typing": 1 - send}}
             elif key == "sense":
                 answers[key] = {"type": "noul", "noul": self.sense}
+            elif key == "other":  # "pick from this page, or type a word that isn't in it?"
+                other = 0.05 if wanted in q["instructions"]["options"].split(", ") else 0.95
+                answers[key] = {"type": "choice", "probabilities": {"pick": 1 - other, "other": other}}
             elif q["type"] == "choice":
                 opts = list(q["criteria"])
                 if wanted in opts:
@@ -276,9 +279,11 @@ class FakeSuggester:
     def __init__(self, plan):
         self.plan = plan
         self.calls: list[list[str]] = []
+        self.tops: list[int | None] = []
 
-    async def suggest(self, chat, name, words, *, whole_words, complete_from, style="", usage=None):
+    async def suggest(self, chat, name, words, *, whole_words, complete_from, style="", usage=None, top=None):
         self.calls.append(list(words))
+        self.tops.append(top)
         if usage is not None:
             usage.record({"cost": 0.00001}, 0.01)
         return self.plan[min(len(self.calls) - 1, len(self.plan) - 1)]
@@ -294,11 +299,84 @@ def suggesting_writer(fake, suggester, **cfg) -> JevWriter:
 async def test_suggestions_are_jevs_menu():
     suggester = FakeSuggester([Suggestion([("i", 0.5), ("like", 0.3), ("zebra", 0.2)])])
     fake = ScriptedJev(["i", "like"])
-    reply = await suggesting_writer(fake, suggester).write(CHAT)
+    reply = await suggesting_writer(fake, suggester, shuffle=False).write(CHAT)
     assert reply.text == "i like"
     assert list(fake.requests[0][1]["next"]["criteria"]) == ["i", "like", "zebra"]
     assert reply.steps[0].suggested == 0.5
+    assert (reply.steps[0].page, reply.steps[0].source) == (0, "llm")
     assert suggester.calls[:2] == [[], ["i"]]
+    assert suggester.tops[0] is None  # one page: the suggester's usual 20 tokens
+    assert "other" not in fake.requests[0][1]  # nothing to turn to, so nothing to ask
+
+
+async def test_suggestions_are_shuffled_so_their_rank_cannot_leak():
+    ranked = [(w, 1 / (i + 2)) for i, w in enumerate(VOCAB)]
+    fake = ScriptedJev(["i"])
+    await suggesting_writer(fake, FakeSuggester([Suggestion(ranked)])).write(CHAT)
+    shown = list(fake.requests[0][1]["next"]["criteria"])
+    assert sorted(shown) == sorted(VOCAB) and shown != VOCAB
+
+
+def paging_writer(fake, suggester, **cfg) -> JevWriter:
+    return suggesting_writer(fake, suggester, shuffle=False, page_size=2, **cfg)
+
+
+RANKED = Suggestion([("the", 0.4), ("a", 0.3), ("i", 0.2), ("is", 0.1)])
+
+
+async def test_jev_turns_the_page_when_its_word_is_not_on_it():
+    suggester = FakeSuggester([RANKED])
+    fake = ScriptedJev(["i"])
+    reply = await paging_writer(fake, suggester, llm_pages=2).write(CHAT)
+    assert reply.text == "i"
+    first, second = (q for _, q in fake.requests[:2])
+    assert list(first["next"]["criteria"]) == ["the", "a"] and "other" in first
+    assert list(second["next"]["criteria"]) == ["i", "is"] and "other" not in second  # the last page
+    assert (reply.steps[0].page, reply.steps[0].source, reply.steps[0].other) == (1, "llm", 0.0)
+    assert suggester.tops[0] == 200  # a deeper list, to fill the pages
+
+
+async def test_jev_stays_on_the_page_that_has_its_word():
+    fake = ScriptedJev(["a"])
+    reply = await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(CHAT)
+    assert len(fake.requests) == 2  # one per word (the word, then the send), no page turns
+    assert (reply.steps[0].page, reply.steps[0].other) == (0, pytest.approx(0.05))
+
+
+async def test_own_page_comes_last_without_the_words_jev_passed():
+    fake = ScriptedJev(["pizza"])
+    reply = await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, own_page=True).write(CHAT)
+    assert reply.text == "pizza"
+    menus = [list(q["next"]["criteria"]) for _, q in fake.requests[:3]]
+    assert menus[:2] == [["the", "a"], ["i", "is"]]
+    assert "pizza" in menus[2] and not {"the", "a", "i", "is"} & set(menus[2])
+    assert "other" not in fake.requests[2][1]
+    assert (reply.steps[0].page, reply.steps[0].source) == (2, "own")
+
+
+async def test_only_the_first_page_carries_the_stop_check():
+    fake = ScriptedJev(["the", "is"])
+    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(CHAT)
+    second_word = [q for _, q in fake.requests if q["next"]["instructions"]["jev_reply"] == "the ___"]
+    assert ["send" in q for q in second_word] == [True, False]
+
+
+def test_page_turn_is_sampled_with_jevs_probability():
+    class FixedRng(random.Random):
+        def __init__(self, value):
+            super().__init__(0)
+            self.value = value
+
+        def random(self):
+            return self.value
+
+    def turns(other, draw, temperature=0.7, power=1.0):
+        cfg = WriterConfig(temperature=temperature, page_power=power)
+        return JevWriter(ScriptedJev([]), config=cfg, vocab=VOCAB, rng=FixedRng(draw))._turns_page(other)
+
+    assert turns(0.3, draw=0.2) and not turns(0.3, draw=0.4)
+    assert not turns(0.3, draw=0.2, power=2.0)  # 0.3**2 = 0.09
+    assert turns(0.5, draw=0.99, temperature=0) and not turns(0.49, draw=0.0, temperature=0)
 
 
 async def test_known_only_keeps_jev_to_words_it_knows():

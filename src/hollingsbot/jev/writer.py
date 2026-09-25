@@ -24,6 +24,12 @@ chat alone; the reply with its blank rides in the Choice's own instructions.
    A finalist's score is its runoff probability x fluency^2 x a repetition
    penalty; one is sampled (temperature + nucleus).
 
+**With a suggester (opt-in, suggest.py): an LLM proposes, Jev chooses.** Each word is
+one LLM call plus one Jev request over the LLM's proposals, shuffled so their ranking
+can't leak through position. Optionally Jev can turn pages: beside each page it is
+asked whether it would rather type a word that isn't listed, and saying so (sampled
+with that probability) shows it the LLM's next proposals, then its own menu.
+
 The reply ends when Jev says send (always above ``send_at``; between
 ``send_floor`` and that, with probability P(send)^2, the way an LLM samples its
 end token), when it stops making sense, when even the picked word reads as
@@ -61,6 +67,13 @@ NEXT_WORD_Q = "Is `next` a natural next word right after `text`, in fluent Engli
 FIRST_WORD_Q = "Does `text` read as fluent, grammatical English so far? It may be unfinished."
 SENSE_Q = "Does `text` make sense as the start of a reply to the latest message in `chat`?"
 SEND_OPTIONS = {"send": "send the message as it is", "keep typing": "add more to it first"}
+# Asked beside a page of suggestions when another page follows. Probed on 27 real states: P(other)
+# averaged 0.18 for the LLM's own menu and 0.33 for another chat's, higher for the wrong menu in
+# 25/27. A "none of these" option inside the word Choice itself stayed near 0.02 either way.
+OTHER_OPTIONS = {"pick": "pick one of `options`", "other": "type a word that isn't in `options`"}
+# Top tokens asked of the LLM when Jev can page past the first 20: 100-130 whole words, 60-100
+# of them known in strict mode (only some providers serve more than 20; ~0.5 s).
+DEEP_TOP = 200
 
 
 @dataclass(frozen=True)
@@ -103,6 +116,15 @@ class WriterConfig:
     # With a suggester (an LLM proposing the next word, see suggest.py):
     known_only: bool = False  # Jev may only pick suggestions it knows (born, chat or learned words)
     suggest_weight: float = 0.0  # score x P_llm(word)**weight; 0 = Jev alone decides among suggestions
+    # Pages (suggester only). Each page is shown in random order, so the LLM's ranking can't
+    # leak through position. With a page after it, Jev is also asked whether to pick from this
+    # page or "type a word that isn't in `options`"; the latter turns the page: the LLM's next
+    # page_size words, then (own_page) Jev's own menu minus every word it already passed.
+    shuffle: bool = True
+    page_size: int = 20
+    llm_pages: int = 1  # >1 asks the LLM for its top 200 tokens: ~3 pages of known words, slower provider
+    own_page: bool = False
+    page_power: float = 1.0  # turn with probability P(other)**page_power (T=0: when P(other) >= 0.5)
 
 
 @dataclass
@@ -114,6 +136,9 @@ class Step:
     sense: float  # Noul: reply so far (before this word) makes sense
     options: int  # runoff size
     suggested: float = 0.0  # the suggester's probability for this word (0 without one)
+    page: int = 0  # the page the word was picked from (0 = first; see WriterConfig.llm_pages)
+    other: float = 0.0  # Jev's P("a word that isn't on this page") there, 0 if not asked (last page)
+    source: str = ""  # "llm" (a suggestion page), "own" (Jev's own menu), "" (no suggester)
 
 
 @dataclass
@@ -176,6 +201,7 @@ class JevWriter:
             f"{style}{name} has typed `text` so far as a reply to the latest message in `chat`. "
             f"What does {name} do now?"
         )
+        self._other_instructions = f"{name} is choosing the word for the blank. What does {name} do?"
 
     # ------------------------------------------------------------------ public
 
@@ -212,12 +238,13 @@ class JevWriter:
         while len(words) < cfg.max_words:
             send, sense = 0.0, 1.0
             suggested: dict[str, float] = {}
+            page, other, source = 0, 0.0, ""
             if self.one_request:
                 if self.suggester is not None:
                     try:
                         suggestion = await self.suggester.suggest(
                             chat, self.name, words, whole_words=self.vocab, complete_from=heard,
-                            style=self._style_line, usage=usage,
+                            style=self._style_line, usage=usage, top=DEEP_TOP if cfg.llm_pages > 1 else None,
                         )  # fmt: skip
                     except JevError:
                         # The LLM is a helper: without it, this word comes from Jev's own menu.
@@ -233,24 +260,33 @@ class JevWriter:
                         if on_word is not None:
                             await on_word(reply.text)
                         continue
-                    ranked = suggestion.options
-                    suggested = dict(ranked)
-                    menu = [w for w, _ in ranked if not cfg.known_only or w in known or w in PUNCTUATION]
-                    menu = allowed(menu, words) or allowed(pool + (list(PUNCTUATION) if words else []), words)
+                    suggested = dict(suggestion.options)
+                    pages = self._pages(suggestion.options, known, pool, words)
                 else:
-                    menu = pool + (list(PUNCTUATION) if words else [])
-                # One request: the word itself, each option's fit, and the stop check.
-                options = allowed(menu, words)
-                if not options:
+                    pages = [("", allowed(pool + (list(PUNCTUATION) if words else []), words))]
+                pages = [(src, opts) for src, opts in pages if opts]
+                if not pages:
                     stop_reason = "no_options"
                     break
-                answers = await self.client.ask(chat_state, self._single_questions(words, options), usage)
+                # One request: the word itself, each option's fit, the stop check, and (when
+                # another page follows) whether Jev would rather type a word that isn't here.
+                source, options = pages[0]
+                more = len(pages) > 1
+                answers = await self.client.ask(chat_state, self._single_questions(words, options, other=more), usage)
                 if words:
                     send, sense = _probabilities(answers["send"]).get("send", 0.0), _noul(answers, "sense")
                     if reason := self._stop_reason(send, sense, len(words)):
                         stop_reason = reason
                         reply.final_check = (send, sense)
                         break
+                other = _other(answers) if more else 0.0
+                while more and self._turns_page(other):
+                    page += 1
+                    source, options = pages[page]
+                    more = page + 1 < len(pages)
+                    questions = self._single_questions(words, options, stop=False, other=more)
+                    answers = await self.client.ask(chat_state, questions, usage)
+                    other = _other(answers) if more else 0.0
                 runoff = answers
             else:
                 state = {**chat_state, self._reply_key: f"{join_words(words)} {BLANK}".strip()}
@@ -299,7 +335,18 @@ class JevWriter:
             }
             word = pick(scores, self.rng, cfg.temperature, cfg.top_p)
             steps.append(
-                Step(word, probs.get(word, 0.0), fluency[word], send, sense, len(options), suggested.get(word, 0.0))
+                Step(
+                    word,
+                    probs.get(word, 0.0),
+                    fluency[word],
+                    send,
+                    sense,
+                    len(options),
+                    suggested.get(word, 0.0),
+                    page=page,
+                    other=other,
+                    source=source,
+                )
             )
             if words and fluency[word] < cfg.give_up:
                 stop_reason = "gave_up"
@@ -323,6 +370,12 @@ class JevWriter:
         if n_words >= cfg.sense_from and sense < self.sense_floor:
             return "lost_thread"
         return None
+
+    def _turns_page(self, other: float) -> bool:
+        """Sampled like the send decision: P(other) is Jev's own odds that its word isn't here."""
+        if self.config.temperature <= 0:
+            return other >= 0.5
+        return self.rng.random() < other**self.config.page_power
 
     # ---------------------------------------------------------------- requests
 
@@ -365,15 +418,48 @@ class JevWriter:
         fill = [w for w in dict.fromkeys(learned) if w not in taken][: room - len(ctx)]
         return ctx + fill + base
 
-    def _single_questions(self, words: Sequence[str], options: Sequence[str]) -> dict[str, dict[str, Any]]:
+    def _pages(
+        self, ranked: Sequence[tuple[str, float]], known: set[str], pool: Sequence[str], words: Sequence[str]
+    ) -> list[tuple[str, list[str]]]:
+        """The menus Jev may turn through for one word, in order, as (source, options).
+
+        The LLM's proposals in pages of ``page_size`` (``llm_pages`` of them), then with
+        ``own_page`` Jev's own menu minus every word already shown. With no usable
+        proposal at all, the own menu is the only page.
+        """
+        cfg = self.config
+        proposals = allowed([w for w, _ in ranked if not cfg.known_only or w in known or w in PUNCTUATION], words)
+        size = max(1, cfg.page_size)
+        shown = proposals[: size * max(1, cfg.llm_pages)]
+        pages = [("llm", shown[i : i + size]) for i in range(0, len(shown), size)]
+        if cfg.own_page or not pages:
+            passed = set(shown)
+            own = [w for w in allowed(list(pool) + (list(PUNCTUATION) if words else []), words) if w not in passed]
+            pages.append(("own", own))
+        if cfg.shuffle:
+            for _, options in pages:
+                self.rng.shuffle(options)
+        return pages
+
+    def _single_questions(
+        self, words: Sequence[str], options: Sequence[str], *, stop: bool = True, other: bool = False
+    ) -> dict[str, dict[str, Any]]:
         # The state is the chat alone (the stop check must not see a blank), so the reply
         # with its blank travels in the word question's own instructions.
         questions = self._runoff_questions(words, options)
-        questions["next"]["instructions"] = {
-            self._reply_key: f"{join_words(words)} {BLANK}".strip(),
-            "question": self._blank_instructions,
-        }
-        if words:
+        blank = f"{join_words(words)} {BLANK}".strip()
+        questions["next"]["instructions"] = {self._reply_key: blank, "question": self._blank_instructions}
+        if other:
+            questions["other"] = {
+                "type": "choice",
+                "instructions": {
+                    self._reply_key: blank,
+                    "options": ", ".join(options),
+                    "question": self._other_instructions,
+                },
+                "criteria": OTHER_OPTIONS,
+            }
+        if words and stop:
             questions.update(self._stop_questions(words))
         return questions
 
@@ -419,6 +505,10 @@ def _probabilities(answer: dict[str, Any]) -> dict[str, float]:
     if not isinstance(probs, dict):
         raise JevError(f"choice answer without probabilities: {str(answer)[:200]}")
     return {str(k): float(v or 0.0) for k, v in probs.items()}
+
+
+def _other(answers: dict[str, Any]) -> float:
+    return _probabilities(answers["other"]).get("other", 0.0)
 
 
 def _noul(answers: dict[str, Any], key: str) -> float:

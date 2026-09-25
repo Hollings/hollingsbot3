@@ -36,6 +36,26 @@ request: which word, a naturalness Noul per option, the send/sense check.
   (Assistant prefill would give exact word boundaries, but this provider's
   logprobs don't match the prefilled position.)
 - If the LLM call fails, that word comes from Jev's own menu instead.
+- **Shuffled (`shuffle`, on):** the menu reaches Jev in random order, so the
+  LLM's ranking can't leak through position. Probed on 27 real mid-reply
+  states: reordering moves Jev's distribution (mean TV distance 0.15-0.20 vs
+  0.05 for the identical question asked twice) but not toward the LLM's
+  favourite: its #1 word got 0.13 of Jev's probability listed first, 0.17
+  listed last, 0.15 shuffled. Jev's own #1 is often not the LLM's ("hey",
+  "well", "the" where the LLM led with "i", "paris").
+- **Pages (`llm_pages`, `own_page`; off):** beside each page Jev is asked
+  "pick one of `options`" vs "type a word that isn't in `options`", and
+  turns the page with that probability: the LLM's next 20 (one call asks for
+  its top 200 tokens), then its own menu minus everything it passed. A "none
+  of these" option inside the word Choice never worked (P ~0.02 for any
+  menu); the separate question averages 0.18 for the right chat's menu and
+  0.33 for another chat's (higher for the wrong one in 25/27). Measured (9
+  prompts x 2 seeds, `--llm-pages 3 [--own-page 1]`): 80-83% of words from
+  page 1, 8-15% page 2, 3-6% page 3, 4-5% Jev's own page; ~$0.003/reply. With
+  one LLM page and the own page, ~22% of words are Jev's own. Only Novita
+  serves more than 20 logprobs for llama-3.1-8b (CoreWeave errors), so deep
+  asks are pinned there and fall back to 20 if it fails or rate-limits.
+  `jev_try.py --trace` shows each word's page and P(other).
 
 ~20-25 words and ~$0.002 per reply, ~0.3 s per word. Examples (strict, born
 1000): *"yeah well like i think probably ramen like because it is more simple

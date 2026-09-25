@@ -38,6 +38,10 @@ _LOG = logging.getLogger(__name__)
 
 CHAT_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_SUGGEST_MODEL = "meta-llama/llama-3.1-8b-instruct"
+# top_logprobs every logprobs provider serves. Deeper lists: only these (2026-09-25, llama-3.1-8b:
+# Novita returns 200 in ~0.75 s; CoreWeave caps at 20 and answers deeper asks with an error body).
+SHALLOW_TOP = 20
+DEEP_PROVIDERS = ("novita",)
 _PUNCT_TOKENS = {".": ".", ",": ",", "?": "?", "!": "!", "...": "...", "…": "..."}
 _PIECE = re.compile(r"'?[a-z]+(?:'[a-z]+)?")
 # Halves of contractions that wordfreq lists as words ("you ll", "i ve", "don t"): never
@@ -128,7 +132,7 @@ class NextWordSuggester:
         api_key: str | None = None,
         *,
         model: str = DEFAULT_SUGGEST_MODEL,
-        top: int = 20,
+        top: int = SHALLOW_TOP,
         timeout: float = 20.0,
         retries: int = 2,
         transport: httpx.AsyncBaseTransport | None = None,
@@ -143,28 +147,53 @@ class NextWordSuggester:
             timeout=timeout, headers={"Authorization": f"Bearer {key}"}, transport=transport
         )
 
-    def _request(self, chat: Sequence[ChatLine], name: str, words: Sequence[str], style: str) -> dict[str, Any]:
+    def _request(
+        self, chat: Sequence[ChatLine], name: str, words: Sequence[str], style: str, top: int
+    ) -> dict[str, Any]:
         log = "\n".join(f"{line.speaker}: {line.text}" for line in chat)
         system = f"Continue this Discord chat log. {style} Output only the next words of {name}'s last message."
+        # Only providers that actually return logprobs, fastest first. require_parameters does
+        # not check how many: a deep list must go where it is served, or it errors.
+        provider: dict[str, Any] = {"require_parameters": True, "sort": "latency"}
+        if top > SHALLOW_TOP:
+            provider["only"] = list(DEEP_PROVIDERS)
         return {
             "model": self.model,
             "max_tokens": 1,
             "temperature": 0,
             "logprobs": True,
-            "top_logprobs": self.top,
+            "top_logprobs": top,
             "messages": [
                 {"role": "system", "content": " ".join(system.split())},
                 {"role": "user", "content": f"{log}\n{name}: {join_words(words)}".rstrip()},
             ],
-            # Only providers that actually return logprobs; fastest first.
-            "provider": {"require_parameters": True, "sort": "latency"},
+            "provider": provider,
         }
 
     async def top_tokens(
-        self, chat: Sequence[ChatLine], name: str, words: Sequence[str], style: str = "", usage: Usage | None = None
+        self,
+        chat: Sequence[ChatLine],
+        name: str,
+        words: Sequence[str],
+        style: str = "",
+        usage: Usage | None = None,
+        top: int | None = None,
     ) -> list[tuple[str, float]]:
-        """The model's top next tokens after ``name: words`` as (token, probability)."""
-        payload = self._request(chat, name, words, style)
+        """The model's top next tokens after ``name: words`` as (token, probability).
+
+        A deep list (``top`` over 20) that fails is asked again at the usual depth:
+        fewer pages beat no suggestions.
+        """
+        want = top or self.top
+        try:
+            return await self._top_tokens(self._request(chat, name, words, style, want), usage)
+        except JevError:
+            if want <= SHALLOW_TOP:
+                raise
+            _LOG.warning("Deep suggestion list (%d) failed; asking for %d", want, SHALLOW_TOP, exc_info=True)
+            return await self._top_tokens(self._request(chat, name, words, style, SHALLOW_TOP), usage)
+
+    async def _top_tokens(self, payload: dict[str, Any], usage: Usage | None) -> list[tuple[str, float]]:
         for attempt in range(self.retries + 1):
             started = time.monotonic()
             try:
@@ -199,8 +228,10 @@ class NextWordSuggester:
         complete_from: Iterable[str],
         style: str = "",
         usage: Usage | None = None,
+        top: int | None = None,
     ) -> Suggestion:
-        tokens = await self.top_tokens(chat, name, words, style, usage)
+        """``top`` overrides the number of tokens asked for (default: the constructor's)."""
+        tokens = await self.top_tokens(chat, name, words, style, usage, top)
         vocab = list(whole_words)
         heard = list(complete_from)
         completes = continuation(words[-1], tokens, whole_words=vocab, heard=heard) if words else None

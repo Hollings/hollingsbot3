@@ -6,6 +6,7 @@ Needs OPENROUTER_API_KEY (read from .env). Each reply costs about $0.002 per wor
     python scripts/jev_try.py --as Mallory "how do rainbows work, Jev?" --top-p 0.8
     python scripts/jev_try.py --chat "Hollings: got a puppy" --chat "Mallory: cute" "Jev name her?"
     python scripts/jev_try.py --samples      # the prompt set src/hollingsbot/jev/README.md was tuned on
+    python scripts/jev_try.py --samples --suggest --llm-pages 3 --own-page 1   # pages; words tagged [p2], [own]
 """
 
 from __future__ import annotations
@@ -15,7 +16,9 @@ import asyncio
 import dataclasses
 import random
 import sys
+from collections import Counter
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from dotenv import load_dotenv
 
@@ -23,6 +26,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hollingsbot.jev import ChatLine, DecisionsClient, JevWriter, WriterConfig
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
+
+if TYPE_CHECKING:
+    from hollingsbot.jev.writer import Step
 
 SAMPLES = {
     # the first things people actually said to Jev in #wendy-dev
@@ -54,8 +60,10 @@ async def run(
     client = DecisionsClient()
     suggester = NextWordSuggester(model=suggest) if suggest else None
     writer = JevWriter(client, config=config, rng=random.Random(seed), suggester=suggester)
+    paging = suggester is not None and (config.llm_pages > 1 or config.own_page)
     total = 0.0
     words = 0
+    by_page: Counter[str] = Counter()
     try:
         for label, chat in chats.items():
             print(f"\n[{label}] {chat[-1].speaker}: {chat[-1].text}")
@@ -71,11 +79,15 @@ async def run(
             print(
                 f"  ({len(reply.words)} words, stop={reply.stop_reason}, {u.calls} calls, {u.seconds:.1f}s, ${u.cost:.4f})"
             )
+            if paging:
+                # every word Jev turned the page for, tagged with where it found it
+                print("  pages: " + " ".join(s.word if s.page == 0 else f"{s.word}[{_page(s)}]" for s in reply.steps))
+                by_page.update(_page(s) for s in reply.steps)
             if trace:
                 for s in reply.steps:
                     print(
                         f"     {s.word!r:14} choice={s.choice:.2f} fluency={s.fluency:.2f} llm={s.suggested:.2f} "
-                        f"send={s.send:.2f} sense={s.sense:.2f} of {s.options}"
+                        f"send={s.send:.2f} sense={s.sense:.2f} of {s.options} page={_page(s)} other={s.other:.2f}"
                     )
                 if reply.final_check:
                     print(f"     (stop check: send={reply.final_check[0]:.2f} sense={reply.final_check[1]:.2f})")
@@ -86,6 +98,14 @@ async def run(
     if len(chats) > 1:
         n = len(chats)
         print(f"\ntotal ${total:.4f} | mean {words / n:.1f} words, ${total / n:.4f} per reply")
+    if by_page:
+        counted = sum(by_page.values())
+        print("words by page: " + "  ".join(f"{k} {v / counted:.0%}" for k, v in sorted(by_page.items())))
+
+
+def _page(step: Step) -> str:
+    """p1, p2... for the LLM's pages, own for Jev's own menu."""
+    return "own" if step.source == "own" else f"p{step.page + 1}"
 
 
 def _truthy(value: str) -> bool:
