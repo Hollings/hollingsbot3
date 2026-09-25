@@ -87,6 +87,7 @@ Codebase mounted at `/app`, state in `./data/` bind mount.
 **Cog System** (`src/hollingsbot/cogs/`): discord.py Cog pattern for modular features. Key cogs:
 - `chat_coordinator.py` - Routes messages to appropriate chat bots
 - `chat_bots/` - LLM chat bots (Gemini, Grok, Llama, temp bots) with shared conversation history
+- `chat_bots/jev_bot.py` - Jev (TypeSafe's decision model) chatting word by word via `hollingsbot/jev/`; streams its reply by editing a webhook message, so its webhook is claimed with the coordinator (`claim_webhook`). Read `src/hollingsbot/jev/README.md` before tuning it
 - `image_gen_cog.py` - Image generation/editing via Celery
 - `starboard.py` - Message reposting on reactions
 - `temp_bot_commands.py` - Temporary webhook-based bots

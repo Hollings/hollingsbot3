@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import logging
 import os
+import random
 import time
 from collections import deque
 from collections.abc import Callable
@@ -69,6 +70,9 @@ class ChatCoordinator(commands.Cog):
         # Registered bots
         self.bots: list[object] = []
 
+        # Webhooks whose messages the posting bot records itself (see claim_webhook)
+        self._bot_owned_webhooks: set[int] = set()
+
         # Track active message processing per channel
         self._active_message_tasks: dict[int, asyncio.Task] = {}
 
@@ -99,6 +103,18 @@ class ChatCoordinator(commands.Cog):
         self.bots.append(bot_instance)
         bot_name = bot_instance.__class__.__name__
         _LOG.info(f"Registered bot: {bot_name}")
+
+    def claim_webhook(self, webhook_id: int) -> None:
+        """Hand a webhook's messages to the bot that posts through it.
+
+        A bot that streams a reply (send once, then edit as it is written)
+        fires on_message with only the first word in it. For a claimed webhook
+        on_message ignores that event entirely - no history turn, no other bot
+        answering a half-written message - and the owning bot returns the
+        finished text from receive_message as usual (or calls
+        _add_response_to_history itself if it was interrupted).
+        """
+        self._bot_owned_webhooks.add(webhook_id)
 
     # ==================== Generation Cancellation ====================
 
@@ -264,6 +280,10 @@ class ChatCoordinator(commands.Cog):
         if not message.content.strip() and not message.attachments:
             return
 
+        # A streaming bot's own message: it records the finished text itself
+        if message.webhook_id is not None and message.webhook_id in self._bot_owned_webhooks:
+            return
+
         # Ignore bot commands and image generation prompts
         if chat_utils.should_ignore_message(message.content):
             return
@@ -326,11 +346,7 @@ class ChatCoordinator(commands.Cog):
         self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]
     ) -> None:
         """Try to get a response from bots (can be cancelled)."""
-        # Try bots in random order - stop after first response
-        import random
-
-        bots = list(self.bots)
-        random.shuffle(bots)
+        bots = self._bots_in_turn_order(channel_id)
 
         for bot_instance in bots:
             try:
@@ -355,6 +371,18 @@ class ChatCoordinator(commands.Cog):
                 raise
             except Exception:
                 _LOG.exception(f"Error calling {bot_instance.__class__.__name__}")
+
+    def _bots_in_turn_order(self, channel_id: int) -> list[object]:
+        """Random order, except a bot that claims this channel goes first.
+
+        Every bot answers an @mention anywhere, so without this a mention in a
+        channel dedicated to one bot would go to whichever bot shuffled first.
+        Only bots that implement ``claims_channel`` take part, so channels
+        nobody claims keep the plain random order.
+        """
+        bots = list(self.bots)
+        random.shuffle(bots)
+        return sorted(bots, key=lambda b: not (hasattr(b, "claims_channel") and b.claims_channel(channel_id)))
 
     async def _prepare_full_turn(self, message: discord.Message) -> ConversationTurn | None:
         """Prepare a full conversation turn with all content."""
@@ -529,6 +557,7 @@ async def setup(bot: commands.Bot) -> None:
     # Import and register bots
     from hollingsbot.cogs.chat_bots.gemini_bot import GeminiBot
     from hollingsbot.cogs.chat_bots.grok_bot import GrokBot
+    from hollingsbot.cogs.chat_bots.jev_bot import JevBot
     from hollingsbot.cogs.chat_bots.llama_bot import LlamaBot
     from hollingsbot.cogs.chat_bots.temp_bot import TempBotManager
 
@@ -537,11 +566,13 @@ async def setup(bot: commands.Bot) -> None:
     grok = GrokBot(bot, coordinator, coordinator.typing_tracker)
     llama = LlamaBot(bot, coordinator, coordinator.typing_tracker)
     gemini = GeminiBot(bot, coordinator, coordinator.typing_tracker)
+    jev = JevBot(bot, coordinator, coordinator.typing_tracker)
 
     # Register with coordinator
     coordinator.register_bot(temp_bot_manager)
     coordinator.register_bot(grok)
     coordinator.register_bot(llama)
     coordinator.register_bot(gemini)
+    coordinator.register_bot(jev)
 
     _LOG.info("Chat system initialized with all bots")

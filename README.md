@@ -609,6 +609,15 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `TEXT_TIMEOUT` - LLM generation timeout in seconds (default: 180)
 - `SYSTEM_PROMPT_FILE` - Path to system prompt file (default: config/system_prompt.txt)
 
+**Jev** (TypeSafe's decision model writing one word at a time; see [src/hollingsbot/jev/README.md](src/hollingsbot/jev/README.md)):
+- `JEV_BOT_CHANNELS` - CSV of channel IDs where Jev answers every human message (empty = off)
+- `JEV_BOT_NAME` - Webhook display name, and the name Jev is told it has (default: Jev)
+- `JEV_CONTEXT_MESSAGES` - Chat messages Jev sees, the latest included (default: 5)
+- `JEV_DAILY_BUDGET_USD` - Stop replying for the rest of the UTC day past this spend (default: 2.00)
+- `JEV_MAX_WORDS` - Longest reply (default: 25)
+- `JEV_TEMPERATURE`, `JEV_TOP_P` - Sampling (defaults: 0.7, 0.6)
+- Uses `OPENROUTER_API_KEY`
+
 **Image Generation**:
 - `STABLE_DIFFUSION_CHANNEL_IDS` - CSV of guild channels where image gen is enabled
 - `EDIT_CHANNEL_IDS` - CSV of channels where edit/outpaint is allowed (in addition to main channels)

@@ -11,6 +11,7 @@ pillow
 watchfiles
 anthropic
 openai
+httpx
 cairosvg
 beautifulsoup4
 emoji
