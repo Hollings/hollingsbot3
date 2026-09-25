@@ -80,9 +80,11 @@ async def run(
                 f"  ({len(reply.words)} words, stop={reply.stop_reason}, {u.calls} calls, {u.seconds:.1f}s, ${u.cost:.4f})"
             )
             if paging:
-                # every word Jev turned the page for, tagged with where it found it
-                print("  pages: " + " ".join(s.word if s.page == 0 else f"{s.word}[{_page(s)}]" for s in reply.steps))
-                by_page.update(_page(s) for s in reply.steps)
+                # every word Jev turned the page for, tagged with where it found it (a gave_up
+                # reply's last step is the word it rejected, not part of the reply)
+                kept = reply.steps[: len(reply.words)]
+                print("  pages: " + " ".join(s.word if s.page == 0 else f"{s.word}[{_page(s)}]" for s in kept))
+                by_page.update(_page(s) for s in kept)
             if trace:
                 for s in reply.steps:
                     print(
