@@ -6,13 +6,46 @@ questions (`choice` over up to 255 options, `noul` yes/no, `score`), and every
 answer is a probability distribution. JevBot makes it chat anyway, one word at
 a time, in the channels listed in `JEV_BOT_CHANNELS`.
 
-Code: `src/hollingsbot/jev/` (writer, decoding rules, client, ledger) and
-`src/hollingsbot/cogs/chat_bots/jev_bot.py` (Discord side). Try it from a
+Code: `src/hollingsbot/jev/` (writer, decoding rules, lexicon, client, ledger)
+and `src/hollingsbot/cogs/chat_bots/jev_bot.py` (Discord side). Try it from a
 terminal with `python scripts/jev_try.py "Jev, what's your favorite food?"`
 (add `--trace` to see every step's scores, `--samples` for the prompt set the
 numbers below come from).
 
-## How a reply is written
+## Default: a lobotomized parrot that learns (one request per word)
+
+Jev is born knowing only the 100 most common English words (almost all glue:
+the, is, you, like, good). Every word a human says in its channel is learned
+for good (`jev_replies`' sibling table `jev_lexicon`: uses, first/last heard,
+who taught it); `!jev` shows the count, the newest words and their teachers.
+
+Each reply draws on a menu of at most 250 words, so it fits one Choice and a
+word costs **one request** (~0.4 s): the 100 born words always, then the chat's
+own words (newest message first), then learned words ranked by uses x
+0.5^(days since last heard / 7). Words nobody says fade out of reach but are
+never deleted. The same request carries a naturalness Noul per option and the
+send/sense stop check; its state is the chat alone and the reply-with-blank
+rides in the Choice's own instructions. Calls per reply = words + 1; a reply
+costs ~$0.003-0.006.
+
+Measured (8 prompts, style line on; `JEV_VOCAB_SIZE`, `JEV_FLUENCY_CHECK`):
+
+| born vocabulary | naturalness check | mean words | $/reply | calls/word |
+|---|---|---|---|---|
+| 5000 (tournament, below) | on | ~20 | 0.035 | 3 |
+| 200 | on | 10-16 | 0.006-0.010 | 1 |
+| 200 | off | 9-13 | 0.001 | 1 |
+| **100 (default)** | **on** | **17** | **0.006** | **1** |
+| 100 | off | 13 | 0.0008 | 1 |
+
+In a scripted conversation it picked up "ramen", "pizza", "spicy", "garlic"
+from the chat and answered "do you like ramen or pizza more" with *"well i
+like ramen but more pizza than ramen"*. The sense cutoff is off in this mode
+(it killed such replies at word 4: a 100-word vocabulary reads as half-nonsense
+even when it is going somewhere); hiding Jev's own earlier replies from it made
+it parrot other people's sentences verbatim, so they stay in the context.
+
+## The big-vocabulary tournament (`JEV_VOCAB_SIZE` >= 250)
 
 Per word, two rounds of requests (~0.5 s each):
 

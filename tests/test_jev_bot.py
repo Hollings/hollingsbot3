@@ -12,8 +12,10 @@ from hollingsbot.cogs.chat_bots import jev_bot as jev_bot_mod
 from hollingsbot.cogs.chat_bots.jev_bot import INTERRUPTED_MARK, JevBot, JevBotSettings, chat_lines
 from hollingsbot.cogs.chat_coordinator import ChatCoordinator
 from hollingsbot.cogs.conversation import ConversationTurn
+from hollingsbot.cogs.jev_commands import describe
 from hollingsbot.jev.client import Usage
 from hollingsbot.jev.ledger import JevLedger
+from hollingsbot.jev.lexicon import Lexicon, LexiconSummary
 from hollingsbot.jev.writer import ChatLine, Reply
 
 CHANNEL = 1473033550805598253
@@ -26,9 +28,11 @@ class FakeWriter:
         self.words = words
         self.hang_after = hang_after
         self.chats: list[list[ChatLine]] = []
+        self.learned: list[list[str]] = []
 
-    async def write(self, chat, on_word=None, draft=None):
+    async def write(self, chat, on_word=None, draft=None, learned=()):
         self.chats.append(chat)
+        self.learned.append(list(learned))
         reply = draft if draft is not None else Reply()
         for i, w in enumerate(self.words):
             if self.hang_after is not None and i == self.hang_after:
@@ -67,8 +71,13 @@ def make_message(channel, content="Jev what is the capital of France?", *, bot=F
     message.content = content
     message.attachments = []
     message.webhook_id = webhook_id
+    message.mentions = []
+    message.guild = None
     message.author = MagicMock()
     message.author.bot = bot
+    message.author.nick = None
+    message.author.global_name = "Hollings"
+    message.author.name = "hollings"
     message.add_reaction = AsyncMock()
     return message
 
@@ -85,7 +94,41 @@ def jev(temp_db, mock_bot):
     coordinator._add_response_to_history = AsyncMock()
     bot = JevBot(mock_bot, coordinator, MagicMock(), JevBotSettings(channels=frozenset({CHANNEL}), daily_budget=1.0))
     bot.ledger = JevLedger(temp_db)
+    bot.lexicon = Lexicon(temp_db)
     return bot
+
+
+async def test_learns_every_word_a_human_says_and_writes_with_them(jev):
+    webhook, _ = make_webhook()
+    message = make_message(make_channel(webhook), "I love quokkas <:blob:123> https://x.com/y")
+    jev._writer = FakeWriter(["quokkas"])
+    await jev.receive_message(message, [turn(message)])
+    summary = jev.lexicon.summary()
+    assert {w for w, _ in summary.newest} == {"i", "love", "quokkas"}
+    assert dict(summary.newest)["quokkas"] == "Hollings"
+    assert "quokkas" in jev._writer.learned[0]
+
+
+async def test_ignored_messages_teach_nothing(jev):
+    webhook, _ = make_webhook()
+    channel = make_channel(webhook)
+    for message in (
+        make_message(channel, "zebra from a bot", bot=True),
+        make_message(channel, "zebra from a webhook", webhook_id=7),
+        make_message(channel, "!zebra command"),
+    ):
+        await jev.receive_message(message, [turn(message)])
+    assert jev.lexicon.summary().total == 0
+
+
+def test_jev_command_text():
+    empty = LexiconSummary(0, [], [])
+    assert "hasn't learned any yet" in describe(empty, name="Jev", born=100, menu=250)
+    summary = LexiconSummary(3, [("quokka", "Hollings"), ("pizza", "Mallory")], [("pizza", 4), ("quokka", 1)])
+    text = describe(summary, name="Jev", born=100, menu=250)
+    assert "learned **3** more" in text
+    assert "*quokka* (Hollings)" in text and "*pizza* x4" in text
+    assert "reach 3 learned words" in text
 
 
 async def test_replies_through_a_new_jev_webhook_and_logs_the_reply(jev):

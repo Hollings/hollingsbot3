@@ -1,7 +1,15 @@
 """Make Jev, a decision model that cannot generate text, write a chat reply.
 
 Jev only answers typed questions (pick an option, say yes/no), so the reply is
-built one word at a time, two rounds of requests per word:
+built one word at a time. How depends on the size of its vocabulary.
+
+**Small vocabulary (the default): one request per word.** Jev is born knowing
+100 words; the chat's words and the words it has learned (lexicon.py) fill the
+menu up to 250, which fits a single Choice. One request carries that Choice,
+a naturalness Noul per option, and the stop check (below). Its state is the
+chat alone; the reply with its blank rides in the Choice's own instructions.
+
+**Large vocabulary (``vocab_size`` >= 250): a tournament, three requests per word.**
 
 1. **Buckets + stop check, concurrently.** The vocabulary (words from the chat,
    then ~5000 common English words) is split into buckets of 250, each asked as
@@ -58,8 +66,12 @@ class ChatLine:
 
 @dataclass(frozen=True)
 class WriterConfig:
-    vocab_size: int = 5000  # common words offered (the chat's own words come on top)
-    bucket_size: int = 250  # Choice questions allow at most 255 options
+    # The common words Jev is born knowing (the chat's and learned words come on top). Below
+    # bucket_size the whole menu fits one Choice and each word costs a single request (see
+    # JevWriter.single_call); 5000 gives the full-vocabulary tournament instead.
+    vocab_size: int = 100
+    bucket_size: int = 250  # Choice questions allow at most 255 options (5 go to punctuation)
+    fluency_check: bool = True  # ask "is `next` natural after `text`?" of every finalist
     finalist_mass: float = 0.6  # a bucket sends its leaders until they hold this much probability...
     finalist_cap: int = 4  # ...or this many words
     fluency_power: float = 2.0  # how hard the naturalness Noul steers the pick
@@ -70,7 +82,10 @@ class WriterConfig:
     send_at: float = 0.6  # always send once Jev puts P(send) at least this high
     send_floor: float = 0.2  # between floor and send_at, send with probability P(send)**send_power
     send_power: float = 2.0  # (T > 0 only; mid-sentence P(send) sits below the floor)
-    sense_floor: float = 0.2  # stop once the reply makes less sense than this...
+    # Stop once the reply makes less sense than this. None = 0.2 for the big-vocabulary
+    # tournament, off for the small vocabulary, whose replies read as half-nonsense even
+    # when they are going somewhere (a floor there cut them off at word 4).
+    sense_floor: float | None = None
     sense_from: int = 3  # ...judged from this many words on (one word is too little to judge)
     give_up: float = 0.25  # stop if even the picked word is rated less natural than this
     min_words: int = 8  # never send before this many words (sense/give-up can still end it)
@@ -128,6 +143,13 @@ class JevWriter:
         self.vocab = tuple(vocab if vocab is not None else load_vocab())
         self.common = frozenset(self.vocab[: self.config.exempt_top])
         self.rng = rng or random.Random()
+        # A small vocabulary fits one Choice: no buckets, no runoff, and the stop check
+        # rides in the same request, so each word is one API call instead of three.
+        self.single_call = self.config.vocab_size < self.config.bucket_size
+        if self.config.sense_floor is not None:
+            self.sense_floor = self.config.sense_floor
+        else:
+            self.sense_floor = 0.0 if self.single_call else 0.2
         self._reply_key = re.sub(r"\W+", "_", name.lower()).strip("_") + "_reply"
         style_line = self.config.style.replace("{name}", name).strip()
         style = f"{style_line} " if style_line else ""
@@ -148,52 +170,74 @@ class JevWriter:
         chat: Sequence[ChatLine],
         on_word: OnWord | None = None,
         draft: Reply | None = None,
+        learned: Sequence[str] = (),
     ) -> Reply:
         """Write a reply to the last line of ``chat``.
 
         ``on_word`` gets the text so far after each word. The reply is built in
         ``draft`` if given, so a caller that cancels this coroutine can still
-        read what was written and what it cost.
+        read what was written and what it cost. ``learned`` is extra vocabulary,
+        best first (the lexicon's ranking): it fills whatever room the chat's own
+        words leave, ahead of the built-in words.
         """
         cfg = self.config
         reply = draft if draft is not None else Reply()
         reply.model = self.client.model
         words, steps, usage = reply.words, reply.steps, reply.usage
-        bucket_questions = self._bucket_questions(chat)
         chat_state = {"chat": _chat_json(chat)}
+        if self.single_call:
+            pool = self._single_pool(chat, learned)
+        else:
+            bucket_questions = self._bucket_questions(chat, learned)
         stop_reason = "max_words"
 
         while len(words) < cfg.max_words:
-            state = {**chat_state, self._reply_key: f"{join_words(words)} {BLANK}".strip()}
-            if words:
-                answers, check = await asyncio.gather(
-                    self.client.ask(state, bucket_questions, usage),
-                    self.client.ask(chat_state, self._stop_questions(words), usage),
-                )
-                send = _probabilities(check["send"]).get("send", 0.0)
-                sense = _noul(check, "sense")
-                reason = self._stop_reason(send, sense, len(words))
-                if reason:
-                    stop_reason = reason
-                    reply.final_check = (send, sense)
+            send, sense = 0.0, 1.0
+            if self.single_call:
+                # One request: the word itself, each option's fit, and the stop check.
+                options = allowed(pool + (list(PUNCTUATION) if words else []), words)
+                if not options:
+                    stop_reason = "no_options"
                     break
+                answers = await self.client.ask(chat_state, self._single_questions(words, options), usage)
+                if words:
+                    send, sense = _probabilities(answers["send"]).get("send", 0.0), _noul(answers, "sense")
+                    if reason := self._stop_reason(send, sense, len(words)):
+                        stop_reason = reason
+                        reply.final_check = (send, sense)
+                        break
+                runoff = answers
             else:
-                answers = await self.client.ask(state, bucket_questions, usage)
-                send, sense = 0.0, 1.0
+                state = {**chat_state, self._reply_key: f"{join_words(words)} {BLANK}".strip()}
+                if words:
+                    answers, check = await asyncio.gather(
+                        self.client.ask(state, bucket_questions, usage),
+                        self.client.ask(chat_state, self._stop_questions(words), usage),
+                    )
+                    send, sense = _probabilities(check["send"]).get("send", 0.0), _noul(check, "sense")
+                    if reason := self._stop_reason(send, sense, len(words)):
+                        stop_reason = reason
+                        reply.final_check = (send, sense)
+                        break
+                else:
+                    answers = await self.client.ask(state, bucket_questions, usage)
 
-            candidates: list[str] = []
-            for answer in answers.values():
-                candidates += finalists(_probabilities(answer), cfg.finalist_mass, cfg.finalist_cap)
-            if words:
-                candidates += list(PUNCTUATION)
-            options = allowed(candidates, words)
-            if not options:
-                stop_reason = "no_options"
-                break
+                candidates: list[str] = []
+                for answer in answers.values():
+                    candidates += finalists(_probabilities(answer), cfg.finalist_mass, cfg.finalist_cap)
+                if words:
+                    candidates += list(PUNCTUATION)
+                options = allowed(candidates, words)
+                if not options:
+                    stop_reason = "no_options"
+                    break
+                runoff = await self.client.ask(state, self._runoff_questions(words, options), usage)
 
-            runoff = await self.client.ask(state, self._runoff_questions(words, options), usage)
             probs = _probabilities(runoff["next"])
-            fluency = {w: _noul(runoff, f"fit{i}") for i, w in enumerate(options)}
+            if cfg.fluency_check:
+                fluency = {w: _noul(runoff, f"fit{i}") for i, w in enumerate(options)}
+            else:
+                fluency = dict.fromkeys(options, 1.0)
             scores = {
                 w: probs.get(w, 0.0)
                 * fluency[w] ** cfg.fluency_power
@@ -227,21 +271,22 @@ class JevWriter:
                 return "sent"
             if cfg.temperature > 0 and send >= cfg.send_floor and self.rng.random() < send**cfg.send_power:
                 return "sent"
-        if n_words >= cfg.sense_from and sense < cfg.sense_floor:
+        if n_words >= cfg.sense_from and sense < self.sense_floor:
             return "lost_thread"
         return None
 
     # ---------------------------------------------------------------- requests
 
-    def _bucket_questions(self, chat: Sequence[ChatLine]) -> dict[str, dict[str, Any]]:
+    def _bucket_questions(self, chat: Sequence[ChatLine], learned: Sequence[str] = ()) -> dict[str, dict[str, Any]]:
         size = self.config.bucket_size
-        # The chat's own words (and speakers' names) get a bucket of their own, so a topic
-        # word like "sushi" is always on the menu even when it isn't a common word.
-        newest_first = [line.text for line in reversed(chat)] + [line.speaker for line in reversed(chat)]
-        ctx = context_words(newest_first, size)
-        in_ctx = set(ctx)
-        common = [w for w in self.vocab[: self.config.vocab_size] if w not in in_ctx]
-        buckets = [ctx] + [common[i : i + size] for i in range(0, len(common), size)]
+        # The chat's own words (and speakers' names) lead, so a topic word like "sushi" is
+        # always on the menu even when it isn't a common word; then learned words.
+        ctx = context_words(_newest_first(chat), size)
+        extra = ctx + [w for w in dict.fromkeys(learned) if w not in set(ctx)]
+        in_extra = set(extra)
+        common = [w for w in self.vocab[: self.config.vocab_size] if w not in in_extra]
+        buckets = [extra[i : i + size] for i in range(0, len(extra), size)]
+        buckets += [common[i : i + size] for i in range(0, len(common), size)]
         return {
             f"b{i}": {
                 "type": "choice",
@@ -250,6 +295,33 @@ class JevWriter:
             }
             for i, bucket in enumerate(b for b in buckets if b)
         }
+
+    def _single_pool(self, chat: Sequence[ChatLine], learned: Sequence[str] = ()) -> list[str]:
+        """Single-call menu, at most ``bucket_size`` words.
+
+        The built-in words always make it. The room left goes first to the chat's
+        own words (newest message first), then to learned words in their ranking.
+        """
+        cfg = self.config
+        base = list(self.vocab[: cfg.vocab_size])
+        in_base = set(base)
+        room = max(0, cfg.bucket_size - len(base))
+        ctx = [w for w in context_words(_newest_first(chat), room + len(base)) if w not in in_base][:room]
+        taken = in_base | set(ctx)
+        fill = [w for w in dict.fromkeys(learned) if w not in taken][: room - len(ctx)]
+        return ctx + fill + base
+
+    def _single_questions(self, words: Sequence[str], options: Sequence[str]) -> dict[str, dict[str, Any]]:
+        # The state is the chat alone (the stop check must not see a blank), so the reply
+        # with its blank travels in the word question's own instructions.
+        questions = self._runoff_questions(words, options)
+        questions["next"]["instructions"] = {
+            self._reply_key: f"{join_words(words)} {BLANK}".strip(),
+            "question": self._blank_instructions,
+        }
+        if words:
+            questions.update(self._stop_questions(words))
+        return questions
 
     def _stop_questions(self, words: Sequence[str]) -> dict[str, dict[str, Any]]:
         text = join_words(words)
@@ -267,6 +339,8 @@ class JevWriter:
         questions: dict[str, dict[str, Any]] = {
             "next": {"type": "choice", "instructions": self._blank_instructions, "criteria": criteria}
         }
+        if not self.config.fluency_check:
+            return questions
         text = join_words(words)
         for i, w in enumerate(options):
             if words:
@@ -275,6 +349,11 @@ class JevWriter:
                 instructions = {"text": w, "question": FIRST_WORD_Q}
             questions[f"fit{i}"] = {"type": "noul", "instructions": instructions}
         return questions
+
+
+def _newest_first(chat: Sequence[ChatLine]) -> list[str]:
+    """Texts then speakers' names, newest first: the order chat words claim menu room."""
+    return [line.text for line in reversed(chat)] + [line.speaker for line in reversed(chat)]
 
 
 def _chat_json(chat: Sequence[ChatLine]) -> list[dict[str, str]]:

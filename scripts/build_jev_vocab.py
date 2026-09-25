@@ -16,31 +16,16 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
 from wordfreq import top_n_list
 
-OUT = Path(__file__).resolve().parents[1] / "src" / "hollingsbot" / "jev" / "vocab_en.txt"
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-# A word the bot can say at random, with no one having said it first. wordfreq's
-# top lists already drop slurs; this keeps out the rest of what should never
-# come out of a dice roll. (Words from the chat itself still reach Jev.)
-EXCLUDE = {
-    "rape",
-    "raped",
-    "rapes",
-    "raping",
-    "rapist",
-    "retard",
-    "retarded",
-    "negro",
-    "cunt",
-    "whore",
-    "slut",
-    "tranny",
-    "fag",
-    "faggot",
-}
+from hollingsbot.jev.vocab import BLOCKED as EXCLUDE  # shared with what Jev may learn
+
+OUT = Path(__file__).resolve().parents[1] / "src" / "hollingsbot" / "jev" / "vocab_en.txt"
 SINGLE_LETTER_WORDS = {"a", "i", "u"}
 WORD = re.compile(r"[a-z0-9][a-z0-9']*")
 

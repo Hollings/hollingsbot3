@@ -82,6 +82,10 @@ async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int 
         print(f"\ntotal ${total:.4f} | mean {words / n:.1f} words, ${total / n:.4f} per reply")
 
 
+def _truthy(value: str) -> bool:
+    return value.strip().lower() in ("1", "true", "yes", "on")
+
+
 def main() -> None:
     load_dotenv()
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -93,7 +97,8 @@ def main() -> None:
     ap.add_argument("--seed", type=int)
     ap.add_argument("--trace", action="store_true", help="print each step's scores")
     for f in dataclasses.fields(WriterConfig):
-        ap.add_argument("--" + f.name.replace("_", "-"), type=type(f.default), default=f.default)
+        kind = _truthy if isinstance(f.default, bool) else float if f.default is None else type(f.default)
+        ap.add_argument("--" + f.name.replace("_", "-"), type=kind, default=f.default)
     args = ap.parse_args()
 
     config = WriterConfig(**{f.name: getattr(args, f.name) for f in dataclasses.fields(WriterConfig)})

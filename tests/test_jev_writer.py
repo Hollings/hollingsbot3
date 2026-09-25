@@ -46,17 +46,22 @@ class ScriptedJev:
             await asyncio.Event().wait()
         if usage is not None:
             usage.record({"input_tokens": 100, "cost": 0.001}, 0.01)
-        if "send" in questions:
-            wanted = self._wanted(questions["send"]["instructions"]["text"])
-            send = 1.0 if wanted is None else self.send_mid
-            return {
-                "send": {"type": "choice", "probabilities": {"send": send, "keep typing": 1 - send}},
-                "sense": {"type": "noul", "noul": self.sense},
-            }
-        wanted = self._wanted(state["jev_reply"].replace(BLANK, ""))
+        next_instructions = questions.get("next", {}).get("instructions")
+        if isinstance(next_instructions, dict):  # single-call mode: the blank rides in the question
+            typed = next_instructions["jev_reply"].replace(BLANK, "")
+        elif "jev_reply" in state:
+            typed = state["jev_reply"].replace(BLANK, "")
+        else:
+            typed = questions["send"]["instructions"]["text"]
+        wanted = self._wanted(typed)
         answers = {}
         for key, q in questions.items():
-            if q["type"] == "choice":
+            if key == "send":
+                send = 1.0 if wanted is None else self.send_mid
+                answers[key] = {"type": "choice", "probabilities": {"send": send, "keep typing": 1 - send}}
+            elif key == "sense":
+                answers[key] = {"type": "noul", "noul": self.sense}
+            elif q["type"] == "choice":
                 opts = list(q["criteria"])
                 if wanted in opts:
                     probs = {o: (0.9 if o == wanted else 0.1 / max(len(opts) - 1, 1)) for o in opts}
@@ -192,6 +197,79 @@ async def test_style_reaches_word_and_send_questions():
     buckets, stop = fake.requests[0][1], next(q for _, q in fake.requests if "send" in q)
     assert "Jev writes long, chatty messages." in buckets["b0"]["instructions"]
     assert "Jev writes long, chatty messages." in stop["send"]["instructions"]["question"]
+
+
+def single_writer(fake, **cfg) -> JevWriter:
+    base = {"vocab_size": len(VOCAB), "temperature": 0, "exempt_top": 3, "min_words": 0, "style": ""}
+    return JevWriter(fake, config=WriterConfig(**{**base, **cfg}), vocab=VOCAB, rng=random.Random(0))
+
+
+async def test_small_vocabulary_costs_one_call_per_word():
+    fake = ScriptedJev(["i", "like", "pizza"])
+    writer = single_writer(fake)
+    assert writer.single_call
+    reply = await writer.write(CHAT)
+    assert reply.text == "i like pizza"
+    assert reply.stop_reason == "sent"
+    assert reply.usage.calls == 3 + 1  # one per word, plus the one whose stop check said send
+
+
+async def test_single_call_request_carries_word_fit_and_stop_questions():
+    fake = ScriptedJev(["i", "like"])
+    await single_writer(fake).write(CHAT)
+    first_state, first = fake.requests[0]
+    second_state, second = fake.requests[1]
+    assert set(first_state) == set(second_state) == {"chat"}  # no blank in the shared state
+    assert first["next"]["instructions"]["jev_reply"] == BLANK
+    assert second["next"]["instructions"]["jev_reply"] == f"i {BLANK}"
+    assert "send" not in first and {"send", "sense"} <= set(second)
+    assert "jev" in first["next"]["criteria"] and "pizza" in first["next"]["criteria"]  # chat words + vocab
+    assert any(k.startswith("fit") for k in first)
+
+
+async def test_fluency_checks_can_be_switched_off():
+    fake = ScriptedJev(["i", "like"])
+    reply = await single_writer(fake, fluency_check=False).write(CHAT)
+    assert reply.text == "i like"
+    assert not any(k.startswith("fit") for _, qs in fake.requests for k in qs)
+
+
+def test_single_pool_keeps_born_words_then_chat_words_then_learned():
+    writer = single_writer(ScriptedJev([]), vocab_size=3, bucket_size=8)
+    pool = writer._single_pool(CHAT, learned=["sushi", "jev", "tacos", "the", "burrito"])
+    assert pool[-3:] == ["the", "a", "i"]  # born words are always on the menu
+    assert pool[:5] == ["jev", "whats", "your", "favorite", "food"]  # the chat, newest message first
+    assert len(pool) == 8 and "sushi" not in pool  # bucket_size caps it: no room left for learned words
+
+
+def test_learned_words_fill_leftover_room_in_rank_order():
+    writer = single_writer(ScriptedJev([]), vocab_size=3, bucket_size=12)
+    pool = writer._single_pool([ChatLine("A", "hey")], learned=["sushi", "the", "tacos", "burrito"])
+    assert pool == ["hey", "sushi", "tacos", "burrito", "the", "a", "i"]
+
+
+async def test_learned_words_reach_the_question():
+    fake = ScriptedJev(["sushi"])
+    await single_writer(fake).write(CHAT, learned=["sushi"])
+    assert "sushi" in fake.requests[0][1]["next"]["criteria"]
+
+
+def test_tournament_buckets_include_learned_words_once():
+    writer = writer_for(ScriptedJev([]))  # bucket mode (vocab 12 >= bucket 4)
+    buckets = writer._bucket_questions(CHAT, learned=["sushi", "jev"])
+    offered = [w for q in buckets.values() for w in q["criteria"]]
+    assert "sushi" in offered and offered.count("jev") == 1
+
+
+def test_sense_floor_defaults_per_mode():
+    small = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=100))
+    big = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=5000))
+    pinned = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=100, sense_floor=0.4))
+    assert (small.sense_floor, big.sense_floor, pinned.sense_floor) == (0.0, 0.2, 0.4)
+
+
+def test_big_vocabulary_uses_the_tournament():
+    assert not JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=5000)).single_call
 
 
 async def test_on_word_sees_the_text_grow():

@@ -614,6 +614,8 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `JEV_BOT_NAME` - Webhook display name, and the name Jev is told it has (default: Jev)
 - `JEV_CONTEXT_MESSAGES` - Chat messages Jev sees, the latest included (default: 5)
 - `JEV_DAILY_BUDGET_USD` - Stop replying for the rest of the UTC day past this spend (default: 2.00)
+- `JEV_VOCAB_SIZE` - Words Jev is born knowing; it learns the rest from the chat, `!jev` shows what it knows (default: 100, one API call per word; >= 250 switches to the full-vocabulary tournament)
+- `JEV_FLUENCY_CHECK` - `0` skips the per-option naturalness check (~7x cheaper, more scrambled; default on)
 - `JEV_MIN_WORDS`, `JEV_MAX_WORDS` - Reply length bounds (defaults: 8, 40)
 - `JEV_STYLE` - How Jev writes, `{name}` = its name (default: "{name} writes long, chatty messages, a few sentences at a time."; a single space = none, which gives one-word answers)
 - `JEV_TEMPERATURE`, `JEV_TOP_P` - Sampling (defaults: 0.7, 0.6)

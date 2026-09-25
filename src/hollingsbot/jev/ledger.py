@@ -8,14 +8,12 @@ per-word trace, so an odd reply can be explained later:
 
 from __future__ import annotations
 
-import contextlib
 import json
-import sqlite3
 from dataclasses import asdict
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING
 
-from hollingsbot import prompt_db
+from hollingsbot.jev.db import connect
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -23,7 +21,7 @@ if TYPE_CHECKING:
 
     from hollingsbot.jev.writer import ChatLine, Reply
 
-_SCHEMA = """
+_TABLE = """
 CREATE TABLE IF NOT EXISTS jev_replies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at TEXT NOT NULL,
@@ -42,6 +40,7 @@ CREATE TABLE IF NOT EXISTS jev_replies (
     steps_json TEXT
 )
 """
+_SCHEMA = (_TABLE, "CREATE INDEX IF NOT EXISTS idx_jev_replies_day ON jev_replies(day)")
 
 
 def _utc_day(now: datetime) -> str:
@@ -53,19 +52,9 @@ class JevLedger:
 
     def __init__(self, db_path: str | Path | None = None) -> None:
         self._db_path = db_path
-        self._ready_for: str | None = None
 
-    @contextlib.contextmanager
     def _connect(self):
-        path = str(self._db_path or prompt_db.DB_PATH)
-        with contextlib.closing(sqlite3.connect(path, timeout=30.0)) as conn:
-            conn.execute("PRAGMA journal_mode=WAL")
-            if self._ready_for != path:
-                conn.execute(_SCHEMA)
-                conn.execute("CREATE INDEX IF NOT EXISTS idx_jev_replies_day ON jev_replies(day)")
-                self._ready_for = path
-            yield conn
-            conn.commit()
+        return connect(self._db_path, _SCHEMA)
 
     def spent_today(self, now: datetime | None = None) -> float:
         day = _utc_day(now or datetime.now(timezone.utc))

@@ -165,6 +165,7 @@ async def main():
             await _ensure_loaded("hollingsbot.cogs.starboard")
         await _ensure_loaded("hollingsbot.cogs.chat_coordinator")
         await _ensure_loaded("hollingsbot.cogs.temp_bot_commands")
+        await _ensure_loaded("hollingsbot.cogs.jev_commands")
         await _ensure_loaded("hollingsbot.cogs.yeah_streak")
         logger.info("starting bot")
         await bot.start(token)

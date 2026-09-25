@@ -1,15 +1,20 @@
 """JevBot - TypeSafe's Jev decision model, chatting one word at a time.
 
 Jev cannot generate text; hollingsbot.jev.writer makes it pick a reply word by
-word (two Decisions API calls per word, ~1.2 s). The reply is posted through a
-"Jev" webhook as soon as the first word is picked and edited as the rest
-arrive, so the channel watches it think.
+word (one Decisions API call per word with the default small vocabulary). The
+reply is posted through a "Jev" webhook as soon as the first word is picked and
+edited as the rest arrive, so the channel watches it think.
+
+Jev is born knowing only the most common words and learns every word a human
+says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
 
 Config (env):
     JEV_BOT_CHANNELS          comma-separated channel IDs Jev answers in (every human message)
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
+    JEV_VOCAB_SIZE            words Jev is born knowing (default 100; >= 250 = full-vocabulary tournament)
+    JEV_FLUENCY_CHECK         0 to skip the per-option naturalness check (~7x cheaper, more scrambled)
     JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
     JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
                               set to a single space for Jev's natural one-word answers)
@@ -33,7 +38,9 @@ import discord
 from hollingsbot.cogs import chat_utils
 from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Reply, WriterConfig
 from hollingsbot.jev.ledger import JevLedger
+from hollingsbot.jev.lexicon import Lexicon
 from hollingsbot.settings import parse_id_set
+from hollingsbot.utils.discord_utils import get_display_name
 from hollingsbot.utils.live_message import LiveMessage
 
 if TYPE_CHECKING:
@@ -73,6 +80,8 @@ class JevBotSettings:
         base = WriterConfig()
         writer = dataclasses.replace(
             base,
+            vocab_size=max(1, int(_env_float("JEV_VOCAB_SIZE", base.vocab_size))),
+            fluency_check=os.getenv("JEV_FLUENCY_CHECK", "1").strip().lower() not in ("0", "false", "no", "off"),
             min_words=int(_env_float("JEV_MIN_WORDS", base.min_words)),
             max_words=int(_env_float("JEV_MAX_WORDS", base.max_words)),
             temperature=_env_float("JEV_TEMPERATURE", base.temperature),
@@ -113,6 +122,7 @@ class JevBot:
         self.settings = settings or JevBotSettings.from_env()
         self.whitelist_channels: set[int] = set(self.settings.channels)
         self.ledger = JevLedger()
+        self.lexicon = Lexicon()
         self._writer: JevWriter | None = None
         self._webhooks: dict[int, discord.Webhook | None] = {}
         self._active: dict[int, asyncio.Task] = {}
@@ -127,6 +137,7 @@ class JevBot:
     async def receive_message(self, message: discord.Message, history: list[ConversationTurn]) -> dict | None:
         if not self._should_respond(message):
             return None
+        await self._learn_from(message)
         if not history or history[-1].message_id != message.id:
             _LOG.warning("JevBot: latest history turn is not message %s; skipping", message.id)
             return None
@@ -155,6 +166,18 @@ class JevBot:
             # The task's own cleanup is shielded; no need to wait for it here.
             with contextlib.suppress(asyncio.CancelledError, TimeoutError):
                 await asyncio.wait_for(asyncio.shield(task), timeout=0.2)
+
+    async def _learn_from(self, message: discord.Message) -> None:
+        """Every human message in Jev's channels teaches it the words in it."""
+        speaker = get_display_name(message.author)
+        text = chat_utils.clean_mentions(message, self.bot)
+        try:
+            new = await asyncio.to_thread(self.lexicon.learn, text, speaker=speaker, channel_id=message.channel.id)
+        except Exception:
+            _LOG.exception("JevBot could not learn from message %s", message.id)
+            return
+        if new:
+            _LOG.info("Jev learned %s from %s", new, speaker)
 
     # ------------------------------------------------------------------ gating
 
@@ -194,11 +217,12 @@ class JevBot:
             on_word = None
 
         try:
+            learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.writer.bucket_size)
             if webhook is None:
                 async with channel.typing():
-                    reply = await self._get_writer().write(chat, draft=draft)
+                    reply = await self._get_writer().write(chat, draft=draft, learned=learned)
             else:
-                reply = await self._get_writer().write(chat, on_word=on_word, draft=draft)
+                reply = await self._get_writer().write(chat, on_word=on_word, draft=draft, learned=learned)
         except asyncio.CancelledError:
             cleanup = asyncio.create_task(self._finish_interrupted(channel, live, webhook, chat, draft))
             self._cleanups.add(cleanup)
