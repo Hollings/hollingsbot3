@@ -22,6 +22,7 @@ from dotenv import load_dotenv
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from hollingsbot.jev import ChatLine, DecisionsClient, JevWriter, WriterConfig
+from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 
 SAMPLES = {
     # the first things people actually said to Jev in #wendy-dev
@@ -47,9 +48,12 @@ SAMPLES = {
 }
 
 
-async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int | None, trace: bool) -> None:
+async def run(
+    chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int | None, trace: bool, suggest: str | None
+) -> None:
     client = DecisionsClient()
-    writer = JevWriter(client, config=config, rng=random.Random(seed))
+    suggester = NextWordSuggester(model=suggest) if suggest else None
+    writer = JevWriter(client, config=config, rng=random.Random(seed), suggester=suggester)
     total = 0.0
     words = 0
     try:
@@ -70,13 +74,15 @@ async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int 
             if trace:
                 for s in reply.steps:
                     print(
-                        f"     {s.word!r:14} choice={s.choice:.2f} fluency={s.fluency:.2f} "
+                        f"     {s.word!r:14} choice={s.choice:.2f} fluency={s.fluency:.2f} llm={s.suggested:.2f} "
                         f"send={s.send:.2f} sense={s.sense:.2f} of {s.options}"
                     )
                 if reply.final_check:
                     print(f"     (stop check: send={reply.final_check[0]:.2f} sense={reply.final_check[1]:.2f})")
     finally:
         await client.aclose()
+        if suggester is not None:
+            await suggester.aclose()
     if len(chats) > 1:
         n = len(chats)
         print(f"\ntotal ${total:.4f} | mean {words / n:.1f} words, ${total / n:.4f} per reply")
@@ -96,6 +102,12 @@ def main() -> None:
     ap.add_argument("--only", help=f"comma-separated subset of samples: {','.join(SAMPLES)}")
     ap.add_argument("--seed", type=int)
     ap.add_argument("--trace", action="store_true", help="print each step's scores")
+    ap.add_argument(
+        "--suggest",
+        nargs="?",
+        const=DEFAULT_SUGGEST_MODEL,
+        help=f"let an LLM propose each next word (default model {DEFAULT_SUGGEST_MODEL})",
+    )
     for f in dataclasses.fields(WriterConfig):
         kind = _truthy if isinstance(f.default, bool) else float if f.default is None else type(f.default)
         ap.add_argument("--" + f.name.replace("_", "-"), type=kind, default=f.default)
@@ -109,7 +121,7 @@ def main() -> None:
         chats = {"message": [*earlier, ChatLine(args.speaker, args.message)]}
     else:
         ap.error("give a message or --samples")
-    asyncio.run(run(chats, config, args.seed, args.trace))
+    asyncio.run(run(chats, config, args.seed, args.trace, args.suggest))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from hollingsbot.jev.client import JevError
+from hollingsbot.jev.suggest import Suggestion
 from hollingsbot.jev.text import PUNCTUATION, words_in
 from hollingsbot.jev.writer import BLANK, ChatLine, JevWriter, Reply, WriterConfig
 
@@ -266,6 +268,89 @@ def test_sense_floor_defaults_per_mode():
     big = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=5000))
     pinned = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=100, sense_floor=0.4))
     assert (small.sense_floor, big.sense_floor, pinned.sense_floor) == (0.0, 0.2, 0.4)
+
+
+class FakeSuggester:
+    """Returns ``plan[i]`` on the i-th call (the last one repeats)."""
+
+    def __init__(self, plan):
+        self.plan = plan
+        self.calls: list[list[str]] = []
+
+    async def suggest(self, chat, name, words, *, whole_words, complete_from, style="", usage=None):
+        self.calls.append(list(words))
+        if usage is not None:
+            usage.record({"cost": 0.00001}, 0.01)
+        return self.plan[min(len(self.calls) - 1, len(self.plan) - 1)]
+
+
+def suggesting_writer(fake, suggester, **cfg) -> JevWriter:
+    base = {"vocab_size": len(VOCAB), "temperature": 0, "exempt_top": 3, "min_words": 0, "style": ""}
+    return JevWriter(
+        fake, config=WriterConfig(**{**base, **cfg}), vocab=VOCAB, rng=random.Random(0), suggester=suggester
+    )
+
+
+async def test_suggestions_are_jevs_menu():
+    suggester = FakeSuggester([Suggestion([("i", 0.5), ("like", 0.3), ("zebra", 0.2)])])
+    fake = ScriptedJev(["i", "like"])
+    reply = await suggesting_writer(fake, suggester).write(CHAT)
+    assert reply.text == "i like"
+    assert list(fake.requests[0][1]["next"]["criteria"]) == ["i", "like", "zebra"]
+    assert reply.steps[0].suggested == 0.5
+    assert suggester.calls[:2] == [[], ["i"]]
+
+
+async def test_known_only_keeps_jev_to_words_it_knows():
+    suggester = FakeSuggester([Suggestion([("zebra", 0.9), ("i", 0.1)])])
+    fake = ScriptedJev(["i"])
+    await suggesting_writer(fake, suggester, known_only=True).write(CHAT)
+    assert list(fake.requests[0][1]["next"]["criteria"]) == ["i"]  # zebra: never born with, heard or learned
+
+
+async def test_known_only_falls_back_to_known_words_when_nothing_survives():
+    suggester = FakeSuggester([Suggestion([("zebra", 1.0)])])
+    fake = ScriptedJev(["i"])
+    await suggesting_writer(fake, suggester, known_only=True).write(CHAT)
+    menu = list(fake.requests[0][1]["next"]["criteria"])
+    assert "zebra" not in menu and "i" in menu and "jev" in menu  # the static menu: chat words + born words
+
+
+async def test_a_word_the_model_is_still_spelling_gets_finished():
+    suggester = FakeSuggester(
+        [
+            Suggestion([("sand", 1.0)]),
+            Suggestion([("wich", 1.0)], completes="sandwich"),
+            Suggestion([("yes", 1.0)]),
+        ]
+    )
+    fake = ScriptedJev(["sand", "yes"])
+    seen = []
+
+    async def on_word(text):
+        seen.append(text)
+
+    reply = await suggesting_writer(fake, suggester).write(CHAT, on_word=on_word)
+    assert reply.text == "sandwich yes"
+    assert seen[:2] == ["sand", "sandwich"]  # the live message is corrected in place
+    assert [s.word for s in reply.steps] == ["sandwich", "yes"]
+
+
+async def test_a_failing_suggester_falls_back_to_jevs_own_menu():
+    class Broken:
+        async def suggest(self, *args, **kwargs):
+            raise JevError("provider down")
+
+    fake = ScriptedJev(["i", "like"])
+    reply = await suggesting_writer(fake, Broken()).write(CHAT)
+    assert reply.text == "i like"
+    assert "jev" in fake.requests[0][1]["next"]["criteria"]  # the static menu (chat + born words)
+
+
+def test_fallback_menu_fits_one_question_even_with_a_big_born_vocabulary():
+    writer = suggesting_writer(ScriptedJev([]), FakeSuggester([]), vocab_size=12, bucket_size=6)
+    pool = writer._single_pool(CHAT, learned=["sushi"])
+    assert len(pool) == 6 and pool[0] == "jev"  # chat words first, capped at bucket_size
 
 
 def test_big_vocabulary_uses_the_tournament():

@@ -37,17 +37,22 @@ README.md (next to this file).
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import random
 import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from hollingsbot.jev.client import DecisionsClient, JevError, Usage
 from hollingsbot.jev.decoding import allowed, finalists, pick, repetition_factor
+from hollingsbot.jev.suggest import Suggestion
 from hollingsbot.jev.text import PUNCTUATION, context_words, join_words
 from hollingsbot.jev.vocab import load_vocab
+
+if TYPE_CHECKING:
+    from hollingsbot.jev.suggest import NextWordSuggester
 
 _LOG = logging.getLogger(__name__)
 
@@ -95,6 +100,9 @@ class WriterConfig:
     # How Jev writes, told to both the word and the send questions ("{name}" = its name).
     # This line is what makes replies longer: without it Jev answers "pizza" and sends.
     style: str = "{name} writes long, chatty messages, a few sentences at a time."
+    # With a suggester (an LLM proposing the next word, see suggest.py):
+    known_only: bool = False  # Jev may only pick suggestions it knows (born, chat or learned words)
+    suggest_weight: float = 0.0  # score x P_llm(word)**weight; 0 = Jev alone decides among suggestions
 
 
 @dataclass
@@ -105,6 +113,7 @@ class Step:
     send: float  # Choice: P(send the reply as it was before this word)
     sense: float  # Noul: reply so far (before this word) makes sense
     options: int  # runoff size
+    suggested: float = 0.0  # the suggester's probability for this word (0 without one)
 
 
 @dataclass
@@ -136,8 +145,10 @@ class JevWriter:
         config: WriterConfig | None = None,
         vocab: Sequence[str] | None = None,
         rng: random.Random | None = None,
+        suggester: NextWordSuggester | None = None,
     ) -> None:
         self.client = client
+        self.suggester = suggester
         self.name = name
         self.config = config or WriterConfig()
         self.vocab = tuple(vocab if vocab is not None else load_vocab())
@@ -146,12 +157,15 @@ class JevWriter:
         # A small vocabulary fits one Choice: no buckets, no runoff, and the stop check
         # rides in the same request, so each word is one API call instead of three.
         self.single_call = self.config.vocab_size < self.config.bucket_size
+        # With a suggester every word is one Jev request too, whatever the vocabulary size.
+        self.one_request = self.single_call or suggester is not None
         if self.config.sense_floor is not None:
             self.sense_floor = self.config.sense_floor
         else:
-            self.sense_floor = 0.0 if self.single_call else 0.2
+            self.sense_floor = 0.0 if self.one_request else 0.2
         self._reply_key = re.sub(r"\W+", "_", name.lower()).strip("_") + "_reply"
         style_line = self.config.style.replace("{name}", name).strip()
+        self._style_line = style_line
         style = f"{style_line} " if style_line else ""
         self._blank_instructions = (
             f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
@@ -185,17 +199,48 @@ class JevWriter:
         reply.model = self.client.model
         words, steps, usage = reply.words, reply.steps, reply.usage
         chat_state = {"chat": _chat_json(chat)}
-        if self.single_call:
+        if self.one_request:
             pool = self._single_pool(chat, learned)
         else:
             bucket_questions = self._bucket_questions(chat, learned)
+        if self.suggester is not None:
+            heard = context_words(_newest_first(chat), 1000) + list(learned)
+            known = set(self.vocab[: cfg.vocab_size]) | set(heard)
         stop_reason = "max_words"
+        merges = 0  # times the last word has been finished off (reset for each new word)
 
         while len(words) < cfg.max_words:
             send, sense = 0.0, 1.0
-            if self.single_call:
+            suggested: dict[str, float] = {}
+            if self.one_request:
+                if self.suggester is not None:
+                    try:
+                        suggestion = await self.suggester.suggest(
+                            chat, self.name, words, whole_words=self.vocab, complete_from=heard,
+                            style=self._style_line, usage=usage,
+                        )  # fmt: skip
+                    except JevError:
+                        # The LLM is a helper: without it, this word comes from Jev's own menu.
+                        _LOG.warning("Suggester failed; using Jev's own menu for this word", exc_info=True)
+                        suggestion = Suggestion([])
+                    if suggestion.completes and merges < 3:
+                        # The model is still spelling the last word ("sand" -> "sandwich"):
+                        # finish it and ask again, no decision needed from Jev.
+                        words[-1] = suggestion.completes
+                        steps[-1] = dataclasses.replace(steps[-1], word=suggestion.completes)
+                        reply.text = join_words(words)
+                        merges += 1
+                        if on_word is not None:
+                            await on_word(reply.text)
+                        continue
+                    ranked = suggestion.options
+                    suggested = dict(ranked)
+                    menu = [w for w, _ in ranked if not cfg.known_only or w in known or w in PUNCTUATION]
+                    menu = allowed(menu, words) or allowed(pool + (list(PUNCTUATION) if words else []), words)
+                else:
+                    menu = pool + (list(PUNCTUATION) if words else [])
                 # One request: the word itself, each option's fit, and the stop check.
-                options = allowed(pool + (list(PUNCTUATION) if words else []), words)
+                options = allowed(menu, words)
                 if not options:
                     stop_reason = "no_options"
                     break
@@ -249,14 +294,18 @@ class JevWriter:
                     common_penalty=cfg.common_repeat_penalty,
                     window=cfg.repeat_window,
                 )
+                * (max(suggested.get(w, 0.0), 1e-4) ** cfg.suggest_weight if suggested else 1.0)
                 for w in options
             }
             word = pick(scores, self.rng, cfg.temperature, cfg.top_p)
-            steps.append(Step(word, probs.get(word, 0.0), fluency[word], send, sense, len(options)))
+            steps.append(
+                Step(word, probs.get(word, 0.0), fluency[word], send, sense, len(options), suggested.get(word, 0.0))
+            )
             if words and fluency[word] < cfg.give_up:
                 stop_reason = "gave_up"
                 break
             words.append(word)
+            merges = 0
             reply.text = join_words(words)
             if on_word is not None:
                 await on_word(reply.text)
@@ -304,6 +353,11 @@ class JevWriter:
         """
         cfg = self.config
         base = list(self.vocab[: cfg.vocab_size])
+        if len(base) >= cfg.bucket_size:
+            # Only reached with a suggester (without one a born vocabulary this big means the
+            # tournament): this is just its fallback menu, so chat and learned words go first.
+            heard = context_words(_newest_first(chat), cfg.bucket_size) + list(learned)
+            return list(dict.fromkeys(heard + base))[: cfg.bucket_size]
         in_base = set(base)
         room = max(0, cfg.bucket_size - len(base))
         ctx = [w for w in context_words(_newest_first(chat), room + len(base)) if w not in in_base][:room]

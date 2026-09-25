@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import dataclasses
 import sys
 import tempfile
 from pathlib import Path
@@ -28,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hollingsbot.cogs.chat_bots.jev_bot import JevBot, JevBotSettings
 from hollingsbot.jev import ChatLine
 from hollingsbot.jev.ledger import JevLedger
+from hollingsbot.jev.lexicon import Lexicon
 
 
 class _Coordinator:
@@ -48,11 +50,12 @@ async def run(channel_id: int, prompt: str, speaker: str) -> None:
         print(f"channel #{channel.name}; bot user {client.user}")
         await channel.send(f"(Jev smoke test, asking as {speaker}) {prompt}")
 
-        settings = JevBotSettings.from_env()
-        settings = JevBotSettings(channels=frozenset({channel_id}), name=settings.name, writer=settings.writer)
+        settings = dataclasses.replace(JevBotSettings.from_env(), channels=frozenset({channel_id}))
         jev = JevBot(client, _Coordinator(), None, settings)
         with tempfile.TemporaryDirectory() as tmp:
             jev.ledger = JevLedger(Path(tmp) / "smoke.db")
+            jev.lexicon = Lexicon(Path(tmp) / "smoke.db")
+            jev.lexicon.learn(prompt, speaker=speaker)
 
             async def add_reaction(emoji):
                 print(f"  reaction {emoji!r}")

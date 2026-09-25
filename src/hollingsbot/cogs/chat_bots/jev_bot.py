@@ -1,7 +1,8 @@
 """JevBot - TypeSafe's Jev decision model, chatting one word at a time.
 
 Jev cannot generate text; hollingsbot.jev.writer makes it pick a reply word by
-word (one Decisions API call per word with the default small vocabulary). The
+word. By default a small LLM proposes each next word (hollingsbot.jev.suggest)
+and Jev chooses among the proposals it knows: two quick API calls per word. The
 reply is posted through a "Jev" webhook as soon as the first word is picked and
 edited as the rest arrive, so the channel watches it think.
 
@@ -13,8 +14,13 @@ Config (env):
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
-    JEV_VOCAB_SIZE            words Jev is born knowing (default 100; >= 250 = full-vocabulary tournament)
-    JEV_FLUENCY_CHECK         0 to skip the per-option naturalness check (~7x cheaper, more scrambled)
+    JEV_SUGGEST_MODEL         OpenRouter model proposing next words (default llama-3.1-8b-instruct;
+                              "off" = Jev alone picks from its own vocabulary)
+    JEV_KNOWN_ONLY            1 = Jev only says proposals it knows (born or learned) (default 1 with a
+                              suggester: rare words must be taught first); 0 = any proposal
+    JEV_VOCAB_SIZE            words Jev is born knowing (default 1000 with a suggester, 100 without;
+                              without one, >= 250 means the full-vocabulary tournament)
+    JEV_FLUENCY_CHECK         0 to skip the per-option naturalness check (cheaper, more scrambled)
     JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
     JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
                               set to a single space for Jev's natural one-word answers)
@@ -39,6 +45,7 @@ from hollingsbot.cogs import chat_utils
 from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Reply, WriterConfig
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
+from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
 from hollingsbot.utils.live_message import LiveMessage
@@ -67,6 +74,13 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_flag(name: str, default: bool) -> bool:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
 @dataclass(frozen=True)
 class JevBotSettings:
     channels: frozenset[int]
@@ -74,14 +88,21 @@ class JevBotSettings:
     context_messages: int = 5
     daily_budget: float = 2.0
     writer: WriterConfig = field(default_factory=WriterConfig)
+    suggest_model: str | None = None  # None = Jev picks from its own vocabulary alone
 
     @classmethod
     def from_env(cls) -> JevBotSettings:
         base = WriterConfig()
+        model = os.getenv("JEV_SUGGEST_MODEL", DEFAULT_SUGGEST_MODEL).strip()
+        suggest_model = None if model.lower() in ("", "0", "off", "none", "false") else model
+        # With a suggester, Jev is born with the 1000 commonest words (grammar is always
+        # available) and may only say proposals it knows, so rarer words must be taught.
+        born = 1000 if suggest_model else base.vocab_size
         writer = dataclasses.replace(
             base,
-            vocab_size=max(1, int(_env_float("JEV_VOCAB_SIZE", base.vocab_size))),
-            fluency_check=os.getenv("JEV_FLUENCY_CHECK", "1").strip().lower() not in ("0", "false", "no", "off"),
+            vocab_size=max(1, int(_env_float("JEV_VOCAB_SIZE", born))),
+            known_only=_env_flag("JEV_KNOWN_ONLY", bool(suggest_model)),
+            fluency_check=_env_flag("JEV_FLUENCY_CHECK", True),
             min_words=int(_env_float("JEV_MIN_WORDS", base.min_words)),
             max_words=int(_env_float("JEV_MAX_WORDS", base.max_words)),
             temperature=_env_float("JEV_TEMPERATURE", base.temperature),
@@ -94,7 +115,19 @@ class JevBotSettings:
             context_messages=max(1, int(_env_float("JEV_CONTEXT_MESSAGES", 5))),
             daily_budget=_env_float("JEV_DAILY_BUDGET_USD", 2.0),
             writer=writer,
+            suggest_model=suggest_model,
         )
+
+    def reachable_learned(self, learned: int) -> int:
+        """How many learned words Jev can use at once (for `!jev`)."""
+        if self.suggest_model:
+            return learned  # proposals are checked against everything it knows
+        return min(learned, max(0, self.writer.bucket_size - self.writer.vocab_size))
+
+    @property
+    def learned_limit(self) -> int:
+        """How many ranked learned words to hand the writer each reply."""
+        return 100_000 if self.suggest_model else self.writer.bucket_size
 
 
 def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
@@ -195,7 +228,13 @@ class JevBot:
 
     def _get_writer(self) -> JevWriter:
         if self._writer is None:
-            self._writer = JevWriter(DecisionsClient(), name=self.settings.name, config=self.settings.writer)
+            model = self.settings.suggest_model
+            self._writer = JevWriter(
+                DecisionsClient(),
+                name=self.settings.name,
+                config=self.settings.writer,
+                suggester=NextWordSuggester(model=model) if model else None,
+            )
         return self._writer
 
     async def _write_and_send(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
@@ -217,7 +256,7 @@ class JevBot:
             on_word = None
 
         try:
-            learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.writer.bucket_size)
+            learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.learned_limit)
             if webhook is None:
                 async with channel.typing():
                     reply = await self._get_writer().write(chat, draft=draft, learned=learned)

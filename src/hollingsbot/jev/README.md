@@ -12,7 +12,38 @@ terminal with `python scripts/jev_try.py "Jev, what's your favorite food?"`
 (add `--trace` to see every step's scores, `--samples` for the prompt set the
 numbers below come from).
 
-## Default: a lobotomized parrot that learns (one request per word)
+## Default: an LLM proposes, Jev chooses (two quick requests per word)
+
+Jev's weakness is word order; a small LLM's is nothing Jev cares about. So
+per word, `llama-3.1-8b-instruct` (OpenRouter, ~0.4 s, max_tokens 1,
+top_logprobs 20) is asked to continue the chat log, and its top next tokens
+become Jev's menu for the next word (`suggest.py`). Jev then decides in one
+request: which word, a naturalness Noul per option, the send/sense check.
+
+- **Strict (default):** Jev only says proposals it knows: the 1000 most
+  common words it is born with, the chat's words, and everything it has
+  learned. Grammar is always available; "pizza" or "ramen" only after someone
+  says them. `JEV_KNOWN_ONLY=0` lets it say any proposal (more on-topic, and
+  learning stops mattering). `JEV_SUGGEST_MODEL=off` = Jev alone (below).
+- **Word pieces:** LLMs predict tokens, not words. A 3+ letter piece that
+  begins a rare word someone said becomes it ("ram" -> "ramen"); when the
+  model's favourite next token glues onto the last word to spell a real word
+  ("sand"+"wich", "don"+"'t") the last word is finished in place and the model
+  asked again; contraction halves ("ll", "don") are never words of their own.
+  (Assistant prefill would give exact word boundaries, but this provider's
+  logprobs don't match the prefilled position.)
+- If the LLM call fails, that word comes from Jev's own menu instead.
+
+~20-25 words and ~$0.002 per reply, ~0.3 s per word. Examples (strict, born
+1000): *"yeah well like i think probably ramen like because it is more simple
+than pizza and also like i like some different things"*; free choice: *"why
+did the computer get cold because it lost windows"*, *"hey mallory im sure you
+will do great and just be yourself remember just to dress professional and
+bring copies"*. Born with only 500 words, strict mode collapses into "something
+great big be ever food thing"; with an LLM prior blended in
+(`suggest_weight` 0.5) it reads most fluently but least like Jev.
+
+## Without a suggester: a lobotomized parrot (one request per word)
 
 Jev is born knowing only the 100 most common English words (almost all glue:
 the, is, you, like, good). Every word a human says in its channel is learned

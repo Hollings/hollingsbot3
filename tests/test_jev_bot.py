@@ -16,7 +16,7 @@ from hollingsbot.cogs.jev_commands import describe
 from hollingsbot.jev.client import Usage
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon, LexiconSummary
-from hollingsbot.jev.writer import ChatLine, Reply
+from hollingsbot.jev.writer import ChatLine, Reply, WriterConfig
 
 CHANNEL = 1473033550805598253
 
@@ -123,12 +123,35 @@ async def test_ignored_messages_teach_nothing(jev):
 
 def test_jev_command_text():
     empty = LexiconSummary(0, [], [])
-    assert "hasn't learned any yet" in describe(empty, name="Jev", born=100, menu=250)
+    assert "hasn't learned any yet" in describe(empty, name="Jev", born=1000, reach=0)
     summary = LexiconSummary(3, [("quokka", "Hollings"), ("pizza", "Mallory")], [("pizza", 4), ("quokka", 1)])
-    text = describe(summary, name="Jev", born=100, menu=250)
-    assert "learned **3** more" in text
+    text = describe(summary, name="Jev", born=1000, reach=3)
+    assert "born knowing 1000 words" in text and "learned **3** more" in text
     assert "*quokka* (Hollings)" in text and "*pizza* x4" in text
-    assert "reach 3 learned words" in text
+    assert "at a time" not in text  # everything learned is usable
+    assert "reach 2 learned words at a time" in describe(summary, name="Jev", born=100, reach=2)
+
+
+def test_reachable_learned_depends_on_mode():
+    llm = JevBotSettings(channels=frozenset(), suggest_model="m")
+    alone = JevBotSettings(channels=frozenset(), writer=WriterConfig(vocab_size=100))
+    assert llm.reachable_learned(500) == 500
+    assert alone.reachable_learned(500) == 150 and alone.reachable_learned(20) == 20
+
+
+def test_suggester_defaults(monkeypatch):
+    for var in ("JEV_SUGGEST_MODEL", "JEV_KNOWN_ONLY", "JEV_VOCAB_SIZE"):
+        monkeypatch.delenv(var, raising=False)
+    on = JevBotSettings.from_env()
+    assert on.suggest_model == "meta-llama/llama-3.1-8b-instruct"
+    assert (on.writer.vocab_size, on.writer.known_only) == (1000, True)
+    monkeypatch.setenv("JEV_SUGGEST_MODEL", "off")
+    off = JevBotSettings.from_env()
+    assert off.suggest_model is None and (off.writer.vocab_size, off.writer.known_only) == (100, False)
+    monkeypatch.setenv("JEV_SUGGEST_MODEL", "some/model")
+    monkeypatch.setenv("JEV_KNOWN_ONLY", "0")
+    free = JevBotSettings.from_env()
+    assert free.suggest_model == "some/model" and not free.writer.known_only
 
 
 async def test_replies_through_a_new_jev_webhook_and_logs_the_reply(jev):
