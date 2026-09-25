@@ -11,7 +11,7 @@ import pytest
 from hollingsbot.jev.client import JevError
 from hollingsbot.jev.suggest import Suggestion
 from hollingsbot.jev.text import PUNCTUATION, words_in
-from hollingsbot.jev.writer import BLANK, ChatLine, JevWriter, Reply, WriterConfig
+from hollingsbot.jev.writer import BLANK, STOP, ChatLine, JevWriter, Reply, WriterConfig
 
 if TYPE_CHECKING:
     from hollingsbot.jev.client import Usage
@@ -68,8 +68,10 @@ class ScriptedJev:
                 answers[key] = {"type": "choice", "probabilities": {"pick": 1 - other, "other": other}}
             elif q["type"] == "choice":
                 opts = list(q["criteria"])
-                if wanted in opts:
-                    probs = {o: (0.9 if o == wanted else 0.1 / max(len(opts) - 1, 1)) for o in opts}
+                # With STOP on the menu, a Jev that has said everything picks it.
+                target = STOP if wanted is None and STOP in opts else wanted
+                if target in opts:
+                    probs = {o: (0.9 if o == target else 0.1 / max(len(opts) - 1, 1)) for o in opts}
                 else:
                     probs = {o: 1 / len(opts) for o in opts}
                 answers[key] = {"type": "choice", "probabilities": probs}
@@ -164,15 +166,18 @@ async def test_stops_when_the_reply_stops_making_sense():
     assert reply.stop_reason == "lost_thread"
 
 
+class FixedRng(random.Random):
+    """Every dice roll comes up ``value``."""
+
+    def __init__(self, value):
+        super().__init__(0)
+        self.value = value
+
+    def random(self):
+        return self.value
+
+
 def test_send_below_threshold_is_sampled_only_when_sampling():
-    class FixedRng(random.Random):
-        def __init__(self, value):
-            super().__init__(0)
-            self.value = value
-
-        def random(self):
-            return self.value
-
     def stop(send, draw, temperature, sense=0.9, n_words=5):
         config = WriterConfig(
             temperature=temperature, send_at=0.6, send_floor=0.3, send_power=2.0, sense_floor=0.3, min_words=0
@@ -187,6 +192,39 @@ def test_send_below_threshold_is_sampled_only_when_sampling():
     assert stop(0.5, draw=0.0, temperature=0) is None  # greedy never rolls the dice
     assert stop(0.1, draw=0.99, temperature=0.7, sense=0.1, n_words=3) == "lost_thread"
     assert stop(0.1, draw=0.99, temperature=0.7, sense=0.1, n_words=2) is None  # too short to judge
+
+
+def test_sample_stop_draws_send_like_a_word():
+    def stop(send, draw, temperature=0.7):
+        config = WriterConfig(temperature=temperature, stop="sample", min_words=0)
+        return JevWriter(ScriptedJev([]), config=config, vocab=VOCAB, rng=FixedRng(draw))._stop_reason(send, 0.9, 5)
+
+    # P(send)=0.3 at T=0.7 -> 0.3**(1/0.7) / (0.3**(1/0.7) + 0.7**(1/0.7)) = 0.23
+    assert stop(0.3, draw=0.2) == "sent" and stop(0.3, draw=0.3) is None
+    assert stop(0.1, draw=0.03) == "sent"  # no floor: even a low P(send) can end it
+    assert stop(0.7, draw=0.8) is None  # no ceiling: 0.7 -> 0.77, not a forced send
+    assert stop(0.5, draw=0.99, temperature=0) == "sent" and stop(0.49, draw=0.0, temperature=0) is None
+
+
+async def test_stop_choice_puts_stop_on_the_menu_and_ends_when_picked():
+    fake = ScriptedJev(["i", "like", "pizza"])
+    reply = await single_writer(fake, stop="choice", min_words=2).write(CHAT)
+    assert reply.text == "i like pizza" and reply.stop_reason == "chose_stop"
+    assert reply.steps[-1].word == STOP and reply.words[-1] == "pizza"
+    menus = [q["next"]["criteria"] for _, q in fake.requests]
+    assert [STOP in m for m in menus] == [False, False, True, True]  # offered from min_words on
+    assert not any("send" in q for _, q in fake.requests)  # no separate stop check
+    last = fake.requests[-1][1]
+    assert "is the message finished?" in last["next"]["instructions"]["question"]
+    fit = next(q for k, q in last.items() if k.startswith("fit") and "next" not in q["instructions"])
+    assert fit["instructions"] == {"text": "i like pizza", "question": "Is the end of `text` a natural place for Jev to stop and send the message?"}  # fmt: skip
+
+
+def test_stop_modes_are_checked_and_the_tournament_keeps_its_stop_check():
+    with pytest.raises(ValueError, match="stop mode"):
+        JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(stop="whenever"))
+    tournament = JevWriter(ScriptedJev([]), vocab=VOCAB, config=WriterConfig(vocab_size=5000, stop="choice"))
+    assert tournament.stop_mode == "threshold"
 
 
 async def test_min_words_keeps_typing_past_a_ready_reply():
@@ -362,14 +400,6 @@ async def test_only_the_first_page_carries_the_stop_check():
 
 
 def test_page_turn_is_sampled_with_jevs_probability():
-    class FixedRng(random.Random):
-        def __init__(self, value):
-            super().__init__(0)
-            self.value = value
-
-        def random(self):
-            return self.value
-
     def turns(other, draw, temperature=0.7, power=1.0):
         cfg = WriterConfig(temperature=temperature, page_power=power)
         return JevWriter(ScriptedJev([]), config=cfg, vocab=VOCAB, rng=FixedRng(draw))._turns_page(other)

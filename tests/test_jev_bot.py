@@ -341,6 +341,15 @@ def test_settings_from_env(monkeypatch):
     assert (s.writer.llm_pages, s.writer.own_page, s.writer.shuffle) == (3, True, False)
 
 
+def test_stop_mode_from_env(monkeypatch):
+    monkeypatch.setenv("JEV_STOP", " Choice ")
+    assert JevBotSettings.from_env().writer.stop == "choice"
+    monkeypatch.setenv("JEV_STOP", "whenever")  # a typo must not break every reply
+    assert JevBotSettings.from_env().writer.stop == "threshold"
+    monkeypatch.delenv("JEV_STOP")
+    assert JevBotSettings.from_env().writer.stop == "threshold"
+
+
 def test_paging_defaults_off_and_shuffle_on(monkeypatch):
     for var in ("JEV_LLM_PAGES", "JEV_OWN_PAGE", "JEV_SHUFFLE"):
         monkeypatch.delenv(var, raising=False)

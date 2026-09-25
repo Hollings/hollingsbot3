@@ -29,6 +29,8 @@ Config (env):
     JEV_SHUFFLE               0 = show the LLM's words in its own rank order (default 1: shuffled)
     JEV_FLUENCY_CHECK         0 to skip the per-option naturalness check (cheaper, more scrambled)
     JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
+    JEV_STOP                  how a reply ends: threshold (default: send when P(send) is high),
+                              sample (send sampled like a word), choice (STOP on the word menu)
     JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
                               set to a single space for Jev's natural one-word answers)
     JEV_TEMPERATURE / JEV_TOP_P   sampling (defaults 0.7 / 0.6, see WriterConfig)
@@ -53,6 +55,7 @@ from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Repl
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
+from hollingsbot.jev.writer import STOP_MODES
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
 
@@ -85,6 +88,16 @@ def _env_flag(name: str, default: bool) -> bool:
     if raw is None or not raw.strip():
         return default
     return raw.strip().lower() not in ("0", "false", "no", "off")
+
+
+def _env_stop_mode(default: str) -> str:
+    raw = os.getenv("JEV_STOP", "").strip().lower()
+    if not raw:
+        return default
+    if raw not in STOP_MODES:
+        _LOG.warning("JEV_STOP=%r is not one of %s; using %s", raw, ", ".join(STOP_MODES), default)
+        return default
+    return raw
 
 
 @dataclass(frozen=True)
@@ -121,6 +134,7 @@ class JevBotSettings:
             llm_pages=max(1, int(_env_float("JEV_LLM_PAGES", base.llm_pages))),
             own_page=_env_flag("JEV_OWN_PAGE", base.own_page),
             shuffle=_env_flag("JEV_SHUFFLE", base.shuffle),
+            stop=_env_stop_mode(base.stop),
         )
         return cls(
             channels=frozenset(parse_id_set(os.getenv("JEV_BOT_CHANNELS"))),
@@ -175,7 +189,8 @@ class JevBot:
         self._cleanups: set[asyncio.Task] = set()
         w = self.settings.writer
         _LOG.info(
-            "JevBot initialized (name=%s, channels=%s, suggest=%s, born=%d, known_only=%s, llm_pages=%d, own_page=%s)",
+            "JevBot initialized (name=%s, channels=%s, suggest=%s, born=%d, known_only=%s, llm_pages=%d, "
+            "own_page=%s, max_words=%d, stop=%s)",
             self.settings.name,
             sorted(self.whitelist_channels),
             self.settings.suggest_model or "off",
@@ -183,6 +198,8 @@ class JevBot:
             w.known_only,
             w.llm_pages,
             w.own_page,
+            w.max_words,
+            w.stop,
         )
 
     # ------------------------------------------------------------ coordinator API

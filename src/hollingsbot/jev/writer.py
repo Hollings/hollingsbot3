@@ -67,6 +67,11 @@ NEXT_WORD_Q = "Is `next` a natural next word right after `text`, in fluent Engli
 FIRST_WORD_Q = "Does `text` read as fluent, grammatical English so far? It may be unfinished."
 SENSE_Q = "Does `text` make sense as the start of a reply to the latest message in `chat`?"
 SEND_OPTIONS = {"send": "send the message as it is", "keep typing": "add more to it first"}
+STOP_MODES = ("threshold", "sample", "choice")  # see WriterConfig.stop
+# stop="choice": ending the message is an option in the word menu, like an LLM's end token.
+STOP = "(send)"
+STOP_DESCRIPTION = "{name} is done typing and sends the message as it is"
+STOP_FIT_Q = "Is the end of `text` a natural place for {name} to stop and send the message?"
 # Asked beside a page of suggestions when another page follows. Probed on 27 real states: P(other)
 # averaged 0.18 for the LLM's own menu and 0.33 for another chat's, higher for the wrong menu in
 # 25/27. A "none of these" option inside the word Choice itself stayed near 0.02 either way.
@@ -97,8 +102,15 @@ class WriterConfig:
     common_repeat_penalty: float = 0.5  # ...and per use of a common word within the last few words
     repeat_window: int = 6
     exempt_top: int = 150  # "common words": the vocabulary's first N (the, a, is, more...)
-    send_at: float = 0.6  # always send once Jev puts P(send) at least this high
-    send_floor: float = 0.2  # between floor and send_at, send with probability P(send)**send_power
+    # How the reply ends (from min_words on):
+    #   "threshold": a send-vs-keep-typing Choice; send when P(send) >= send_at, and between
+    #                send_floor and send_at with probability P(send)**send_power
+    #   "sample":    the same Choice, sampled like a word (temperature, no thresholds)
+    #   "choice":    STOP is an option in the word menu, scored and sampled with the words
+    #                (one-request modes only; the tournament keeps "threshold")
+    stop: str = "threshold"
+    send_at: float = 0.6
+    send_floor: float = 0.2
     send_power: float = 2.0  # (T > 0 only; mid-sentence P(send) sits below the floor)
     # Stop once the reply makes less sense than this. None = 0.2 for the big-vocabulary
     # tournament, off for the small vocabulary, whose replies read as half-nonsense even
@@ -148,7 +160,7 @@ class Reply:
     text: str = ""
     words: list[str] = field(default_factory=list)
     steps: list[Step] = field(default_factory=list)
-    # sent | lost_thread | gave_up | max_words | no_options, or "writing" if cut short
+    # sent | chose_stop | lost_thread | gave_up | max_words | no_options, or "writing" if cut short
     stop_reason: str = "writing"
     usage: Usage = field(default_factory=Usage)
     model: str = ""
@@ -188,6 +200,10 @@ class JevWriter:
             self.sense_floor = self.config.sense_floor
         else:
             self.sense_floor = 0.0 if self.one_request else 0.2
+        if self.config.stop not in STOP_MODES:
+            raise ValueError(f"unknown stop mode {self.config.stop!r}")
+        # STOP in the menu needs the menu in one request; the tournament keeps its stop check.
+        self.stop_mode = "threshold" if self.config.stop == "choice" and not self.one_request else self.config.stop
         self._reply_key = re.sub(r"\W+", "_", name.lower()).strip("_") + "_reply"
         style_line = self.config.style.replace("{name}", name).strip()
         self._style_line = style_line
@@ -197,6 +213,15 @@ class JevWriter:
             f"`{self._reply_key}` is {name}'s reply so far, and the blank ({BLANK}) marks the next word. "
             "Which word goes in the blank?"
         )
+        # With STOP on the menu, the blank is where the reply continues *if* it does (probed:
+        # this wording gave STOP up to 0.49 at a finished sentence, the plain one up to 0.29).
+        self._stop_blank_instructions = (
+            f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
+            f"`{self._reply_key}` is {name}'s reply so far. The blank ({BLANK}) is where it would continue, "
+            "if it continues: which word goes in the blank, or is the message finished?"
+        )
+        self._stop_description = STOP_DESCRIPTION.format(name=name)
+        self._stop_fit_question = STOP_FIT_Q.format(name=name)
         self._send_instructions = (
             f"{style}{name} has typed `text` so far as a reply to the latest message in `chat`. "
             f"What does {name} do now?"
@@ -268,12 +293,17 @@ class JevWriter:
                 if not pages:
                     stop_reason = "no_options"
                     break
-                # One request: the word itself, each option's fit, the stop check, and (when
-                # another page follows) whether Jev would rather type a word that isn't here.
+                stop_on_menu = self.stop_mode == "choice"
+                if stop_on_menu and len(words) >= cfg.min_words:
+                    pages = [(src, self._with_stop(opts)) for src, opts in pages]
+                # One request: the word itself, each option's fit, the stop check (unless STOP is
+                # on the menu), and (when another page follows) whether Jev would rather type a
+                # word that isn't here.
                 source, options = pages[0]
                 more = len(pages) > 1
-                answers = await self.client.ask(chat_state, self._single_questions(words, options, other=more), usage)
-                if words:
+                questions = self._single_questions(words, options, stop=not stop_on_menu, other=more)
+                answers = await self.client.ask(chat_state, questions, usage)
+                if words and not stop_on_menu:
                     send, sense = _probabilities(answers["send"]).get("send", 0.0), _noul(answers, "sense")
                     if reason := self._stop_reason(send, sense, len(words)):
                         stop_reason = reason
@@ -348,6 +378,9 @@ class JevWriter:
                     source=source,
                 )
             )
+            if word == STOP:
+                stop_reason = "chose_stop"
+                break
             if words and fluency[word] < cfg.give_up:
                 stop_reason = "gave_up"
                 break
@@ -362,14 +395,34 @@ class JevWriter:
 
     def _stop_reason(self, send: float, sense: float, n_words: int) -> str | None:
         cfg = self.config
-        if n_words >= cfg.min_words:
-            if send >= cfg.send_at:
-                return "sent"
-            if cfg.temperature > 0 and send >= cfg.send_floor and self.rng.random() < send**cfg.send_power:
-                return "sent"
+        if n_words >= cfg.min_words and self._sends(send):
+            return "sent"
         if n_words >= cfg.sense_from and sense < self.sense_floor:
             return "lost_thread"
         return None
+
+    def _sends(self, send: float) -> bool:
+        """Send now? "threshold": always from send_at, P(send)**send_power above the floor."""
+        cfg = self.config
+        if self.stop_mode == "sample":
+            return self._samples_send(send)
+        if send >= cfg.send_at:
+            return True
+        return cfg.temperature > 0 and send >= cfg.send_floor and self.rng.random() < send**cfg.send_power
+
+    def _samples_send(self, send: float) -> bool:
+        """send vs keep typing, sampled at the word temperature (T=0: the likelier one)."""
+        t = self.config.temperature
+        if t <= 0:
+            return send >= 0.5
+        w_send, w_keep = send ** (1 / t), (1 - send) ** (1 / t)
+        return w_send + w_keep > 0 and self.rng.random() < w_send / (w_send + w_keep)
+
+    def _with_stop(self, options: Sequence[str]) -> list[str]:
+        """``options`` plus STOP at a random position (its place in the list says nothing)."""
+        out = list(options)
+        out.insert(self.rng.randrange(len(out) + 1), STOP)
+        return out
 
     def _turns_page(self, other: float) -> bool:
         """Sampled like the send decision: P(other) is Jev's own odds that its word isn't here."""
@@ -448,7 +501,8 @@ class JevWriter:
         # with its blank travels in the word question's own instructions.
         questions = self._runoff_questions(words, options)
         blank = f"{join_words(words)} {BLANK}".strip()
-        questions["next"]["instructions"] = {self._reply_key: blank, "question": self._blank_instructions}
+        ask = self._stop_blank_instructions if STOP in options else self._blank_instructions
+        questions["next"]["instructions"] = {self._reply_key: blank, "question": ask}
         if other:
             questions["other"] = {
                 "type": "choice",
@@ -475,7 +529,7 @@ class JevWriter:
         }
 
     def _runoff_questions(self, words: Sequence[str], options: Sequence[str]) -> dict[str, dict[str, Any]]:
-        criteria = {w: PUNCTUATION.get(w) for w in options}
+        criteria = {w: self._stop_description if w == STOP else PUNCTUATION.get(w) for w in options}
         questions: dict[str, dict[str, Any]] = {
             "next": {"type": "choice", "instructions": self._blank_instructions, "criteria": criteria}
         }
@@ -483,7 +537,9 @@ class JevWriter:
             return questions
         text = join_words(words)
         for i, w in enumerate(options):
-            if words:
+            if w == STOP:  # STOP's "fit": is this a natural place to end?
+                instructions = {"text": text, "question": self._stop_fit_question}
+            elif words:
                 instructions = {"text": text, "next": w, "question": NEXT_WORD_Q}
             else:
                 instructions = {"text": w, "question": FIRST_WORD_Q}

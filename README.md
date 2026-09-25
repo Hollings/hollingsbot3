@@ -622,6 +622,7 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `JEV_SHUFFLE` - `0` = show the LLM's words in its rank order instead of shuffled (default: 1)
 - `JEV_FLUENCY_CHECK` - `0` skips the per-option naturalness check (~7x cheaper, more scrambled; default on)
 - `JEV_MIN_WORDS`, `JEV_MAX_WORDS` - Reply length bounds (defaults: 8, 40)
+- `JEV_STOP` - How a reply ends: `threshold` (default: sends once Jev's P(send) is high enough), `sample` (send vs keep typing sampled like a word), `choice` (STOP is an option on the word menu, competing with the words)
 - `JEV_STYLE` - How Jev writes, `{name}` = its name (default: "{name} writes long, chatty messages, a few sentences at a time."; a single space = none, which gives one-word answers)
 - `JEV_TEMPERATURE`, `JEV_TOP_P` - Sampling (defaults: 0.7, 0.6)
 - Uses `OPENROUTER_API_KEY`
