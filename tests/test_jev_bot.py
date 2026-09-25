@@ -197,9 +197,12 @@ def test_settings_from_env(monkeypatch):
     monkeypatch.setenv("JEV_CONTEXT_MESSAGES", "3")
     monkeypatch.setenv("JEV_DAILY_BUDGET_USD", "0.5")
     monkeypatch.setenv("JEV_TOP_P", "0.8")
+    monkeypatch.setenv("JEV_MIN_WORDS", "10")
+    monkeypatch.setenv("JEV_STYLE", "  Jev rambles.  ")
     s = JevBotSettings.from_env()
     assert s.channels == {CHANNEL, 7}
     assert (s.name, s.context_messages, s.daily_budget, s.writer.top_p) == ("Jevvy", 3, 0.5, 0.8)
+    assert (s.writer.min_words, s.writer.style) == (10, "Jev rambles.")
 
 
 def test_settings_default_to_no_channels(monkeypatch):

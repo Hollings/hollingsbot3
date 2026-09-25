@@ -70,12 +70,16 @@ class WriterConfig:
     send_at: float = 0.6  # always send once Jev puts P(send) at least this high
     send_floor: float = 0.2  # between floor and send_at, send with probability P(send)**send_power
     send_power: float = 2.0  # (T > 0 only; mid-sentence P(send) sits below the floor)
-    sense_floor: float = 0.3  # stop once the reply makes less sense than this...
+    sense_floor: float = 0.2  # stop once the reply makes less sense than this...
     sense_from: int = 3  # ...judged from this many words on (one word is too little to judge)
     give_up: float = 0.25  # stop if even the picked word is rated less natural than this
-    max_words: int = 25
+    min_words: int = 8  # never send before this many words (sense/give-up can still end it)
+    max_words: int = 40
     temperature: float = 0.7
     top_p: float = 0.6
+    # How Jev writes, told to both the word and the send questions ("{name}" = its name).
+    # This line is what makes replies longer: without it Jev answers "pizza" and sends.
+    style: str = "{name} writes long, chatty messages, a few sentences at a time."
 
 
 @dataclass
@@ -125,13 +129,16 @@ class JevWriter:
         self.common = frozenset(self.vocab[: self.config.exempt_top])
         self.rng = rng or random.Random()
         self._reply_key = re.sub(r"\W+", "_", name.lower()).strip("_") + "_reply"
+        style_line = self.config.style.replace("{name}", name).strip()
+        style = f"{style_line} " if style_line else ""
         self._blank_instructions = (
-            f"{name} is a member of this Discord chat and is writing a reply to the latest message. "
+            f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
             f"`{self._reply_key}` is {name}'s reply so far, and the blank ({BLANK}) marks the next word. "
             "Which word goes in the blank?"
         )
         self._send_instructions = (
-            f"{name} has typed `text` so far as a reply to the latest message in `chat`. What does {name} do now?"
+            f"{style}{name} has typed `text` so far as a reply to the latest message in `chat`. "
+            f"What does {name} do now?"
         )
 
     # ------------------------------------------------------------------ public
@@ -215,10 +222,11 @@ class JevWriter:
 
     def _stop_reason(self, send: float, sense: float, n_words: int) -> str | None:
         cfg = self.config
-        if send >= cfg.send_at:
-            return "sent"
-        if cfg.temperature > 0 and send >= cfg.send_floor and self.rng.random() < send**cfg.send_power:
-            return "sent"
+        if n_words >= cfg.min_words:
+            if send >= cfg.send_at:
+                return "sent"
+            if cfg.temperature > 0 and send >= cfg.send_floor and self.rng.random() < send**cfg.send_power:
+                return "sent"
         if n_words >= cfg.sense_from and sense < cfg.sense_floor:
             return "lost_thread"
         return None

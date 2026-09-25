@@ -24,6 +24,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from hollingsbot.jev import ChatLine, DecisionsClient, JevWriter, WriterConfig
 
 SAMPLES = {
+    # the first things people actually said to Jev in #wendy-dev
+    "hi": [ChatLine("Hollings", "Hi")],
+    "whatup": [ChatLine("Hollings", "Hi"), ChatLine("Jev", "hi bro"), ChatLine("Hollings", "What up dog")],
     "food": [ChatLine("Hollings", "hey Jev, what's your favorite food?")],
     "capital": [ChatLine("Hollings", "Jev what is the capital of France?")],
     "sentient": [ChatLine("Hollings", "jev are you sentient? be honest")],
@@ -48,6 +51,7 @@ async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int 
     client = DecisionsClient()
     writer = JevWriter(client, config=config, rng=random.Random(seed))
     total = 0.0
+    words = 0
     try:
         for label, chat in chats.items():
             print(f"\n[{label}] {chat[-1].speaker}: {chat[-1].text}")
@@ -58,6 +62,7 @@ async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int 
             reply = await writer.write(chat, on_word=show if sys.stdout.isatty() else None)
             u = reply.usage
             total += u.cost
+            words += len(reply.words)
             print(f"\r  Jev: {reply.text}")
             print(
                 f"  ({len(reply.words)} words, stop={reply.stop_reason}, {u.calls} calls, {u.seconds:.1f}s, ${u.cost:.4f})"
@@ -73,7 +78,8 @@ async def run(chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int 
     finally:
         await client.aclose()
     if len(chats) > 1:
-        print(f"\ntotal ${total:.4f}")
+        n = len(chats)
+        print(f"\ntotal ${total:.4f} | mean {words / n:.1f} words, ${total / n:.4f} per reply")
 
 
 def main() -> None:
@@ -83,6 +89,7 @@ def main() -> None:
     ap.add_argument("--as", dest="speaker", default="Hollings", help="who sends the message")
     ap.add_argument("--chat", action="append", default=[], help='earlier message, "Name: text" (repeatable)')
     ap.add_argument("--samples", action="store_true", help="run the sample prompt set")
+    ap.add_argument("--only", help=f"comma-separated subset of samples: {','.join(SAMPLES)}")
     ap.add_argument("--seed", type=int)
     ap.add_argument("--trace", action="store_true", help="print each step's scores")
     for f in dataclasses.fields(WriterConfig):
@@ -91,7 +98,7 @@ def main() -> None:
 
     config = WriterConfig(**{f.name: getattr(args, f.name) for f in dataclasses.fields(WriterConfig)})
     if args.samples:
-        chats = SAMPLES
+        chats = {k: v for k, v in SAMPLES.items() if not args.only or k in args.only.split(",")}
     elif args.message:
         earlier = [ChatLine(*(part.strip() for part in line.split(":", 1))) for line in args.chat]
         chats = {"message": [*earlier, ChatLine(args.speaker, args.message)]}

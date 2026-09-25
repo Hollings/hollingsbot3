@@ -10,7 +10,9 @@ Config (env):
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
-    JEV_MAX_WORDS             longest reply (default 25)
+    JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
+    JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
+                              set to a single space for Jev's natural one-word answers)
     JEV_TEMPERATURE / JEV_TOP_P   sampling (defaults 0.7 / 0.6, see WriterConfig)
 """
 
@@ -71,9 +73,11 @@ class JevBotSettings:
         base = WriterConfig()
         writer = dataclasses.replace(
             base,
+            min_words=int(_env_float("JEV_MIN_WORDS", base.min_words)),
             max_words=int(_env_float("JEV_MAX_WORDS", base.max_words)),
             temperature=_env_float("JEV_TEMPERATURE", base.temperature),
             top_p=_env_float("JEV_TOP_P", base.top_p),
+            style=os.getenv("JEV_STYLE", base.style).strip(),
         )
         return cls(
             channels=frozenset(parse_id_set(os.getenv("JEV_BOT_CHANNELS"))),

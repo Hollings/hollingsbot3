@@ -69,8 +69,15 @@ class ScriptedJev:
 
 
 def writer_for(fake, **cfg) -> JevWriter:
-    config = WriterConfig(**{"bucket_size": 4, "vocab_size": len(VOCAB), "temperature": 0, "exempt_top": 3, **cfg})
-    return JevWriter(fake, config=config, vocab=VOCAB, rng=random.Random(0))
+    # Mechanics tests: greedy, no length floor, no style line (the defaults are tuned for Discord).
+    base = {"bucket_size": 4, "vocab_size": len(VOCAB), "temperature": 0, "exempt_top": 3, "min_words": 0, "style": ""}
+    return JevWriter(fake, config=WriterConfig(**{**base, **cfg}), vocab=VOCAB, rng=random.Random(0))
+
+
+def test_default_style_names_the_bot():
+    writer = JevWriter(ScriptedJev([]), name="Jevvy", vocab=VOCAB)
+    assert "Jevvy writes long, chatty messages" in writer._blank_instructions
+    assert "{name}" not in writer._send_instructions
 
 
 async def test_writes_the_wanted_words_then_sends():
@@ -157,7 +164,9 @@ def test_send_below_threshold_is_sampled_only_when_sampling():
             return self.value
 
     def stop(send, draw, temperature, sense=0.9, n_words=5):
-        config = WriterConfig(temperature=temperature, send_at=0.6, send_floor=0.3, send_power=2.0, sense_floor=0.3)
+        config = WriterConfig(
+            temperature=temperature, send_at=0.6, send_floor=0.3, send_power=2.0, sense_floor=0.3, min_words=0
+        )
         writer = JevWriter(ScriptedJev([]), config=config, vocab=VOCAB, rng=FixedRng(draw))
         return writer._stop_reason(send, sense, n_words)
 
@@ -168,6 +177,21 @@ def test_send_below_threshold_is_sampled_only_when_sampling():
     assert stop(0.5, draw=0.0, temperature=0) is None  # greedy never rolls the dice
     assert stop(0.1, draw=0.99, temperature=0.7, sense=0.1, n_words=3) == "lost_thread"
     assert stop(0.1, draw=0.99, temperature=0.7, sense=0.1, n_words=2) is None  # too short to judge
+
+
+async def test_min_words_keeps_typing_past_a_ready_reply():
+    fake = ScriptedJev(["i", "like", "pizza", "you"], send_mid=0.95)  # Jev would send after every word
+    reply = await writer_for(fake, min_words=3).write(CHAT)
+    assert reply.words == ["i", "like", "pizza"]
+    assert reply.stop_reason == "sent"
+
+
+async def test_style_reaches_word_and_send_questions():
+    fake = ScriptedJev(["i", "like"])
+    await writer_for(fake, style="Jev writes long, chatty messages.").write(CHAT)
+    buckets, stop = fake.requests[0][1], next(q for _, q in fake.requests if "send" in q)
+    assert "Jev writes long, chatty messages." in buckets["b0"]["instructions"]
+    assert "Jev writes long, chatty messages." in stop["send"]["instructions"]["question"]
 
 
 async def test_on_word_sees_the_text_grow():

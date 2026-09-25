@@ -28,10 +28,14 @@ Per word, two rounds of requests (~0.5 s each):
    next word right after `text`?* Score = runoff probability x fluency^2 x a
    repetition penalty, then temperature 0.7 + nucleus 0.6 sampling.
 
-The reply ends when P(send) >= 0.6, or with probability P(send)^2 when it is
-between 0.2 and 0.6 (Jev's calibrated stop probability, sampled like an LLM's
-end token); when the reply stops making sense (sense < 0.3, from word 3); when
-even the picked word is rated unnatural (< 0.25); or at 25 words.
+Both questions also carry a style line, by default *"Jev writes long, chatty
+messages, a few sentences at a time."* (see Length below).
+
+From word 8 on, the reply ends when P(send) >= 0.6, or with probability
+P(send)^2 when it is between 0.2 and 0.6 (Jev's calibrated stop probability,
+sampled like an LLM's end token). At any length it ends when the reply stops
+making sense (sense < 0.2, from word 3), when even the picked word is rated
+unnatural (< 0.25), or at 40 words.
 
 Code-side decoding rules, the same knobs any LLM sampler has: no word twice in
 a row, no repeated three-word run, no punctuation first or twice in a row, and a
@@ -39,10 +43,30 @@ repetition penalty (content words x0.3 per earlier use; common words x0.5 per
 use in the last 6 words).
 
 Cost: billed per input token ($0.042/M), and the 5000-word bucket request is
-~35k tokens, so about $0.0017 per word. Short answers cost $0.003, a typical
-reply ~$0.013, the 25-word cap ~$0.045. `jev_replies` logs every reply with its
-cost and per-word trace; `JEV_DAILY_BUDGET_USD` stops Jev for the rest of the
-UTC day (it reacts with a zzz instead).
+~35k tokens, so about $0.0017 per word, i.e. cost is linear in reply length.
+With the defaults a reply averages ~20 words and ~$0.035; the 40-word cap is
+~$0.07. `jev_replies` logs every reply with its cost and per-word trace;
+`JEV_DAILY_BUDGET_USD` stops Jev for the rest of the UTC day (it reacts with a
+zzz instead).
+
+## Length
+
+Left to itself Jev answers the question and sends: the first live replies were
+"hi bro", "hey dog", "pizza" (1.7 words, $0.004). Levers compared on the same 8
+prompts (seed 3, cap 50):
+
+| config | mean words | $/reply | effect |
+|---|---|---|---|
+| none | 7.2 | 0.014 | "hi", "pizza", "yes" |
+| min 12 words | 15.5 | 0.028 | pads after the answer: "pizza is amazing really incredibly best ever literally world's earth universe planet" |
+| stricter send (0.85 / floor 0.4 / power 3) | 10.9 | 0.020 | short answers stay short, rambles get longer |
+| style line | 16.9 | 0.031 | "pizza is my favorite food because it's delicious. especially cheese" |
+| style + min 10 | 24.8 | 0.044 | longest; rambles hit the cap |
+
+The style line works by changing what Jev says (reasons, follow-ups), not just
+when it stops. Across seeds it varied 8-17 words because the sense check cut
+drifting replies at 0.3; the shipped default (style + min 8 + sense 0.2, cap
+40) measured 17.0 and 21.5 words on two seeds.
 
 ## The bake-off (2026-09-25)
 
