@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from collections.abc import Sequence
 from typing import Any, TypedDict, Union
 
@@ -13,6 +14,18 @@ from .base import TextGeneratorAPI
 from .client_cache import get_client
 
 _log = logging.getLogger(__name__)
+
+# Model families that still honour sampling parameters: Claude 3 and the 4.0 /
+# 4.1 / 4.5 / 4.6 releases (dated snapshots included). Opus 4.7 and every model
+# since (Opus 4.8 / 5 / 5.5, Sonnet 5, Fable) answer ``temperature`` with a 400,
+# so anything this doesn't match -- including models released after it was
+# written -- is sent no temperature at all.
+_TEMPERATURE_MODELS = re.compile(r"^claude-(?:3-.+|(?:opus|sonnet|haiku)-4(?:-[0156])?(?:-\d{8})?)$")
+
+
+def supports_temperature(model: str) -> bool:
+    """Return whether *model* still accepts the ``temperature`` request parameter."""
+    return _TEMPERATURE_MODELS.match(model) is not None
 
 
 class _Message(TypedDict):
@@ -54,7 +67,7 @@ class AnthropicTextGenerator(TextGeneratorAPI):
     async def generate(
         self,
         prompt: Union[str, Sequence[_Message]],
-        temperature: float = 1.0,
+        temperature: float | None = None,
     ) -> str:
         """Return Claude's reply for *prompt* as a plain string.
 
@@ -62,6 +75,10 @@ class AnthropicTextGenerator(TextGeneratorAPI):
         Content can be either a string or a list of content blocks (for images).
         Any messages with role "system" are moved to the top‑level "system"
         parameter as required by the Anthropic Messages API.
+
+        ``temperature`` is optional: left as ``None`` the request carries none
+        and the API default applies. A value is sent only when the model still
+        accepts one (see :func:`supports_temperature`) and is dropped otherwise.
         """
         # Normalise the prompt into a list of message dicts.
         if isinstance(prompt, str):
@@ -129,14 +146,21 @@ class AnthropicTextGenerator(TextGeneratorAPI):
 
         client = self._get_client()
 
-        async def _call_sdk(msgs: Sequence[dict[str, Any]], system: str | None, temp: float) -> str:
+        async def _call_sdk(msgs: Sequence[dict[str, Any]], system: str | None, temp: float | None) -> str:
             max_tokens = int(os.getenv("ANTHROPIC_MAX_TOKENS", "16384"))
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_tokens,
                 "messages": msgs,
-                "temperature": temp,
             }
+            if temp is not None:
+                if supports_temperature(self.model):
+                    # anthropic 1.x removed temperature from messages.create()
+                    # (passing it is a TypeError), but the API still honours it
+                    # on these models, so it rides in the raw request body.
+                    kwargs["extra_body"] = {"temperature": temp}
+                else:
+                    _log.debug("Dropping temperature=%s: %s rejects sampling parameters", temp, self.model)
             if system:
                 # Use prompt caching for system prompt (90% cheaper on cache hits)
                 kwargs["system"] = [

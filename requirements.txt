@@ -9,7 +9,7 @@ pytest-asyncio
 
 pillow
 watchfiles
-anthropic
+anthropic>=1.8,<2
 openai
 httpx
 cairosvg

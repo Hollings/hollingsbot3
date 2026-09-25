@@ -2,11 +2,71 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 from pathlib import Path
+from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import anthropic
+import httpx2
 import pytest
+
+
+class FakeMessagesAPI:
+    """Scripted stand-in for the Anthropic Messages endpoint.
+
+    Tests talk to it through a real ``AsyncAnthropic`` client, so the installed
+    SDK's method signatures and request serialisation are exercised: a keyword
+    the SDK no longer accepts fails here exactly as it does in production,
+    which an ``AsyncMock`` on ``messages.create`` (accepting anything) never can.
+    """
+
+    def __init__(self) -> None:
+        self.reply = "ok"
+        self.status = 200
+        self.requests: list[dict[str, Any]] = []
+        self._client: anthropic.AsyncAnthropic | None = None
+
+    def _handle(self, request: httpx2.Request) -> httpx2.Response:
+        body = json.loads(request.content)
+        self.requests.append(body)
+        if self.status != 200:
+            return httpx2.Response(
+                self.status, json={"type": "error", "error": {"type": "api_error", "message": "scripted failure"}}
+            )
+        return httpx2.Response(
+            200,
+            json={
+                "id": "msg_fake",
+                "type": "message",
+                "role": "assistant",
+                "model": body["model"],
+                "content": [{"type": "text", "text": self.reply}],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    def client(self) -> anthropic.AsyncAnthropic:
+        if self._client is None:
+            self._client = anthropic.AsyncAnthropic(
+                api_key="test-key",
+                max_retries=0,
+                http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(self._handle)),
+            )
+        return self._client
+
+
+@pytest.fixture
+def fake_anthropic(monkeypatch):
+    """Route every ``AnthropicTextGenerator`` through a :class:`FakeMessagesAPI`."""
+    from hollingsbot.text_generators import anthropic as anthropic_generator
+
+    fake = FakeMessagesAPI()
+    monkeypatch.setattr(anthropic_generator, "get_client", lambda _name, _factory: fake.client())
+    return fake
 
 
 @pytest.fixture

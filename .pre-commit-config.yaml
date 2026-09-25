@@ -37,12 +37,15 @@ repos:
       - id: ruff-format
         types_or: [python, pyi]
 
-  # Run pytest on changed test files
+  # Run pytest on changed test files. Uses the repo's .venv when there is one:
+  # a bare `pytest` resolves to whatever global Python is on PATH, whose SDK
+  # versions can differ from the pinned ones (an anthropic 0.x global hid the
+  # 1.x `temperature` TypeError that broke every Claude call in prod).
   - repo: local
     hooks:
       - id: pytest
         name: pytest
-        entry: bash -c 'PYTHONPATH=src pytest tests/ -x -q --tb=short'
+        entry: bash -c 'PY=.venv/Scripts/python.exe; [ -x "$PY" ] || PY=.venv/bin/python; [ -x "$PY" ] || PY=python; PYTHONPATH=src "$PY" -m pytest tests/ -x -q --tb=short'
         language: system
         pass_filenames: false
         always_run: true
@@ -78,7 +81,7 @@ repos:
 
       - id: ci-test
         name: CI tests (pytest)
-        entry: bash -c 'PYTHONPATH=src pytest tests/ -v --tb=short'
+        entry: bash -c 'PY=.venv/Scripts/python.exe; [ -x "$PY" ] || PY=.venv/bin/python; [ -x "$PY" ] || PY=python; PYTHONPATH=src "$PY" -m pytest tests/ -v --tb=short'
         language: system
         pass_filenames: false
         always_run: true
