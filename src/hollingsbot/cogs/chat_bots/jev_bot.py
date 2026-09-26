@@ -11,6 +11,11 @@ through a "Jev" webhook. Someone speaking first cancels it unposted.
 Jev is born knowing only the most common words and learns every word a human
 says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
 
+Beyond its own channels, `!spawn jev [N]` brings Jev into any channel: it answers
+the chat there at once, then every human message, until it has posted N replies
+(the first included) and leaves like a temp bot. `!despawn jev` sends it away
+early. Visits are kept in the DB (hollingsbot.jev.spawns) across restarts.
+
 Config (env):
     JEV_BOT_CHANNELS          comma-separated channel IDs Jev answers in (every human message)
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
@@ -51,9 +56,11 @@ from typing import TYPE_CHECKING, Any
 import discord
 
 from hollingsbot.cogs import chat_utils
+from hollingsbot.cogs.chat_bots.temp_bot.names import departure_message
 from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Reply, WriterConfig
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
+from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 from hollingsbot.jev.writer import STOP_MODES
 from hollingsbot.settings import parse_id_set
@@ -73,6 +80,10 @@ CUT_OFF_MARK = " \u2014"  # em dash: the reply broke off mid-way (an API error)
 
 OVER_BUDGET_REACTION = "\N{SLEEPING SYMBOL}"
 ERROR_REACTION = "\N{WARNING SIGN}"
+SPAWNED_REACTION = "\N{WHITE HEAVY CHECK MARK}"  # spawned into a channel with nothing to answer yet
+
+SPAWN_REPLIES_DEFAULT = 10
+SPAWN_REPLIES_MAX = 20  # the same cap as a temp bot's `!spawn`
 
 
 def _env_float(name: str, default: float) -> float:
@@ -171,7 +182,7 @@ def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
 
 
 class JevBot:
-    """Answers every human message in its channels, via the chat coordinator."""
+    """Answers every human message in its channels (and wherever it's spawned), via the chat coordinator."""
 
     def __init__(
         self, bot: commands.Bot, coordinator: Any, typing_tracker: Any, settings: JevBotSettings | None = None
@@ -183,6 +194,8 @@ class JevBot:
         self.whitelist_channels: set[int] = set(self.settings.channels)
         self.ledger = JevLedger()
         self.lexicon = Lexicon()
+        self.spawns = JevSpawns()
+        self._spawned: dict[int, int] | None = None  # channel -> replies left; loaded on first use
         self._writer: JevWriter | None = None
         self._webhooks: dict[int, discord.Webhook | None] = {}
         self._active: dict[int, asyncio.Task] = {}
@@ -205,7 +218,7 @@ class JevBot:
     # ------------------------------------------------------------ coordinator API
 
     def claims_channel(self, channel_id: int) -> bool:
-        return channel_id in self.whitelist_channels
+        return self._answers_in(channel_id)
 
     async def receive_message(self, message: discord.Message, history: list[ConversationTurn]) -> dict | None:
         if not self._should_respond(message):
@@ -214,23 +227,38 @@ class JevBot:
         if not history or history[-1].message_id != message.id:
             _LOG.warning("JevBot: latest history turn is not message %s; skipping", message.id)
             return None
-
-        spent = await asyncio.to_thread(self.ledger.spent_today)
-        if spent >= self.settings.daily_budget:
-            _LOG.info("JevBot over daily budget ($%.4f >= $%.2f)", spent, self.settings.daily_budget)
-            with contextlib.suppress(discord.HTTPException):
-                await message.add_reaction(OVER_BUDGET_REACTION)
+        if await self._over_budget(message):
             return None
+        return await self._answer(message, chat_lines(history, self.settings.context_messages))
 
-        chat = chat_lines(history, self.settings.context_messages)
-        await self._cancel_generation(message.channel.id)
+    async def _answer(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
+        """Reply to ``chat`` in ``message``'s channel, replacing a reply already under way there.
+
+        Returns the posted reply (None if nothing was posted); a newer message cancels it.
+        """
+        channel = message.channel
+        await self._cancel_generation(channel.id)
         task = asyncio.create_task(self._write_and_send(message, chat))
-        self._active[message.channel.id] = task
+        self._active[channel.id] = task
         try:
-            return await task
+            result = await task
         finally:
-            if self._active.get(message.channel.id) is task:
-                self._active.pop(message.channel.id, None)
+            if self._active.get(channel.id) is task:
+                self._active.pop(channel.id, None)
+        if result is not None:
+            # Shielded: a message arriving right after the post must not leave the count half-done.
+            await asyncio.shield(self._count_reply(channel))
+        return result
+
+    async def _over_budget(self, message: discord.Message) -> bool:
+        """Past today's budget: react instead of replying."""
+        spent = await asyncio.to_thread(self.ledger.spent_today)
+        if spent < self.settings.daily_budget:
+            return False
+        _LOG.info("JevBot over daily budget ($%.4f >= $%.2f)", spent, self.settings.daily_budget)
+        with contextlib.suppress(discord.HTTPException):
+            await message.add_reaction(OVER_BUDGET_REACTION)
+        return True
 
     async def _cancel_generation(self, channel_id: int) -> None:
         task = self._active.pop(channel_id, None)
@@ -252,10 +280,96 @@ class JevBot:
         if new:
             _LOG.info("Jev learned %s from %s", new, speaker)
 
+    # ------------------------------------------------------------------ spawning
+
+    @property
+    def spawned(self) -> dict[int, int]:
+        """Channels Jev was spawned into -> replies it has left there (read from the DB once)."""
+        if self._spawned is None:
+            self._spawned = self.spawns.active()
+            if self._spawned:
+                _LOG.info("Jev is still visiting %s (channel: replies left)", self._spawned)
+        return self._spawned
+
+    async def spawn(self, ctx: commands.Context, replies: int) -> None:
+        """`!spawn jev N`: answer in this channel, starting now, until Jev has posted ``replies`` replies."""
+        channel, name = ctx.channel, self.settings.name
+        if not isinstance(channel, discord.TextChannel):
+            await ctx.send("This command only works in text channels.")
+            return
+        if not 1 <= replies <= SPAWN_REPLIES_MAX:
+            await ctx.send(f"**{name}** can stay for 1 to {SPAWN_REPLIES_MAX} replies.")
+            return
+        if channel.id in self.whitelist_channels:
+            await ctx.send(f"**{name}** already lives in this channel.")
+            return
+        visiting = channel.id in self.spawned
+        await asyncio.to_thread(self.spawns.start, channel.id, replies, by=get_display_name(ctx.author))
+        self.spawned[channel.id] = replies
+        _LOG.info("Jev spawned in %s by %s for %d replies", channel.id, ctx.author, replies)
+        if visiting:
+            await ctx.send(f"**{name}** is already here; it has {replies} replies left now.")
+            return
+        await self._join(ctx.message)
+
+    async def despawn(self, channel: discord.abc.Messageable) -> bool:
+        """`!despawn jev`: end the visit now, dropping any reply under way; False if Jev isn't visiting."""
+        if channel.id not in self.spawned:
+            return False
+        await self._cancel_generation(channel.id)
+        await self._leave(channel, announce=False)
+        return True
+
+    async def _join(self, message: discord.Message) -> None:
+        """Jev's first reply after being spawned (by ``message``): to whatever was being said."""
+        channel = message.channel
+        history = await self.coordinator.recent_history(channel)
+        if not history:
+            with contextlib.suppress(discord.HTTPException):
+                await message.add_reaction(SPAWNED_REACTION)
+            return
+        if await self._over_budget(message):
+            return
+        answer = asyncio.ensure_future(self._answer(message, chat_lines(history, self.settings.context_messages)))
+        try:
+            await asyncio.wait({answer})
+        except asyncio.CancelledError:
+            answer.cancel()
+            raise
+        if answer.cancelled():
+            return  # someone spoke before it was done: Jev answers them instead
+        result = answer.result()
+        if result is not None:  # the coordinator only records replies to messages it handed out
+            await self.coordinator._add_response_to_history(
+                channel.id, result["message_id"], result["text"], result["webhook_id"], result["bot_name"]
+            )
+
+    async def _count_reply(self, channel: discord.abc.Messageable) -> None:
+        """A reply posted where Jev was spawned uses one up; after the last one, Jev leaves."""
+        if channel.id not in self.spawned:
+            return
+        left = await asyncio.to_thread(self.spawns.use_reply, channel.id)
+        if left:
+            self.spawned[channel.id] = left
+        else:
+            await self._leave(channel, announce=True)
+
+    async def _leave(self, channel: discord.abc.Messageable, *, announce: bool) -> None:
+        self.spawned.pop(channel.id, None)
+        await asyncio.to_thread(self.spawns.end, channel.id)
+        _LOG.info("Jev left %s", channel.id)
+        if announce:
+            webhook = await self._webhook_for(channel)
+            with contextlib.suppress(discord.HTTPException):
+                await self._post(channel, webhook, departure_message(self.settings.name))
+
     # ------------------------------------------------------------------ gating
 
+    def _answers_in(self, channel_id: int) -> bool:
+        return channel_id in self.whitelist_channels or channel_id in self.spawned
+
     def _should_respond(self, message: discord.Message) -> bool:
-        if message.channel.id not in self.whitelist_channels:
+        if not self._answers_in(message.channel.id):
             return False
         # Humans only: answering bots or webhooks (including itself) is how loops start.
         if message.author.bot or message.webhook_id is not None:

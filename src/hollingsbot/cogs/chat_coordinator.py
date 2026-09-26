@@ -155,6 +155,15 @@ class ChatCoordinator(commands.Cog):
             self._history_locks[channel_id] = lock
         return lock
 
+    async def recent_history(self, channel: discord.abc.Messageable) -> list[ConversationTurn]:
+        """A copy of the channel's history, backfilled from Discord first if nothing has been said here yet.
+
+        For a bot that speaks unprompted (Jev's first reply when it's spawned).
+        """
+        await self._ensure_channel_warm(channel)
+        async with self._lock_for_channel(channel.id):
+            return list(self._history_for_channel(channel.id))
+
     def _processing_lock_for_channel(self, channel_id: int) -> asyncio.Lock:
         """Get or create message processing lock for a channel."""
         lock = self._processing_locks.get(channel_id)

@@ -18,9 +18,11 @@ from hollingsbot.cogs.jev_commands import describe
 from hollingsbot.jev.client import JevError, Usage
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon, LexiconSummary
+from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.writer import ChatLine, Reply, WriterConfig
 
 CHANNEL = 1473033550805598253
+AWAY = 1553193310439608371  # a channel outside JEV_BOT_CHANNELS, where `!spawn jev` brings it
 
 
 class FakeWriter:
@@ -114,12 +116,14 @@ def turn(message, name="Hollings"):
 def jev(temp_db, mock_bot):
     coordinator = MagicMock()
     coordinator._add_response_to_history = AsyncMock()
+    coordinator.recent_history = AsyncMock(return_value=[])
     typing_tracker = MagicMock()
     typing_tracker.wait_until_quiet = AsyncMock()
     settings = JevBotSettings(channels=frozenset({CHANNEL}), daily_budget=1.0)
     bot = JevBot(mock_bot, coordinator, typing_tracker, settings)
     bot.ledger = JevLedger(temp_db)
     bot.lexicon = Lexicon(temp_db)
+    bot.spawns = JevSpawns(temp_db)
     return bot
 
 
@@ -362,6 +366,128 @@ def test_settings_default_to_no_channels(monkeypatch):
     assert JevBotSettings.from_env().channels == frozenset()
 
 
+# ---------------------------------------------------------------- !spawn jev
+
+
+def away_channel(webhook):
+    channel = make_channel(webhook)
+    channel.id = AWAY
+    return channel
+
+
+def make_ctx(channel, content="!spawn jev 3"):
+    ctx = MagicMock()
+    ctx.channel = channel
+    ctx.message = make_message(channel, content, mid=77)
+    ctx.author = ctx.message.author
+    ctx.send = AsyncMock()
+    return ctx
+
+
+async def test_spawned_jev_answers_the_chat_then_every_message_until_its_replies_run_out(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    earlier = make_message(channel, "anyone want to see my kidney stone", mid=1)
+    jev.coordinator.recent_history = AsyncMock(return_value=[turn(earlier)])
+    jev._writer = FakeWriter(["yes"])
+    assert not jev.claims_channel(AWAY)
+
+    await jev.spawn(make_ctx(channel), 2)
+
+    # First reply, at once: to what was being said before the spawn.
+    assert jev._writer.chats[0][-1] == ChatLine("Hollings", "anyone want to see my kidney stone")
+    webhook.send.assert_awaited_once_with("yes", username="Jev", wait=True)
+    jev.coordinator._add_response_to_history.assert_awaited_once_with(AWAY, 999, "yes", 555, "Jev")
+    assert jev.claims_channel(AWAY) and jev.spawned == {AWAY: 1}
+
+    message = make_message(channel, "jev you there", mid=2)
+    assert await jev.receive_message(message, [turn(message)]) is not None
+    # That was the last reply: Jev says goodbye like a temp bot and stops answering.
+    goodbye = webhook.send.await_args_list[-1]
+    assert goodbye.args[0].startswith("*[Jev ") and goodbye.kwargs["username"] == "Jev"
+    assert jev.spawned == {} and jev.spawns.active() == {} and not jev.claims_channel(AWAY)
+    later = make_message(channel, "jev?", mid=3)
+    assert await jev.receive_message(later, [turn(later)]) is None
+
+
+async def test_spawned_into_a_quiet_channel_waits_for_someone_to_talk(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hi"])
+    ctx = make_ctx(channel)
+
+    await jev.spawn(ctx, 3)
+
+    ctx.message.add_reaction.assert_awaited_once_with(jev_bot_mod.SPAWNED_REACTION)
+    webhook.send.assert_not_awaited()
+    assert jev.spawned == {AWAY: 3}
+
+
+async def test_a_first_reply_cut_off_by_someone_talking_uses_no_reply(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    earlier = make_message(channel, "so anyway", mid=1)
+    jev.coordinator.recent_history = AsyncMock(return_value=[turn(earlier)])
+    jev._writer = FakeWriter(["knock", "knock"], hang_after=1)
+
+    spawning = asyncio.create_task(jev.spawn(make_ctx(channel), 3))
+    while not jev._writer.chats:
+        await asyncio.sleep(0)
+    await jev._cancel_generation(AWAY)  # what the coordinator does when a human speaks
+    await spawning  # the command itself finishes quietly
+    await asyncio.gather(*list(jev._cleanups))
+
+    webhook.send.assert_not_awaited()
+    jev.coordinator._add_response_to_history.assert_not_awaited()
+    assert jev.spawned == {AWAY: 3}
+
+
+async def test_spawn_refuses_jevs_own_channels_and_bad_counts(jev):
+    webhook, _ = make_webhook()
+    ctx = make_ctx(make_channel(webhook))  # CHANNEL is in JEV_BOT_CHANNELS
+    await jev.spawn(ctx, 5)
+    assert "already lives in this channel" in ctx.send.await_args.args[0]
+    for bad in (0, jev_bot_mod.SPAWN_REPLIES_MAX + 1):
+        ctx = make_ctx(away_channel(webhook))
+        await jev.spawn(ctx, bad)
+        assert "1 to 20 replies" in ctx.send.await_args.args[0]
+    assert jev.spawned == {} and jev.spawns.active() == {}
+
+
+async def test_spawning_again_resets_the_count_without_a_new_reply(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hi"])
+    await jev.spawn(make_ctx(channel), 3)
+    jev.coordinator.recent_history = AsyncMock(return_value=[turn(make_message(channel, "hey", mid=1))])
+    ctx = make_ctx(channel)
+
+    await jev.spawn(ctx, 7)
+
+    assert "7 replies left" in ctx.send.await_args.args[0]
+    assert jev.spawned == {AWAY: 7} and jev.spawns.active() == {AWAY: 7}
+    assert jev._writer.chats == []
+
+
+async def test_despawn_ends_the_visit_at_once(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    await jev.spawn(make_ctx(channel), 3)
+
+    assert await jev.despawn(channel) is True
+    assert jev.spawned == {} and jev.spawns.active() == {}
+    webhook.send.assert_not_awaited()  # `!despawn` says so itself; no goodbye line
+    assert await jev.despawn(channel) is False
+
+
+async def test_a_visit_survives_a_restart(jev, mock_bot, temp_db):
+    webhook, _ = make_webhook()
+    await jev.spawn(make_ctx(away_channel(webhook)), 4)
+    reborn = JevBot(mock_bot, jev.coordinator, jev.typing_tracker, jev.settings)
+    reborn.spawns = JevSpawns(temp_db)
+    assert reborn.claims_channel(AWAY) and reborn.spawned == {AWAY: 4}
+
+
 # ---------------------------------------------------------------- coordinator
 
 
@@ -374,6 +500,21 @@ def test_claiming_bot_goes_first_only_in_its_channel(mock_bot):
     for _ in range(10):
         assert coordinator._bots_in_turn_order(CHANNEL)[0] is claimer
     assert set(map(id, coordinator._bots_in_turn_order(1))) == set(map(id, coordinator.bots))
+
+
+async def test_recent_history_warms_the_channel_and_hands_out_a_copy(mock_bot):
+    coordinator = ChatCoordinator(mock_bot)
+    coordinator._ensure_channel_warm = AsyncMock()
+    said = ConversationTurn(role="user", content="<A>: hi", message_id=1, author_name="A")
+    coordinator._history_for_channel(CHANNEL).append(said)
+    channel = make_channel(make_webhook()[0])
+
+    got = await coordinator.recent_history(channel)
+
+    coordinator._ensure_channel_warm.assert_awaited_once_with(channel)
+    assert got == [said]
+    got.clear()
+    assert list(coordinator._history_for_channel(CHANNEL)) == [said]
 
 
 async def test_claimed_webhook_messages_skip_history_and_bots(mock_bot):

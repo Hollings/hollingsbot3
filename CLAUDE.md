@@ -87,7 +87,7 @@ Codebase mounted at `/app`, state in `./data/` bind mount.
 **Cog System** (`src/hollingsbot/cogs/`): discord.py Cog pattern for modular features. Key cogs:
 - `chat_coordinator.py` - Routes messages to appropriate chat bots
 - `chat_bots/` - LLM chat bots (Gemini, Grok, Llama, temp bots) with shared conversation history
-- `chat_bots/jev_bot.py` - Jev (TypeSafe's decision model) chatting word by word via `hollingsbot/jev/`; writes the whole reply behind a typing indicator, then posts it once through its own webhook, which it claims with the coordinator (`claim_webhook`: no other bot answers it). Read `src/hollingsbot/jev/README.md` before tuning it
+- `chat_bots/jev_bot.py` - Jev (TypeSafe's decision model) chatting word by word via `hollingsbot/jev/`; writes the whole reply behind a typing indicator, then posts it once through its own webhook, which it claims with the coordinator (`claim_webhook`: no other bot answers it). `!spawn jev [N]` brings it to any channel for N replies (`JevBot.spawn`, persisted in `jev_spawns`). Read `src/hollingsbot/jev/README.md` before tuning it
 - `image_gen_cog.py` - Image generation/editing via Celery
 - `starboard.py` - Message reposting on reactions
 - `temp_bot_commands.py` - Temporary webhook-based bots
@@ -148,7 +148,8 @@ When `LLM_SUMMARY_ENABLED=1`, the bot uses progressive summarization to reduce t
 The `temp_bot_cog.py` allows spawning temporary webhook-based LLM bots that share conversation history with the main bot and can converse with each other:
 
 **Core Behavior**:
-- **Spawning**: Use `!spawn <reply_count> <initial_prompt>` to create a temporary bot (max 100 replies)
+- **Spawning**: Use `!spawn <reply_count> <initial_prompt>` to create a temporary bot (max 20 replies)
+- **Jev**: `!spawn jev [N]` (or `!spawn N jev`) hands off to JevBot instead of making an LLM temp bot; `!despawn jev` ends it (see `src/hollingsbot/jev/README.md`)
 - **Initial Response**: The temp bot immediately responds to the initial prompt using the channel's conversation context
 - **Auto-Generated Names**: Bot names are randomly generated (e.g., "Swift Fox", "Wise Owl")
 - **Reply Limit**: Each temp bot has a limited number of replies (decremented with each response)

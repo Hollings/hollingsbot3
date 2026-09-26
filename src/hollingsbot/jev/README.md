@@ -4,13 +4,35 @@ Jev is TypeSafe's "System One" decision model, served through OpenRouter's
 Decisions API. It cannot generate text: every request is a `state` plus typed
 questions (`choice` over up to 255 options, `noul` yes/no, `score`), and every
 answer is a probability distribution. JevBot makes it chat anyway, one word at
-a time, in the channels listed in `JEV_BOT_CHANNELS`.
+a time, in the channels listed in `JEV_BOT_CHANNELS`, and for a while in any
+channel where someone types `!spawn jev` (below).
 
 Code: `src/hollingsbot/jev/` (writer, decoding rules, lexicon, client, ledger)
 and `src/hollingsbot/cogs/chat_bots/jev_bot.py` (Discord side). Try it from a
 terminal with `python scripts/jev_try.py "Jev, what's your favorite food?"`
 (add `--trace` to see every step's scores, `--samples` for the prompt set the
 numbers below come from).
+
+## Spawning Jev elsewhere (`!spawn jev [N]`)
+
+`!spawn jev 10` (or `!spawn 10 jev`; N defaults to 10, at most 20 like a temp
+bot) brings Jev into the current channel instead of an LLM temp bot. It answers
+the last few messages at once (backfilled from Discord if the bot hasn't seen
+the channel since it started; a quiet channel gets a check mark instead), then
+every human message, exactly as in its own channels, until it has posted N
+replies. Then it leaves with a temp bot's goodbye line
+(`*[Jev drifts off into silence]*`). Only posted replies count: one cut off by
+someone talking, skipped over budget or failed uses none.
+
+- `!despawn jev` ends the visit at once; `!despawn` lists it, `!despawn all`
+  includes it. Spawning again resets the count.
+- Visits are rows in `jev_spawns` (the bot DB), so a restart doesn't end one.
+- A spawned channel is claimed like a `JEV_BOT_CHANNELS` one: Jev goes first
+  on every human message, so a temp bot in the same channel gets no human
+  turns until Jev leaves. The daily budget and the learned words are shared
+  with every other channel.
+- Code: `JevBot.spawn` / `despawn` in `jev_bot.py`, the store in
+  `jev/spawns.py`; `temp_bot_commands.py` routes `!spawn jev` there.
 
 ## Opt-in: an LLM proposes, Jev chooses (`JEV_SUGGEST_MODEL=on`)
 
