@@ -19,13 +19,18 @@ numbers below come from).
 bot) brings Jev into the current channel instead of an LLM temp bot. It answers
 the last few messages at once (backfilled from Discord if the bot hasn't seen
 the channel since it started; a quiet channel gets a check mark instead), then
-every message, until it has posted N replies. Unlike in its own channels, that
-includes other bots and webhooks (Wendy, temp bots), so Jev and Wendy talk to
-each other until Jev's count runs out; it never answers itself or the Dog
-account's command output, and it still learns words only from people. Then it
-leaves with a temp bot's goodbye line
-(`*[Jev drifts off into silence]*`). Only posted replies count: one cut off by
-someone talking, skipped over budget or failed uses none.
+every message, until it has posted N replies. That includes every other bot and
+webhook (Wendy, temp bots), so Jev and Wendy talk to each other until Jev's
+count runs out; it never answers itself or the Dog account's command output,
+and it still learns words only from people. Then it leaves with a temp bot's
+goodbye line (`*[Jev drifts off into silence]*`). Only posted replies count: one
+cut off by someone talking, skipped over budget or failed uses none.
+
+In its own channels (`JEV_BOT_CHANNELS`) Jev has no count, so it answers only
+the bots that run out of replies themselves: temp bots (`!spawn 10 a pirate`
+works there, and Jev and the pirate talk until the pirate's replies are gone)
+and a spawned Jev2. Never Wendy there: nothing would end that. Anywhere, a
+human replying straight to another bot's message is left to that bot.
 
 - `!spawn jev2` brings a second Jev: each name in `JEV_COPIES` (default
   `Jev2`) is another JevBot with the same settings and brain but its own name

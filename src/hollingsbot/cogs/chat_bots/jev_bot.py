@@ -15,7 +15,10 @@ Beyond its own channels, `!spawn jev [N]` brings Jev into any channel: it answer
 the chat there at once, then every message, other bots' included (Wendy, temp
 bots: the reply count ends any back-and-forth), until it has posted N replies
 (the first included) and leaves like a temp bot. In its own channels it answers
-humans only. `!despawn jev` sends it away early. Visits are kept in the DB
+humans, and only the bots that run out of replies themselves (temp bots, a
+spawned Jev), never Wendy: nothing else would end that back-and-forth. Anywhere,
+a human replying straight to another bot's message is left to that bot.
+`!despawn jev` sends it away early. Visits are kept in the DB
 (hollingsbot.jev.spawns) across restarts.
 
 There can be more than one: each name in JEV_COPIES is another JevBot, with the
@@ -77,6 +80,7 @@ from hollingsbot.jev.pieces import make_writer
 from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 from hollingsbot.jev.writer import NO_REPEAT_MODES, STOP_MODES, UNITS
+from hollingsbot.prompt_db import get_temp_bots_for_channel
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
 
@@ -230,7 +234,7 @@ def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
 
 
 class JevBot:
-    """Answers every human message in its channels, and every message wherever it's spawned (bots too)."""
+    """Answers humans (and bots that stop on their own) in its channels, and every message where spawned."""
 
     def __init__(
         self, bot: commands.Bot, coordinator: Any, typing_tracker: Any, settings: JevBotSettings | None = None
@@ -422,27 +426,56 @@ class JevBot:
     def _should_respond(self, message: discord.Message) -> bool:
         if not self._answers_in(message.channel.id):
             return False
-        if not _is_human(message) and not self._answers_bot(message):
+        if _is_human(message):
+            if self._replies_to_another_bot(message):
+                return False
+        elif not self._answers_bot(message):
             return False
         if chat_utils.should_ignore_message(message.content):
             return False
         return bool(message.content.strip() or message.attachments)
 
     def _answers_bot(self, message: discord.Message) -> bool:
-        """Other bots and webhooks get answers only where Jev was spawned.
+        """Whether to answer another bot or webhook: only where the back-and-forth is sure to end.
 
-        There its reply count ends a back-and-forth with another bot (another Jev
-        included); in its own channels nothing would, so two bots answering each
-        other would never stop. Never itself (its webhook, or anything posted
-        under its name) or the bot account it runs as (command output, not
-        conversation).
+        Where Jev was spawned its own reply count ends it, whoever the other bot
+        is. In its own channels Jev has no count, so it answers only bots that
+        run out of replies themselves (temp bots, a spawned Jev), never Wendy and
+        the like. Never itself or the bot account it runs as (command output).
         """
-        if message.channel.id not in self.spawned or message.author.id == self.bot.user.id:
+        if message.author.id == self.bot.user.id or self._is_own(message):
             return False
+        return message.channel.id in self.spawned or self._runs_out(message)
+
+    def _is_own(self, message: discord.Message) -> bool:
+        """Posted by this Jev: through its webhook, or under its name (its webhook may not be cached yet)."""
         own = self._webhooks.get(message.channel.id)
         if own is not None and message.webhook_id == own.id:
+            return True
+        return message.webhook_id is not None and message.author.name == self.settings.name
+
+    def _runs_out(self, message: discord.Message) -> bool:
+        """Posted by a temp bot or a spawned Jev: a bot with a reply count of its own."""
+        webhook_id, channel_id = message.webhook_id, message.channel.id
+        if webhook_id is None:
             return False
-        return not (message.webhook_id is not None and message.author.name == self.settings.name)
+        if any(bot["webhook_id"] == webhook_id for bot in get_temp_bots_for_channel(channel_id)):
+            return True
+        for other in self.coordinator.bots:
+            if isinstance(other, JevBot) and other is not self and channel_id in other.spawned:
+                hook = other._webhooks.get(channel_id)
+                if hook is not None and hook.id == webhook_id:
+                    return True
+        return False
+
+    def _replies_to_another_bot(self, message: discord.Message) -> bool:
+        """A human answering another bot's message directly: that bot should reply, not Jev."""
+        resolved = message.reference.resolved if message.reference is not None else None
+        if not isinstance(resolved, discord.Message):
+            return False
+        if not (resolved.author.bot or resolved.webhook_id is not None):
+            return False
+        return not self._is_own(resolved)
 
     # ------------------------------------------------------------------ writing
 

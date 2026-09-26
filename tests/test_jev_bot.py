@@ -103,6 +103,7 @@ def make_message(channel, content="Jev what is the capital of France?", *, bot=F
     message.author.global_name = "Hollings"
     message.author.name = "hollings"
     message.add_reaction = AsyncMock()
+    message.reference = None
     return message
 
 
@@ -113,7 +114,15 @@ def turn(message, name="Hollings"):
 
 
 @pytest.fixture
-def jev(temp_db, mock_bot):
+def temp_bots(monkeypatch):
+    """The active temp bots Jev sees (by webhook_id); empty unless a test adds some."""
+    active: list[dict] = []
+    monkeypatch.setattr(jev_bot_mod, "get_temp_bots_for_channel", lambda channel_id: active)
+    return active
+
+
+@pytest.fixture
+def jev(temp_db, mock_bot, temp_bots):
     coordinator = MagicMock()
     coordinator._add_response_to_history = AsyncMock()
     coordinator.recent_history = AsyncMock(return_value=[])
@@ -507,6 +516,59 @@ async def test_a_jev_never_answers_a_post_under_its_own_name(jev):
     itself = posted_by(channel, "Jev", 777, 30)
     assert await jev.receive_message(itself, [turn(itself, "Jev")]) is None
     assert jev._writer.chats == []
+
+
+async def test_its_own_channels_answer_temp_bots_but_never_wendy(jev, temp_bots):
+    webhook, _ = make_webhook()
+    channel = make_channel(webhook)  # CHANNEL: one of Jev's own
+    jev._writer = FakeWriter(["arr"])
+    temp_bots.append({"webhook_id": 321, "name": "Pirate"})
+    pirate = posted_by(channel, "Pirate", 321, 40)
+    wendy = posted_by(channel, "Wendy's Mobile Oracle", 654, 41)
+
+    assert await jev.receive_message(pirate, [turn(pirate, "Pirate")]) is not None  # it runs out of replies
+    assert await jev.receive_message(wendy, [turn(wendy, "Wendy")]) is None  # it never would
+    temp_bots.clear()  # the pirate left
+    later = posted_by(channel, "Pirate", 321, 42)
+    assert await jev.receive_message(later, [turn(later, "Pirate")]) is None
+
+
+async def test_its_own_channels_answer_a_jev_spawned_there(jev, temp_db):
+    webhook, _ = make_webhook()
+    webhook2, _ = make_webhook()
+    webhook2.id = 556
+    channel = make_channel(webhook)  # CHANNEL: Jev's own; Jev2 can still be spawned into it
+    jev2 = jev_copy(jev, "Jev2", temp_db)
+    jev.coordinator.bots = [jev, jev2]
+    jev._writer = FakeWriter(["hi"])
+    said = posted_by(channel, "Jev2", 556, 50)
+    assert await jev.receive_message(said, [turn(said, "Jev2")]) is None  # Jev2 isn't visiting yet
+
+    await jev2.spawn(make_ctx(channel, "!spawn jev2 3"), 3)
+    jev2._webhooks[CHANNEL] = webhook2  # as after its first post
+    said = posted_by(channel, "Jev2", 556, 51)
+    assert await jev.receive_message(said, [turn(said, "Jev2")]) is not None
+    assert jev.spawned == {}  # nothing to count: this is Jev's own channel
+
+
+async def test_a_reply_to_another_bots_message_is_left_to_that_bot(jev):
+    webhook, _ = make_webhook()
+    channel = make_channel(webhook)
+    jev._writer = FakeWriter(["hey"])
+
+    def replying_to(author_name, *, bot, webhook_id, mid):
+        replied = make_message(channel, "earlier", bot=bot, webhook_id=webhook_id, mid=mid)
+        replied.author.name = author_name
+        message = make_message(channel, "what do you mean", mid=mid + 100)
+        message.reference = MagicMock(resolved=replied)
+        return message
+
+    to_pirate = replying_to("Pirate", bot=True, webhook_id=321, mid=60)
+    assert await jev.receive_message(to_pirate, [turn(to_pirate)]) is None
+    to_jev = replying_to("Jev", bot=True, webhook_id=555, mid=61)
+    assert await jev.receive_message(to_jev, [turn(to_jev)]) is not None
+    to_human = replying_to("mallory", bot=False, webhook_id=None, mid=62)
+    assert await jev.receive_message(to_human, [turn(to_human)]) is not None
 
 
 def test_copies_from_env(monkeypatch):
