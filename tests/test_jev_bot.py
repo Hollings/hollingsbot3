@@ -298,7 +298,7 @@ async def test_over_budget_reacts_instead_of_replying(jev):
         {"content": "   "},
     ],
 )
-async def test_ignores_bots_webhooks_commands_and_empty(jev, kwargs):
+async def test_its_own_channels_ignore_bots_webhooks_commands_and_empty(jev, kwargs):
     webhook, _ = make_webhook()
     message = make_message(make_channel(webhook), **kwargs)
     jev._writer = FakeWriter(["hi"])
@@ -408,6 +408,38 @@ async def test_spawned_jev_answers_the_chat_then_every_message_until_its_replies
     assert jev.spawned == {} and jev.spawns.active() == {} and not jev.claims_channel(AWAY)
     later = make_message(channel, "jev?", mid=3)
     assert await jev.receive_message(later, [turn(later)]) is None
+
+
+async def test_spawned_jev_and_other_bots_answer_each_other_until_its_replies_run_out(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hey"])
+    await jev.spawn(make_ctx(channel), 3)  # a quiet channel: no first reply
+
+    answered = []
+    for i in range(6):  # Wendy (a bot account) and a temp bot (a webhook) take turns talking to Jev
+        other = make_message(channel, f"zebra number {i}", bot=True, webhook_id=123 if i % 2 else None, mid=10 + i)
+        answered.append(await jev.receive_message(other, [turn(other, "Wendy")]) is not None)
+
+    assert answered == [True, True, True, False, False, False]  # its 3 replies, then it's gone
+    assert webhook.send.await_args_list[-1].args[0].startswith("*[Jev ")
+    assert jev.spawned == {}
+    assert jev.lexicon.summary().total == 0  # it learns from people, not from bots
+
+
+async def test_spawned_jev_never_answers_itself_or_the_bot_account_it_runs_as(jev, mock_bot):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hi"])
+    await jev.spawn(make_ctx(channel), 5)
+    jev._webhooks[AWAY] = webhook  # as after its first post
+    itself = make_message(channel, "hi", bot=True, webhook_id=webhook.id, mid=20)
+    dog = make_message(channel, "Jev is here for 5 more replies", bot=True, mid=21)
+    dog.author.id = mock_bot.user.id
+
+    for message in (itself, dog):
+        assert await jev.receive_message(message, [turn(message)]) is None
+    assert jev._writer.chats == []
 
 
 async def test_spawned_into_a_quiet_channel_waits_for_someone_to_talk(jev):

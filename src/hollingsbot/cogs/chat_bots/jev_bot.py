@@ -12,9 +12,11 @@ Jev is born knowing only the most common words and learns every word a human
 says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
 
 Beyond its own channels, `!spawn jev [N]` brings Jev into any channel: it answers
-the chat there at once, then every human message, until it has posted N replies
-(the first included) and leaves like a temp bot. `!despawn jev` sends it away
-early. Visits are kept in the DB (hollingsbot.jev.spawns) across restarts.
+the chat there at once, then every message, other bots' included (Wendy, temp
+bots: the reply count ends any back-and-forth), until it has posted N replies
+(the first included) and leaves like a temp bot. In its own channels it answers
+humans only. `!despawn jev` sends it away early. Visits are kept in the DB
+(hollingsbot.jev.spawns) across restarts.
 
 Config (env):
     JEV_BOT_CHANNELS          comma-separated channel IDs Jev answers in (every human message)
@@ -168,6 +170,10 @@ class JevBotSettings:
         return 100_000 if self.suggest_model else self.writer.bucket_size
 
 
+def _is_human(message: discord.Message) -> bool:
+    return not message.author.bot and message.webhook_id is None
+
+
 def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
     """The last ``count`` turns as (speaker, text), the way Jev reads the chat."""
     lines = []
@@ -182,7 +188,7 @@ def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
 
 
 class JevBot:
-    """Answers every human message in its channels (and wherever it's spawned), via the chat coordinator."""
+    """Answers every human message in its channels, and every message wherever it's spawned (bots too)."""
 
     def __init__(
         self, bot: commands.Bot, coordinator: Any, typing_tracker: Any, settings: JevBotSettings | None = None
@@ -223,7 +229,8 @@ class JevBot:
     async def receive_message(self, message: discord.Message, history: list[ConversationTurn]) -> dict | None:
         if not self._should_respond(message):
             return None
-        await self._learn_from(message)
+        if _is_human(message):  # it learns from people, not from the bots it talks to
+            await self._learn_from(message)
         if not history or history[-1].message_id != message.id:
             _LOG.warning("JevBot: latest history turn is not message %s; skipping", message.id)
             return None
@@ -371,12 +378,24 @@ class JevBot:
     def _should_respond(self, message: discord.Message) -> bool:
         if not self._answers_in(message.channel.id):
             return False
-        # Humans only: answering bots or webhooks (including itself) is how loops start.
-        if message.author.bot or message.webhook_id is not None:
+        if not _is_human(message) and not self._answers_bot(message):
             return False
         if chat_utils.should_ignore_message(message.content):
             return False
         return bool(message.content.strip() or message.attachments)
+
+    def _answers_bot(self, message: discord.Message) -> bool:
+        """Other bots and webhooks get answers only where Jev was spawned.
+
+        There its reply count ends a back-and-forth with another bot; in its own
+        channels nothing would, so two bots answering each other would never stop.
+        Never itself (its webhook is claimed with the coordinator, this is a
+        backstop) or the bot account it runs as (command output, not conversation).
+        """
+        if message.channel.id not in self.spawned or message.author.id == self.bot.user.id:
+            return False
+        own = self._webhooks.get(message.channel.id)
+        return own is None or message.webhook_id != own.id
 
     # ------------------------------------------------------------------ writing
 
