@@ -21,6 +21,10 @@ a human replying straight to another bot's message is left to that bot.
 `!despawn jev` sends it away early. Visits are kept in the DB
 (hollingsbot.jev.spawns) across restarts.
 
+Cameos: in JEV_CAMEO_CHANNELS (Wendy's), each human message has a small chance
+(JEV_CAMEO_CHANCE, 1%) of one reply from Jev. Just that post: Jev never claims
+those channels, answers no bots there, and leaves direct replies to Wendy alone.
+
 There can be more than one: each name in JEV_COPIES is another JevBot, with the
 same settings and brain but its own name and webhook, and no channels of its
 own. `!spawn jev2` brings one in; two Jevs in a channel answer each other.
@@ -30,6 +34,8 @@ Config (env):
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
     JEV_COPIES                comma-separated names of spawn-only copies (default "Jev2"; one word
                               each, since `!spawn <name>` is how they're called)
+    JEV_CAMEO_CHANNELS        comma-separated channel IDs (Wendy's) where each human message has a
+                              JEV_CAMEO_CHANCE (default 0.01) chance of one drop-in reply from Jev
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
     JEV_SUGGEST_MODEL         "on" or an OpenRouter model slug: an LLM proposes next words and Jev
@@ -64,6 +70,7 @@ import contextlib
 import dataclasses
 import logging
 import os
+import random
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -155,10 +162,14 @@ class JevBotSettings:
     writer: WriterConfig = field(default_factory=WriterConfig)
     suggest_model: str | None = None  # None = Jev picks from its own vocabulary alone
     copies: tuple[str, ...] = ()  # names of spawn-only copies (JEV_COPIES)
+    # Other bots' channels (Wendy's) where a human message gets a single drop-in reply
+    # with this probability (JEV_CAMEO_CHANNELS / JEV_CAMEO_CHANCE).
+    cameo_channels: frozenset[int] = frozenset()
+    cameo_chance: float = 0.01
 
     def copy_named(self, name: str) -> JevBotSettings:
         """A spawn-only copy: the same brain under another name, with no channels (or copies) of its own."""
-        return dataclasses.replace(self, name=name, channels=frozenset(), copies=())
+        return dataclasses.replace(self, name=name, channels=frozenset(), copies=(), cameo_channels=frozenset())
 
     @classmethod
     def from_env(cls) -> JevBotSettings:
@@ -202,6 +213,8 @@ class JevBotSettings:
             writer=writer,
             suggest_model=suggest_model,
             copies=_env_copies(name),
+            cameo_channels=frozenset(parse_id_set(os.getenv("JEV_CAMEO_CHANNELS"))),
+            cameo_chance=min(1.0, max(0.0, _env_float("JEV_CAMEO_CHANCE", 0.01))),
         )
 
     def reachable_learned(self, learned: int) -> int:
@@ -252,12 +265,15 @@ class JevBot:
         self._webhooks: dict[int, discord.Webhook | None] = {}
         self._active: dict[int, asyncio.Task] = {}
         self._cleanups: set[asyncio.Task] = set()
+        self.rng = random.Random()  # cameo rolls
         w = self.settings.writer
         _LOG.info(
-            "JevBot initialized (name=%s, channels=%s, units=%s, no_repeat=%s, suggest=%s, born=%d, "
-            "known_only=%s, llm_pages=%d, own_page=%s, max_words=%d, stop=%s)",
+            "JevBot initialized (name=%s, channels=%s, cameo=%s at %.3f, units=%s, no_repeat=%s, suggest=%s, "
+            "born=%d, known_only=%s, llm_pages=%d, own_page=%s, max_words=%d, stop=%s)",
             self.settings.name,
             sorted(self.whitelist_channels),
+            sorted(self.settings.cameo_channels),
+            self.settings.cameo_chance,
             w.units,
             w.no_repeat,
             self.settings.suggest_model or "off",
@@ -425,7 +441,7 @@ class JevBot:
 
     def _should_respond(self, message: discord.Message) -> bool:
         if not self._answers_in(message.channel.id):
-            return False
+            return self._rolls_cameo(message)
         if _is_human(message):
             if self._replies_to_another_bot(message):
                 return False
@@ -434,6 +450,19 @@ class JevBot:
         if chat_utils.should_ignore_message(message.content):
             return False
         return bool(message.content.strip() or message.attachments)
+
+    def _rolls_cameo(self, message: discord.Message) -> bool:
+        """In a cameo channel (Wendy's), a human message has a small chance of one reply from Jev."""
+        if message.channel.id not in self.settings.cameo_channels or not _is_human(message):
+            return False
+        if chat_utils.should_ignore_message(message.content) or not (message.content.strip() or message.attachments):
+            return False
+        if self._replies_to_another_bot(message):  # someone answering Wendy: leave them to it
+            return False
+        if self.rng.random() >= self.settings.cameo_chance:
+            return False
+        _LOG.info("Jev cameo in %s on message %s", message.channel.id, message.id)
+        return True
 
     def _answers_bot(self, message: discord.Message) -> bool:
         """Whether to answer another bot or webhook: only where the back-and-forth is sure to end.

@@ -51,6 +51,17 @@ human replying straight to another bot's message is left to that bot.
   `jev/spawns.py`, the copies registered in `chat_coordinator.setup`;
   `temp_bot_commands.py` routes `!spawn jev` / `jev2` there.
 
+## Cameos in Wendy's channels (`JEV_CAMEO_CHANNELS`)
+
+In each channel listed in `JEV_CAMEO_CHANNELS` (Wendy's: chat and coding;
+#wendy-dev is already Jev's own), every human message has a `JEV_CAMEO_CHANCE`
+(default 0.01) chance of one reply from Jev, to the same last-5-messages
+context. That's all it is: Jev doesn't claim those channels (other bots keep
+their turn order), never answers a bot there (Wendy has no reply count), leaves
+a direct reply to Wendy alone, and only learns words from the message it
+answered. A cameo cut off by the next message is simply lost. Only the main
+Jev does cameos; copies have none. Logged as "Jev cameo in <channel>".
+
 ## Pieces instead of words (`JEV_UNITS=pieces`)
 
 With `JEV_UNITS=pieces` (`pieces.py`) Jev's menu is the LLM's raw next tokens,

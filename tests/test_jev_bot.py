@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import dataclasses
 import sqlite3
 from unittest.mock import AsyncMock, MagicMock
 
@@ -569,6 +570,59 @@ async def test_a_reply_to_another_bots_message_is_left_to_that_bot(jev):
     assert await jev.receive_message(to_jev, [turn(to_jev)]) is not None
     to_human = replying_to("mallory", bot=False, webhook_id=None, mid=62)
     assert await jev.receive_message(to_human, [turn(to_human)]) is not None
+
+
+CAMEO = 1050900592031178752  # one of Wendy's channels
+
+
+def cameo_channel(jev, roll):
+    """A Wendy channel Jev drops into; ``roll`` is what its dice come up (hit below 0.01)."""
+    jev.settings = dataclasses.replace(jev.settings, cameo_channels=frozenset({CAMEO}))
+    jev.rng = MagicMock(random=MagicMock(return_value=roll))
+    webhook, _ = make_webhook()
+    channel = make_channel(webhook)
+    channel.id = CAMEO
+    return channel, webhook
+
+
+async def test_a_cameo_channel_gets_one_reply_when_the_dice_say_so(jev):
+    channel, webhook = cameo_channel(jev, roll=0.005)
+    jev._writer = FakeWriter(["hello", "wendy", "people"])
+    message = make_message(channel, "wendy what should i cook tonight")
+
+    assert await jev.receive_message(message, [turn(message)]) is not None
+    webhook.send.assert_awaited_once_with("hello wendy people", username="Jev", wait=True)
+    assert not jev.claims_channel(CAMEO)  # never first: Wendy's channel stays Wendy's
+    assert jev.spawned == {}  # a single post, not a visit
+
+    jev.rng.random.return_value = 0.5  # the other 99%
+    later = make_message(channel, "and for dessert?", mid=43)
+    assert await jev.receive_message(later, [turn(later)]) is None
+
+
+async def test_a_cameo_is_only_ever_for_a_person_talking_to_the_room(jev):
+    channel, _ = cameo_channel(jev, roll=0.0)  # the dice always hit
+    jev._writer = FakeWriter(["hi"])
+    wendy = posted_by(channel, "Wendy", 654, 70)
+    command = make_message(channel, "!help", mid=71)
+    to_wendy = make_message(channel, "thanks wendy", mid=72)
+    to_wendy.reference = MagicMock(resolved=posted_by(channel, "Wendy", 654, 69))
+
+    for message in (wendy, command, to_wendy):
+        assert await jev.receive_message(message, [turn(message)]) is None
+    assert jev._writer.chats == []
+
+
+def test_cameos_from_env(monkeypatch):
+    monkeypatch.delenv("JEV_CAMEO_CHANNELS", raising=False)
+    monkeypatch.delenv("JEV_CAMEO_CHANCE", raising=False)
+    off = JevBotSettings.from_env()
+    assert (off.cameo_channels, off.cameo_chance) == (frozenset(), 0.01)
+    monkeypatch.setenv("JEV_CAMEO_CHANNELS", f"{CAMEO}, 1461429474250850365")
+    monkeypatch.setenv("JEV_CAMEO_CHANCE", "7")  # clamped to a probability
+    on = JevBotSettings.from_env()
+    assert on.cameo_channels == {CAMEO, 1461429474250850365} and on.cameo_chance == 1.0
+    assert on.copy_named("Jev2").cameo_channels == frozenset()  # cameos are the main Jev's
 
 
 def test_copies_from_env(monkeypatch):

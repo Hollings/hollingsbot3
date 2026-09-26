@@ -613,6 +613,7 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 - `JEV_BOT_CHANNELS` - CSV of channel IDs where Jev answers every human message (empty = off); `!spawn jev [N]` brings it to any other channel for N replies
 - `JEV_BOT_NAME` - Webhook display name, and the name Jev is told it has (default: Jev)
 - `JEV_COPIES` - CSV of names of spawn-only Jev copies, the same brain under another name and webhook, called with `!spawn <name>` (default: Jev2)
+- `JEV_CAMEO_CHANNELS` - CSV of other bots' channel IDs (Wendy's) where each human message has a `JEV_CAMEO_CHANCE` (default 0.01) chance of a single drop-in reply from Jev
 - `JEV_UNITS` - `words` (default) or `pieces`: Jev picks the LLM's raw next tokens, word pieces and all, and strings the reply together itself (turns the suggester on; `JEV_MIN_WORDS`/`JEV_MAX_WORDS` then count pieces)
 - `JEV_NO_REPEAT` - pieces only: `never` (default, a used piece is off every later menu), `adjacent` (only the one just used), `off`
 - `JEV_CONTEXT_MESSAGES` - Chat messages Jev sees, the latest included (default: 5)
