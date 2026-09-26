@@ -46,6 +46,31 @@ someone talking, skipped over budget or failed uses none.
   `jev/spawns.py`, the copies registered in `chat_coordinator.setup`;
   `temp_bot_commands.py` routes `!spawn jev` / `jev2` there.
 
+## Pieces instead of words (`JEV_UNITS=pieces`)
+
+With `JEV_UNITS=pieces` (`pieces.py`) Jev's menu is the LLM's raw next tokens,
+word pieces and all ("chang", "ing", "cr", "..."), instead of the whole words
+`suggest.py` makes of them, and Jev strings the reply together itself. Paging,
+the own-words page, STOP on the menu and sampling work as below; there is no
+naturalness check. Every Jev (copies included) writes the same way.
+
+- **Joining.** Chat-mode tokens have no leading space, so a piece attaches to
+  the last word when the two spell a dictionary or chat word or the start of
+  one ("chang"+"e"), punctuation always attaches, anything else gets a space.
+  It misfires ("SoI", "lay... ing"); that's kept on purpose.
+- **No repeats (`JEV_NO_REPEAT`).** `never` (default): a piece used once is off
+  every later menu. Without it replies spiral ("the the thee three...",
+  "ng ing ng ng"); with it Jev runs out of easy pieces and reaches for strange
+  ones ("har tober h fest val ival events"). `adjacent` only bans the piece just
+  used and still loops ("get cold get cold getting"); `off` bans nothing.
+- **Why chat mode.** OpenRouter's raw `/completions` would mark new words with a
+  leading space, but for llama-3.1-8b it rejects `logprobs=N` and, asked with
+  `logprobs=true`, wraps the prompt as a chat message anyway (2026-09-26).
+- Measured locally 2026-09-26 (6 samples, live settings): 8-70 pieces, mean 28,
+  $0.0014 per reply; 76% of pieces from the first page, 14% p2, 4% p3, 6% own.
+  Long replies take ~50 s (a page turn is another request).
+  `python scripts/jev_try.py --samples --units pieces --stop choice` reproduces it.
+
 ## Opt-in: an LLM proposes, Jev chooses (`JEV_SUGGEST_MODEL=on`)
 
 Off by default since 2026-09-25: it reads well, but every word then comes from

@@ -44,6 +44,11 @@ Config (env):
     JEV_MIN_WORDS / JEV_MAX_WORDS   reply length bounds (defaults 8 / 40)
     JEV_STOP                  how a reply ends: threshold (default: send when P(send) is high),
                               sample (send sampled like a word), choice (STOP on the word menu)
+    JEV_UNITS                 words (default: the menus are whole words) or pieces (the LLM's raw
+                              next tokens, which Jev strings together itself; turns the suggester
+                              on; see hollingsbot.jev.pieces). MIN/MAX_WORDS then count pieces.
+    JEV_NO_REPEAT             pieces only: never (default: a used piece is off every later menu),
+                              adjacent (only the one just used), off
     JEV_STYLE                 how Jev writes, "{name}" = its name (default: long, chatty messages;
                               set to a single space for Jev's natural one-word answers)
     JEV_TEMPERATURE / JEV_TOP_P   sampling (defaults 0.7 / 0.6, see WriterConfig)
@@ -68,9 +73,10 @@ from hollingsbot.cogs.chat_bots.temp_bot.names import departure_message
 from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Reply, WriterConfig
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
+from hollingsbot.jev.pieces import make_writer
 from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
-from hollingsbot.jev.writer import STOP_MODES
+from hollingsbot.jev.writer import NO_REPEAT_MODES, STOP_MODES, UNITS
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
 
@@ -109,12 +115,13 @@ def _env_flag(name: str, default: bool) -> bool:
     return raw.strip().lower() not in ("0", "false", "no", "off")
 
 
-def _env_stop_mode(default: str) -> str:
-    raw = os.getenv("JEV_STOP", "").strip().lower()
+def _env_choice(name: str, choices: tuple[str, ...], default: str) -> str:
+    """One of ``choices`` from the env; a typo warns and keeps the default instead of breaking every reply."""
+    raw = os.getenv(name, "").strip().lower()
     if not raw:
         return default
-    if raw not in STOP_MODES:
-        _LOG.warning("JEV_STOP=%r is not one of %s; using %s", raw, ", ".join(STOP_MODES), default)
+    if raw not in choices:
+        _LOG.warning("%s=%r is not one of %s; using %s", name, raw, ", ".join(choices), default)
         return default
     return raw
 
@@ -158,6 +165,10 @@ class JevBotSettings:
         if model.lower() in ("1", "on", "true", "yes"):
             model = DEFAULT_SUGGEST_MODEL
         suggest_model = None if model.lower() in ("", "0", "off", "none", "false") else model
+        units = _env_choice("JEV_UNITS", UNITS, base.units)
+        if units == "pieces" and suggest_model is None:
+            _LOG.info("JEV_UNITS=pieces: the LLM's tokens are the menu, so the suggester is on")
+            suggest_model = DEFAULT_SUGGEST_MODEL
         # With a suggester, Jev is born with the 1000 commonest words (grammar is always
         # available) and may only say proposals it knows, so rarer words must be taught.
         born = 1000 if suggest_model else base.vocab_size
@@ -174,7 +185,9 @@ class JevBotSettings:
             llm_pages=max(1, int(_env_float("JEV_LLM_PAGES", base.llm_pages))),
             own_page=_env_flag("JEV_OWN_PAGE", base.own_page),
             shuffle=_env_flag("JEV_SHUFFLE", base.shuffle),
-            stop=_env_stop_mode(base.stop),
+            stop=_env_choice("JEV_STOP", STOP_MODES, base.stop),
+            units=units,
+            no_repeat=_env_choice("JEV_NO_REPEAT", NO_REPEAT_MODES, base.no_repeat),
         )
         name = os.getenv("JEV_BOT_NAME", "Jev").strip() or "Jev"
         return cls(
@@ -237,10 +250,12 @@ class JevBot:
         self._cleanups: set[asyncio.Task] = set()
         w = self.settings.writer
         _LOG.info(
-            "JevBot initialized (name=%s, channels=%s, suggest=%s, born=%d, known_only=%s, llm_pages=%d, "
-            "own_page=%s, max_words=%d, stop=%s)",
+            "JevBot initialized (name=%s, channels=%s, units=%s, no_repeat=%s, suggest=%s, born=%d, "
+            "known_only=%s, llm_pages=%d, own_page=%s, max_words=%d, stop=%s)",
             self.settings.name,
             sorted(self.whitelist_channels),
+            w.units,
+            w.no_repeat,
             self.settings.suggest_model or "off",
             w.vocab_size,
             w.known_only,
@@ -434,7 +449,7 @@ class JevBot:
     def _get_writer(self) -> JevWriter:
         if self._writer is None:
             model = self.settings.suggest_model
-            self._writer = JevWriter(
+            self._writer = make_writer(
                 DecisionsClient(),
                 name=self.settings.name,
                 config=self.settings.writer,

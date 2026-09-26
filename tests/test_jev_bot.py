@@ -353,6 +353,23 @@ def test_stop_mode_from_env(monkeypatch):
     assert JevBotSettings.from_env().writer.stop == "threshold"
 
 
+def test_units_from_env(monkeypatch):
+    for var in ("JEV_UNITS", "JEV_NO_REPEAT", "JEV_SUGGEST_MODEL"):
+        monkeypatch.delenv(var, raising=False)
+    words = JevBotSettings.from_env()
+    assert (words.writer.units, words.writer.no_repeat, words.suggest_model) == ("words", "never", None)
+    monkeypatch.setenv("JEV_UNITS", "Pieces")
+    monkeypatch.setenv("JEV_NO_REPEAT", "adjacent")
+    pieces = JevBotSettings.from_env()
+    assert (pieces.writer.units, pieces.writer.no_repeat) == ("pieces", "adjacent")
+    assert pieces.suggest_model == "meta-llama/llama-3.1-8b-instruct"  # pieces are the LLM's tokens
+    assert pieces.copy_named("Jev2").writer.units == "pieces"  # every Jev writes the same way
+    monkeypatch.setenv("JEV_UNITS", "letters")  # a typo keeps the default rather than breaking replies
+    monkeypatch.setenv("JEV_NO_REPEAT", "sometimes")
+    typo = JevBotSettings.from_env()
+    assert (typo.writer.units, typo.writer.no_repeat) == ("words", "never")
+
+
 def test_paging_defaults_off_and_shuffle_on(monkeypatch):
     for var in ("JEV_LLM_PAGES", "JEV_OWN_PAGE", "JEV_SHUFFLE"):
         monkeypatch.delenv(var, raising=False)

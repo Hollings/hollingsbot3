@@ -7,6 +7,7 @@ Needs OPENROUTER_API_KEY (read from .env). Each reply costs about $0.002 per wor
     python scripts/jev_try.py --chat "Hollings: got a puppy" --chat "Mallory: cute" "Jev name her?"
     python scripts/jev_try.py --samples      # the prompt set src/hollingsbot/jev/README.md was tuned on
     python scripts/jev_try.py --samples --suggest --llm-pages 3 --own-page 1   # pages; words tagged [p2], [own]
+    python scripts/jev_try.py --samples --units pieces --stop choice          # raw LLM pieces, not words
 """
 
 from __future__ import annotations
@@ -24,7 +25,8 @@ from dotenv import load_dotenv
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from hollingsbot.jev import ChatLine, DecisionsClient, JevWriter, WriterConfig
+from hollingsbot.jev import ChatLine, DecisionsClient, WriterConfig
+from hollingsbot.jev.pieces import make_writer
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 
 if TYPE_CHECKING:
@@ -58,8 +60,10 @@ async def run(
     chats: dict[str, list[ChatLine]], config: WriterConfig, seed: int | None, trace: bool, suggest: str | None
 ) -> None:
     client = DecisionsClient()
+    if config.units == "pieces" and not suggest:
+        suggest = DEFAULT_SUGGEST_MODEL  # the LLM's tokens are the menu
     suggester = NextWordSuggester(model=suggest) if suggest else None
-    writer = JevWriter(client, config=config, rng=random.Random(seed), suggester=suggester)
+    writer = make_writer(client, name="Jev", config=config, rng=random.Random(seed), suggester=suggester)
     paging = suggester is not None and (config.llm_pages > 1 or config.own_page)
     total = 0.0
     words = 0

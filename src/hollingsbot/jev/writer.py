@@ -30,6 +30,9 @@ can't leak through position. Optionally Jev can turn pages: beside each page it 
 asked whether it would rather type a word that isn't listed, and saying so (sampled
 with that probability) shows it the LLM's next proposals, then its own menu.
 
+**In pieces (``units="pieces"``, pieces.py):** the same loop over the LLM's raw next
+tokens, word pieces and all, which Jev joins into a reply itself.
+
 The reply ends when Jev says send (always above ``send_at``; between
 ``send_floor`` and that, with probability P(send)^2, the way an LLM samples its
 end token), when it stops making sense, when even the picked word reads as
@@ -68,6 +71,8 @@ FIRST_WORD_Q = "Does `text` read as fluent, grammatical English so far? It may b
 SENSE_Q = "Does `text` make sense as the start of a reply to the latest message in `chat`?"
 SEND_OPTIONS = {"send": "send the message as it is", "keep typing": "add more to it first"}
 STOP_MODES = ("threshold", "sample", "choice")  # see WriterConfig.stop
+UNITS = ("words", "pieces")  # see WriterConfig.units
+NO_REPEAT_MODES = ("never", "adjacent", "off")  # see WriterConfig.no_repeat
 # stop="choice": ending the message is an option in the word menu, like an LLM's end token.
 STOP = "(send)"
 STOP_DESCRIPTION = "{name} is done typing and sends the message as it is"
@@ -137,6 +142,12 @@ class WriterConfig:
     llm_pages: int = 1  # >1 asks the LLM for its top 200 tokens: ~3 pages of known words, slower provider
     own_page: bool = False
     page_power: float = 1.0  # turn with probability P(other)**page_power (T=0: when P(other) >= 0.5)
+    # "words": the menus are whole words (this module). "pieces": the LLM's raw next tokens, word
+    # pieces and all, which Jev strings together itself (pieces.py; needs a suggester).
+    units: str = "words"
+    # Pieces only: "never" = a piece used once in the reply is off every later menu (stops "the the
+    # the" and suffix spirals), "adjacent" = only the piece just used, "off" = no rule.
+    no_repeat: str = "never"
 
 
 @dataclass

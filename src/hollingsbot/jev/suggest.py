@@ -187,10 +187,11 @@ class NextWordSuggester:
         want = top or self.top
         try:
             return await self._top_tokens(self._request(chat, name, words, style, want), usage)
-        except JevError:
+        except JevError as exc:
             if want <= SHALLOW_TOP:
                 raise
-            _LOG.warning("Deep suggestion list (%d) failed; asking for %d", want, SHALLOW_TOP, exc_info=True)
+            # Expected now and then (Novita rate-limits the deep list): one line, not a traceback.
+            _LOG.warning("Deep suggestion list (%d) failed, asking for %d: %s", want, SHALLOW_TOP, str(exc)[:160])
             return await self._top_tokens(self._request(chat, name, words, style, SHALLOW_TOP), usage)
 
     async def _top_tokens(self, payload: dict[str, Any], usage: Usage | None) -> list[tuple[str, float]]:
