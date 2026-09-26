@@ -9,6 +9,7 @@ The prompt is posted as the bot, marked as a smoke test. Replies are logged to
 a throwaway ledger, not the bot DB.
 
     python scripts/jev_discord_smoke.py 1473033550805598253 "Jev, what's the capital of France?"
+    python scripts/jev_discord_smoke.py 1473033550805598253 "hi Jev2" --name Jev2   # a copy's webhook
 """
 
 from __future__ import annotations
@@ -34,14 +35,11 @@ from hollingsbot.jev.lexicon import Lexicon
 
 
 class _Coordinator:
-    def claim_webhook(self, webhook_id: int) -> None:
-        print(f"  claimed webhook {webhook_id}")
-
     async def _add_response_to_history(self, *args) -> None:
         pass
 
 
-async def run(channel_id: int, prompt: str, speaker: str) -> None:
+async def run(channel_id: int, prompt: str, speaker: str, name: str | None = None) -> None:
     import os
 
     client = discord.Client(intents=discord.Intents.none())
@@ -51,7 +49,10 @@ async def run(channel_id: int, prompt: str, speaker: str) -> None:
         print(f"channel #{channel.name}; bot user {client.user}")
         await channel.send(f"(Jev smoke test, asking as {speaker}) {prompt}")
 
-        settings = dataclasses.replace(JevBotSettings.from_env(), channels=frozenset({channel_id}))
+        settings = JevBotSettings.from_env()
+        if name:  # a spawn-only copy, e.g. Jev2: its own webhook and the name it's told it has
+            settings = settings.copy_named(name)
+        settings = dataclasses.replace(settings, channels=frozenset({channel_id}))
         jev = JevBot(client, _Coordinator(), TypingTracker(), settings)  # no gateway: never sees typing
         with tempfile.TemporaryDirectory() as tmp:
             jev.ledger = JevLedger(Path(tmp) / "smoke.db")
@@ -79,8 +80,9 @@ def main() -> None:
     ap.add_argument("channel_id", type=int)
     ap.add_argument("prompt")
     ap.add_argument("--as", dest="speaker", default="Hollings")
+    ap.add_argument("--name", help="reply as a copy of Jev under this name (e.g. Jev2)")
     args = ap.parse_args()
-    asyncio.run(run(args.channel_id, args.prompt, args.speaker))
+    asyncio.run(run(args.channel_id, args.prompt, args.speaker, args.name))
 
 
 if __name__ == "__main__":

@@ -612,6 +612,7 @@ Each cog is a modular feature. This section documents each cog's purpose, implem
 **Jev** (TypeSafe's decision model writing one word at a time; see [src/hollingsbot/jev/README.md](src/hollingsbot/jev/README.md)):
 - `JEV_BOT_CHANNELS` - CSV of channel IDs where Jev answers every human message (empty = off); `!spawn jev [N]` brings it to any other channel for N replies
 - `JEV_BOT_NAME` - Webhook display name, and the name Jev is told it has (default: Jev)
+- `JEV_COPIES` - CSV of names of spawn-only Jev copies, the same brain under another name and webhook, called with `!spawn <name>` (default: Jev2)
 - `JEV_CONTEXT_MESSAGES` - Chat messages Jev sees, the latest included (default: 5)
 - `JEV_DAILY_BUDGET_USD` - Stop replying for the rest of the UTC day past this spend (default: 2.00)
 - `JEV_SUGGEST_MODEL` - `on` (llama-3.1-8b-instruct) or an OpenRouter model slug: an LLM proposes each next word and Jev only chooses (default: off, Jev picks from its own vocabulary)

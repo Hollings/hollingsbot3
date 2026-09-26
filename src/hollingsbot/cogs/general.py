@@ -121,7 +121,7 @@ class General(commands.Cog):
             "- Long replies auto-split; SVG blocks are rendered as images.\n\n"
             "Temp bots\n"
             "- `!spawn <replies> <prompt>` spawn a temporary bot with a personality (e.g. `!spawn 10 a grumpy pirate`).\n"
-            "- `!spawn jev [replies]` bring Jev, the one-word-at-a-time decision model, for that many replies (default 10).\n"
+            "- `!spawn jev [replies]` bring Jev, the one-word-at-a-time decision model, for that many replies (default 10); `!spawn jev2` a second one.\n"
             "- `!despawn [name|jev|all]` list or remove temp bots.\n"
             "- `!recall <replies> <name>` bring back a previous temp bot.\n"
             "- `!history [query]` list or search past temp bots; `!clear` clear chat history.\n\n"

@@ -1,6 +1,8 @@
 """Discord commands for temp bot management."""
 
 import logging
+from collections.abc import Callable
+from typing import Any
 
 import discord
 from discord.ext import commands
@@ -15,46 +17,51 @@ from hollingsbot.prompt_db import (
 
 _LOG = logging.getLogger(__name__)
 
-SPAWN_USAGE = "Usage: `!spawn <replies> <prompt>` for a temp bot, or `!spawn jev [replies]` for Jev."
+SPAWN_USAGE = "Usage: `!spawn <replies> <prompt>` for a temp bot, or `!spawn jev [replies]` (or `jev2`) for a Jev."
 
 
-def jev_spawn_replies(first: str, rest: str, names: set[str], default: int) -> int | None:
-    """`!spawn jev [N]` or `!spawn N jev` -> N (``default`` if left out); None if the spawn isn't Jev's.
+def jev_spawn(first: str, rest: str, find: Callable[[str], Any], default: int) -> tuple[Any, int] | None:
+    """`!spawn jev [N]` or `!spawn N jev` (any Jev's name) -> (that Jev, N), N defaulting to ``default``.
 
-    ``names`` are Jev's names, lowercase. Raises ValueError when N isn't a number.
+    ``find`` looks a Jev up by a word of the command (None if no Jev is called
+    that). Returns None if the spawn isn't a Jev's; raises ValueError when N
+    isn't a number.
     """
     rest = rest.strip()
-    if first.lower() in names:
-        return int(rest) if rest else default
-    if rest.lower() in names:
-        return int(first)
+    if (jev := find(first)) is not None:
+        return jev, int(rest) if rest else default
+    if (jev := find(rest)) is not None:
+        return jev, int(first)
     return None
 
 
 class TempBotCommands(commands.Cog):
-    """Commands for spawning and managing temporary LLM bots (and Jev, which `!spawn jev` brings over)."""
+    """Commands for spawning and managing temporary LLM bots (and the Jevs, which `!spawn jev` brings over)."""
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         _LOG.info("TempBotCommands cog initialized")
 
-    def _get_chat_bot(self, class_name: str):
-        """A bot registered with the chat coordinator, by class name (None if absent)."""
+    def _get_chat_bots(self, class_name: str) -> list:
+        """The bots registered with the chat coordinator with this class name, in registration order."""
         coordinator = self.bot.get_cog("ChatCoordinator")
         if not coordinator:
-            return None
-        for bot_instance in coordinator.bots:
-            if bot_instance.__class__.__name__ == class_name:
-                return bot_instance
-        return None
+            return []
+        return [b for b in coordinator.bots if b.__class__.__name__ == class_name]
 
     def _get_temp_bot_manager(self):
         """Get the TempBotManager instance from the coordinator."""
-        return self._get_chat_bot("TempBotManager")
+        managers = self._get_chat_bots("TempBotManager")
+        return managers[0] if managers else None
 
-    @staticmethod
-    def _jev_names(jev) -> set[str]:
-        return {"jev", jev.settings.name.lower()}
+    def _find_jev(self, word: str):
+        """The Jev called ``word`` (its name, any case; plain "jev" is always the first Jev)."""
+        jevs = self._get_chat_bots("JevBot")
+        word = word.strip().lower()
+        for jev in jevs:
+            if jev.settings.name.lower() == word:
+                return jev
+        return jevs[0] if jevs and word == "jev" else None
 
     @commands.command(name="spawn")
     async def spawn_command(
@@ -76,21 +83,19 @@ class TempBotCommands(commands.Cog):
         - Reply to a message with !spawn to include that message as initial context
         - Use -context flag to include previous 5 messages: !spawn 10 -context <prompt>
 
-        `!spawn jev [reply_count]` brings Jev (the word-by-word decision model) instead:
-        it answers every human message here until it has posted that many replies.
+        `!spawn jev [reply_count]` brings Jev (the word-by-word decision model) instead,
+        and `!spawn jev2` a second one: each answers every message here, other bots'
+        included, until it has posted that many replies.
         """
-        jev = self._get_chat_bot("JevBot")
-        if jev is not None:
-            try:
-                jev_replies = jev_spawn_replies(
-                    reply_count, initial_prompt, self._jev_names(jev), default=SPAWN_REPLIES_DEFAULT
-                )
-            except ValueError:
-                await ctx.reply(SPAWN_USAGE, mention_author=False)
-                return
-            if jev_replies is not None:
-                await jev.spawn(ctx, jev_replies)
-                return
+        try:
+            jev_and_replies = jev_spawn(reply_count, initial_prompt, self._find_jev, default=SPAWN_REPLIES_DEFAULT)
+        except ValueError:
+            await ctx.reply(SPAWN_USAGE, mention_author=False)
+            return
+        if jev_and_replies is not None:
+            jev, replies = jev_and_replies
+            await jev.spawn(ctx, replies)
+            return
 
         try:
             count = int(reply_count)
@@ -136,10 +141,9 @@ class TempBotCommands(commands.Cog):
         Usage: !despawn [name]
         If no name is provided, lists active temp bots.
         If name is provided, removes only that specific bot.
-        `!despawn jev` sends away a spawned Jev; `!despawn all` includes it.
+        `!despawn jev` (or `jev2`) sends away a spawned Jev; `!despawn all` includes them.
         """
-        jev = self._get_chat_bot("JevBot")
-        if jev is not None and await self._despawn_jev(ctx, jev, name):
+        if await self._despawn_jevs(ctx, name):
             return
 
         manager = self._get_temp_bot_manager()
@@ -149,11 +153,11 @@ class TempBotCommands(commands.Cog):
 
         await manager.handle_despawn_command(ctx, name)
 
-    async def _despawn_jev(self, ctx: commands.Context, jev, name: str | None) -> bool:
-        """Jev's part of `!despawn`; True when that was all there was to do."""
-        jev_name = jev.settings.name
+    async def _despawn_jevs(self, ctx: commands.Context, name: str | None) -> bool:
+        """The Jevs' part of `!despawn`; True when that was all there was to do."""
         channel_id = ctx.channel.id
-        if name is not None and name.lower() in self._jev_names(jev):
+        if name is not None and (jev := self._find_jev(name)) is not None:
+            jev_name = jev.settings.name
             if await jev.despawn(ctx.channel):
                 await ctx.send(f"Despawned: **{jev_name}**")
             elif channel_id in jev.whitelist_channels:
@@ -161,14 +165,21 @@ class TempBotCommands(commands.Cog):
             else:
                 await ctx.send(f"**{jev_name}** isn't spawned in this channel.")
             return True
-        if channel_id not in jev.spawned:
+        visiting = [jev for jev in self._get_chat_bots("JevBot") if channel_id in jev.spawned]
+        if not visiting:
             return False
         if name is None:
-            left = jev.spawned[channel_id]
-            await ctx.send(f"**{jev_name}** is here for {left} more replies (`!despawn jev` sends it away).")
+            await ctx.send(
+                "\n".join(
+                    f"**{jev.settings.name}** is here for {jev.spawned[channel_id]} more replies "
+                    f"(`!despawn {jev.settings.name.lower()}` sends it away)."
+                    for jev in visiting
+                )
+            )
         elif name.lower() == "all":
-            await jev.despawn(ctx.channel)
-            await ctx.send(f"Despawned: **{jev_name}**")
+            for jev in visiting:
+                await jev.despawn(ctx.channel)
+            await ctx.send("Despawned: " + ", ".join(f"**{jev.settings.name}**" for jev in visiting))
         else:
             return False
         return not get_temp_bots_for_channel(channel_id)

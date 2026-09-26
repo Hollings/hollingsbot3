@@ -70,9 +70,6 @@ class ChatCoordinator(commands.Cog):
         # Registered bots
         self.bots: list[object] = []
 
-        # Webhooks whose messages the posting bot records itself (see claim_webhook)
-        self._bot_owned_webhooks: set[int] = set()
-
         # Track active message processing per channel
         self._active_message_tasks: dict[int, asyncio.Task] = {}
 
@@ -103,17 +100,6 @@ class ChatCoordinator(commands.Cog):
         self.bots.append(bot_instance)
         bot_name = bot_instance.__class__.__name__
         _LOG.info(f"Registered bot: {bot_name}")
-
-    def claim_webhook(self, webhook_id: int) -> None:
-        """Hand a webhook's messages to the bot that posts through it.
-
-        on_message ignores a claimed webhook's messages entirely - no history
-        turn of their own, no other bot answering them - and the owning bot's
-        text reaches history through receive_message's return value as usual.
-        (Jev claims its webhook; it once streamed replies by editing, which
-        fired on_message with only the first word.)
-        """
-        self._bot_owned_webhooks.add(webhook_id)
 
     # ==================== Generation Cancellation ====================
 
@@ -286,10 +272,6 @@ class ChatCoordinator(commands.Cog):
 
         # Ignore empty messages
         if not message.content.strip() and not message.attachments:
-            return
-
-        # A claimed webhook's message: its bot records the text itself (see claim_webhook)
-        if message.webhook_id is not None and message.webhook_id in self._bot_owned_webhooks:
             return
 
         # Ignore bot commands and image generation prompts
@@ -575,6 +557,11 @@ async def setup(bot: commands.Bot) -> None:
     llama = LlamaBot(bot, coordinator, coordinator.typing_tracker)
     gemini = GeminiBot(bot, coordinator, coordinator.typing_tracker)
     jev = JevBot(bot, coordinator, coordinator.typing_tracker)
+    # Spawn-only copies (`!spawn jev2`): the same brain under other names, so Jevs can talk to each other
+    jev_copies = [
+        JevBot(bot, coordinator, coordinator.typing_tracker, jev.settings.copy_named(name))
+        for name in jev.settings.copies
+    ]
 
     # Register with coordinator
     coordinator.register_bot(temp_bot_manager)
@@ -582,5 +569,7 @@ async def setup(bot: commands.Bot) -> None:
     coordinator.register_bot(llama)
     coordinator.register_bot(gemini)
     coordinator.register_bot(jev)
+    for jev_copy in jev_copies:
+        coordinator.register_bot(jev_copy)
 
     _LOG.info("Chat system initialized with all bots")

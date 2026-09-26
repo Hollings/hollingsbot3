@@ -194,7 +194,6 @@ async def test_replies_through_a_new_jev_webhook_and_logs_the_reply(jev):
     assert result == {"message_id": 999, "text": "paris", "webhook_id": 555, "bot_name": "Jev"}
     channel.create_webhook.assert_awaited_once()
     assert channel.create_webhook.await_args.kwargs["name"] == "Jev"
-    jev.coordinator.claim_webhook.assert_called_once_with(555)
     webhook.send.assert_awaited_once_with("paris", username="Jev", wait=True)
     webhook.edit_message.assert_not_awaited()  # one finished message, never edited
     assert jev._writer.chats[0][-1] == ChatLine("Hollings", "Jev what is the capital of France?")
@@ -442,6 +441,68 @@ async def test_spawned_jev_never_answers_itself_or_the_bot_account_it_runs_as(je
     assert jev._writer.chats == []
 
 
+def jev_copy(jev, name, temp_db):
+    copy = JevBot(jev.bot, jev.coordinator, jev.typing_tracker, jev.settings.copy_named(name))
+    copy.ledger, copy.lexicon = jev.ledger, jev.lexicon
+    copy.spawns = JevSpawns(temp_db, bot=name)
+    return copy
+
+
+def posted_by(channel, name, webhook_id, mid):
+    message = make_message(channel, f"something {name} said", bot=True, webhook_id=webhook_id, mid=mid)
+    message.author.name = name  # a webhook message's author is the name it posted under
+    return message
+
+
+async def test_two_jevs_in_a_channel_answer_each_other_until_both_run_out(jev, temp_db):
+    webhook, _ = make_webhook()
+    webhook2, _ = make_webhook()
+    webhook2.id = 556
+    channel = away_channel(webhook)
+    jev2 = jev_copy(jev, "Jev2", temp_db)
+    jev._writer, jev2._writer = FakeWriter(["hi"]), FakeWriter(["yo"])
+    jev._webhooks[AWAY], jev2._webhooks[AWAY] = webhook, webhook2  # each posts through its own
+    await jev.spawn(make_ctx(channel), 2)  # a quiet channel: no first replies
+    await jev2.spawn(make_ctx(channel, "!spawn jev2 3"), 3)
+    assert (jev.spawned, jev2.spawned) == ({AWAY: 2}, {AWAY: 3})  # one channel, two visits
+
+    # Relay each post to both Jevs (the coordinator's job): only the other one answers it.
+    said, answers = posted_by(channel, "Jev", 555, 100), []
+    for mid in range(101, 110):
+        replies = [(bot, await bot.receive_message(said, [turn(said, said.author.name)])) for bot in (jev, jev2)]
+        answered = [(bot, result) for bot, result in replies if result is not None]
+        if not answered:
+            break
+        [(bot, result)] = answered
+        answers.append(bot.settings.name)
+        said = posted_by(channel, bot.settings.name, result["webhook_id"], mid)
+
+    assert answers == ["Jev2", "Jev", "Jev2", "Jev", "Jev2"]  # 2 + 3 replies, then both are gone
+    assert (jev.spawned, jev2.spawned) == ({}, {})
+    assert webhook2.send.await_args_list[0].kwargs["username"] == "Jev2"
+
+
+async def test_a_jev_never_answers_a_post_under_its_own_name(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hi"])
+    await jev.spawn(make_ctx(channel), 5)  # its webhook isn't known yet (as right after a restart)
+    itself = posted_by(channel, "Jev", 777, 30)
+    assert await jev.receive_message(itself, [turn(itself, "Jev")]) is None
+    assert jev._writer.chats == []
+
+
+def test_copies_from_env(monkeypatch):
+    monkeypatch.delenv("JEV_COPIES", raising=False)
+    s = JevBotSettings.from_env()
+    assert s.copies == ("Jev2",)
+    monkeypatch.setenv("JEV_COPIES", "Jev2, Jev3, jev, Big Jev, JEV3,")  # the main name, a space, a repeat
+    assert JevBotSettings.from_env().copies == ("Jev2", "Jev3")
+    copy = s.copy_named("Jev2")
+    assert (copy.name, copy.channels, copy.copies) == ("Jev2", frozenset(), ())
+    assert copy.writer == s.writer and copy.suggest_model == s.suggest_model  # the same brain
+
+
 async def test_spawned_into_a_quiet_channel_waits_for_someone_to_talk(jev):
     webhook, _ = make_webhook()
     channel = away_channel(webhook)
@@ -549,14 +610,22 @@ async def test_recent_history_warms_the_channel_and_hands_out_a_copy(mock_bot):
     assert list(coordinator._history_for_channel(CHANNEL)) == [said]
 
 
-async def test_claimed_webhook_messages_skip_history_and_bots(mock_bot):
+async def test_a_jev_post_goes_to_the_other_bots_and_into_history_once(mock_bot):
+    """Jev's own posts reach the other bots (another Jev answers them), recorded once in history."""
     coordinator = ChatCoordinator(mock_bot)
-    responder = MagicMock()
-    responder.receive_message = AsyncMock(return_value=None)
-    coordinator.bots = [responder]
-    coordinator.claim_webhook(555)
-    message = make_message(make_channel(make_webhook()[0]), "knock", bot=True, webhook_id=555)
+    coordinator._ensure_channel_warm = AsyncMock()
+    message = make_message(make_channel(make_webhook()[0]), "knock", bot=True, webhook_id=555, mid=5)
     message.guild = MagicMock()
+    posted = turn(message, "Jev")
+    coordinator._prepare_full_turn = AsyncMock(return_value=posted)
+    other_jev = MagicMock()
+    other_jev.receive_message = AsyncMock(return_value=None)
+    coordinator.bots = [other_jev]
+
     await coordinator.on_message(message)
-    assert coordinator.channel_histories == {}
-    responder.receive_message.assert_not_awaited()
+    # The coordinator handling the message Jev was answering records the same post from its reply.
+    await coordinator._add_response_to_history(CHANNEL, 5, "knock", 555, "Jev")
+
+    other_jev.receive_message.assert_awaited_once()
+    assert other_jev.receive_message.await_args.args[1][-1] is posted
+    assert list(coordinator._history_for_channel(CHANNEL)) == [posted]

@@ -27,15 +27,24 @@ leaves with a temp bot's goodbye line
 (`*[Jev drifts off into silence]*`). Only posted replies count: one cut off by
 someone talking, skipped over budget or failed uses none.
 
-- `!despawn jev` ends the visit at once; `!despawn` lists it, `!despawn all`
-  includes it. Spawning again resets the count.
-- Visits are rows in `jev_spawns` (the bot DB), so a restart doesn't end one.
-- A spawned channel is claimed like a `JEV_BOT_CHANNELS` one: Jev goes first
-  on every human message, so a temp bot in the same channel gets no human
-  turns until Jev leaves. The daily budget and the learned words are shared
-  with every other channel.
+- `!spawn jev2` brings a second Jev: each name in `JEV_COPIES` (default
+  `Jev2`) is another JevBot with the same settings and brain but its own name
+  (it's told it's Jev2), its own webhook, its own visits and no channels of its
+  own. Two Jevs in a channel answer each other until both counts run out; a
+  human message goes to whichever of them the coordinator tries first.
+- `!despawn jev` (or `jev2`) ends a visit at once; `!despawn` lists them,
+  `!despawn all` includes them. Spawning again resets the count. Plain `jev`
+  always means the main Jev, even if `JEV_BOT_NAME` renames it.
+- Visits are rows in `jev_visits` (the bot DB, keyed by channel and Jev), so a
+  restart doesn't end one.
+- A spawned channel is claimed like a `JEV_BOT_CHANNELS` one: the Jevs go first
+  on every message, so a temp bot in the same channel mostly gets turns by
+  answering a Jev. Jev's posts go through the coordinator like any webhook
+  message (that's how another Jev hears them). The daily budget and the learned
+  words are shared by every Jev and channel.
 - Code: `JevBot.spawn` / `despawn` in `jev_bot.py`, the store in
-  `jev/spawns.py`; `temp_bot_commands.py` routes `!spawn jev` there.
+  `jev/spawns.py`, the copies registered in `chat_coordinator.setup`;
+  `temp_bot_commands.py` routes `!spawn jev` / `jev2` there.
 
 ## Opt-in: an LLM proposes, Jev chooses (`JEV_SUGGEST_MODEL=on`)
 

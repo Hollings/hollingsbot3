@@ -6,7 +6,7 @@ proposes each next word and Jev only chooses, see hollingsbot.jev.suggest; off
 by default because Jev then mostly filters another model's text.) The whole
 reply is written behind a typing indicator (shown under the bot's own name:
 webhooks cannot type), held while a human is mid-message, then posted once
-through a "Jev" webhook. Someone speaking first cancels it unposted.
+through a webhook named after it. Someone speaking first cancels it unposted.
 
 Jev is born knowing only the most common words and learns every word a human
 says in its channels (hollingsbot.jev.lexicon); `!jev` shows what it knows.
@@ -18,9 +18,15 @@ bots: the reply count ends any back-and-forth), until it has posted N replies
 humans only. `!despawn jev` sends it away early. Visits are kept in the DB
 (hollingsbot.jev.spawns) across restarts.
 
+There can be more than one: each name in JEV_COPIES is another JevBot, with the
+same settings and brain but its own name and webhook, and no channels of its
+own. `!spawn jev2` brings one in; two Jevs in a channel answer each other.
+
 Config (env):
     JEV_BOT_CHANNELS          comma-separated channel IDs Jev answers in (every human message)
     JEV_BOT_NAME              display name, also the name Jev is told it has (default "Jev")
+    JEV_COPIES                comma-separated names of spawn-only copies (default "Jev2"; one word
+                              each, since `!spawn <name>` is how they're called)
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
     JEV_SUGGEST_MODEL         "on" or an OpenRouter model slug: an LLM proposes next words and Jev
@@ -113,6 +119,22 @@ def _env_stop_mode(default: str) -> str:
     return raw
 
 
+def _env_copies(main: str) -> tuple[str, ...]:
+    names: list[str] = []
+    for raw in os.getenv("JEV_COPIES", "Jev2").split(","):
+        name = raw.strip()
+        if not name:
+            continue
+        if any(ch.isspace() for ch in name):
+            _LOG.warning("JEV_COPIES name %r has a space, so `!spawn` can't call it; skipped", name)
+            continue
+        if name.lower() in {n.lower() for n in (main, "jev", *names)}:
+            _LOG.warning("JEV_COPIES name %r is already taken; skipped", name)
+            continue
+        names.append(name)
+    return tuple(names)
+
+
 @dataclass(frozen=True)
 class JevBotSettings:
     channels: frozenset[int]
@@ -121,6 +143,11 @@ class JevBotSettings:
     daily_budget: float = 2.0
     writer: WriterConfig = field(default_factory=WriterConfig)
     suggest_model: str | None = None  # None = Jev picks from its own vocabulary alone
+    copies: tuple[str, ...] = ()  # names of spawn-only copies (JEV_COPIES)
+
+    def copy_named(self, name: str) -> JevBotSettings:
+        """A spawn-only copy: the same brain under another name, with no channels (or copies) of its own."""
+        return dataclasses.replace(self, name=name, channels=frozenset(), copies=())
 
     @classmethod
     def from_env(cls) -> JevBotSettings:
@@ -149,13 +176,15 @@ class JevBotSettings:
             shuffle=_env_flag("JEV_SHUFFLE", base.shuffle),
             stop=_env_stop_mode(base.stop),
         )
+        name = os.getenv("JEV_BOT_NAME", "Jev").strip() or "Jev"
         return cls(
             channels=frozenset(parse_id_set(os.getenv("JEV_BOT_CHANNELS"))),
-            name=os.getenv("JEV_BOT_NAME", "Jev").strip() or "Jev",
+            name=name,
             context_messages=max(1, int(_env_float("JEV_CONTEXT_MESSAGES", 5))),
             daily_budget=_env_float("JEV_DAILY_BUDGET_USD", 2.0),
             writer=writer,
             suggest_model=suggest_model,
+            copies=_env_copies(name),
         )
 
     def reachable_learned(self, learned: int) -> int:
@@ -200,7 +229,7 @@ class JevBot:
         self.whitelist_channels: set[int] = set(self.settings.channels)
         self.ledger = JevLedger()
         self.lexicon = Lexicon()
-        self.spawns = JevSpawns()
+        self.spawns = JevSpawns(bot=self.settings.name)
         self._spawned: dict[int, int] | None = None  # channel -> replies left; loaded on first use
         self._writer: JevWriter | None = None
         self._webhooks: dict[int, discord.Webhook | None] = {}
@@ -387,15 +416,18 @@ class JevBot:
     def _answers_bot(self, message: discord.Message) -> bool:
         """Other bots and webhooks get answers only where Jev was spawned.
 
-        There its reply count ends a back-and-forth with another bot; in its own
-        channels nothing would, so two bots answering each other would never stop.
-        Never itself (its webhook is claimed with the coordinator, this is a
-        backstop) or the bot account it runs as (command output, not conversation).
+        There its reply count ends a back-and-forth with another bot (another Jev
+        included); in its own channels nothing would, so two bots answering each
+        other would never stop. Never itself (its webhook, or anything posted
+        under its name) or the bot account it runs as (command output, not
+        conversation).
         """
         if message.channel.id not in self.spawned or message.author.id == self.bot.user.id:
             return False
         own = self._webhooks.get(message.channel.id)
-        return own is None or message.webhook_id != own.id
+        if own is not None and message.webhook_id == own.id:
+            return False
+        return not (message.webhook_id is not None and message.author.name == self.settings.name)
 
     # ------------------------------------------------------------------ writing
 
@@ -488,7 +520,7 @@ class JevBot:
     # ------------------------------------------------------------------ webhook
 
     async def _webhook_for(self, channel: discord.abc.Messageable) -> discord.Webhook | None:
-        """Find or create this bot's "Jev" webhook in ``channel`` (None if not allowed)."""
+        """Find or create this bot's webhook in ``channel``, named after it (None if not allowed)."""
         if channel.id in self._webhooks:
             return self._webhooks[channel.id]
         webhook: discord.Webhook | None = None
@@ -511,7 +543,5 @@ class JevBot:
             except discord.HTTPException:
                 _LOG.exception("JevBot could not set up a webhook in %s; posting as the bot", channel.id)
                 return None  # not cached: try again next message
-        if webhook is not None:
-            self.coordinator.claim_webhook(webhook.id)
         self._webhooks[channel.id] = webhook
         return webhook
