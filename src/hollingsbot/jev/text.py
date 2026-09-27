@@ -8,14 +8,10 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from collections.abc import Iterable
 
-# Punctuation Jev can pick as a "word". The descriptions are what Jev reads.
-PUNCTUATION: dict[str, str] = {
-    ".": "a period, ending the sentence",
-    ",": "a comma",
-    "?": "a question mark",
-    "!": "an exclamation mark",
-    "...": "an ellipsis, trailing off",
-}
+# Punctuation Jev can pick as a "word", shown bare. Probed 2026-09-26 (5 states x 2 runs): Jev reads
+# the bare marks fine (~0 mid-phrase, more where they fit: 0.29-0.33 vs 0.18-0.19 after a finished
+# answer), and the old descriptions ("an ellipsis, trailing off") pulled it toward "..." over ".".
+PUNCTUATION: tuple[str, ...] = (".", ",", "?", "!", "...")
 
 _WORD = re.compile(r"[a-z0-9][a-z0-9']*")
 

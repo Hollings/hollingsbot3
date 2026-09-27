@@ -392,6 +392,22 @@ async def test_own_page_comes_last_without_the_words_jev_passed():
     assert (reply.steps[0].page, reply.steps[0].source) == (2, "own")
 
 
+async def test_every_page_offers_punctuation_after_the_first_word():
+    fake = ScriptedJev(["the", "i"])
+    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(CHAT)
+    first_word = list(fake.requests[0][1]["next"]["criteria"])
+    assert not set(PUNCTUATION) & set(first_word)  # a reply never starts with punctuation
+    second_word = fake.requests[1][1]["next"]["criteria"]  # the LLM proposed none; Jev still gets them
+    assert list(second_word) == ["a", "i", *PUNCTUATION]
+    assert second_word["..."] is None  # bare: Jev reads them fine, and a description skews the pick
+
+
+async def test_punctuation_can_be_left_to_the_llm():
+    fake = ScriptedJev(["the", "i"])
+    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, always_punctuation=False).write(CHAT)
+    assert list(fake.requests[1][1]["next"]["criteria"]) == ["a", "i"]
+
+
 async def test_only_the_first_page_carries_the_stop_check():
     fake = ScriptedJev(["the", "is"])
     await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(CHAT)

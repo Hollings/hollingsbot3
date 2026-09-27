@@ -140,6 +140,13 @@ request: which word, a naturalness Noul per option, the send/sense check.
   one LLM page and the own page, ~22% of words are Jev's own. Only Novita
   serves more than 20 logprobs for llama-3.1-8b (CoreWeave errors), so deep
   asks are pinned there and fall back to 20 if it fails or rate-limits.
+- **Punctuation on every page (`always_punctuation`, on):** `. , ? ! ...` join
+  every LLM page (never first, never twice in a row), not only when the LLM
+  ranks them. They're bare: Jev reads bare marks fine (~0 mid-phrase, 0.29-0.33
+  after a finished answer vs 0.18-0.19 described), and the old descriptions
+  ("an ellipsis, trailing off") pulled it toward `...`. In 6 samples bare marks
+  came out 10 `?`, 9 `...`, 1 `,`, 1 `.`; described 9 `...` of 12; LLM-only 11,
+  all `...`. Periods stay rare: Jev ends by choosing to send.
   `jev_try.py --trace` shows each word's page and P(other).
 
 ~20-25 words and ~$0.002 per reply, ~0.3 s per word. Examples (strict, born

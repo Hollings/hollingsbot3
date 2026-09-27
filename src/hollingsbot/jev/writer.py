@@ -142,6 +142,9 @@ class WriterConfig:
     llm_pages: int = 1  # >1 asks the LLM for its top 200 tokens: ~3 pages of known words, slower provider
     own_page: bool = False
     page_power: float = 1.0  # turn with probability P(other)**page_power (T=0: when P(other) >= 0.5)
+    # Every LLM page also offers the punctuation marks (where punctuation may go: never first, never
+    # twice in a row), not only the ones the LLM happened to rank in its top tokens.
+    always_punctuation: bool = True
     # "words": the menus are whole words (this module). "pieces": the LLM's raw next tokens, word
     # pieces and all, which Jev strings together itself (pieces.py; needs a suggester).
     units: str = "words"
@@ -496,6 +499,9 @@ class JevWriter:
         size = max(1, cfg.page_size)
         shown = proposals[: size * max(1, cfg.llm_pages)]
         pages = [("llm", shown[i : i + size]) for i in range(0, len(shown), size)]
+        if cfg.always_punctuation:
+            marks = allowed(list(PUNCTUATION), words)
+            pages = [(src, options + [m for m in marks if m not in options]) for src, options in pages]
         if cfg.own_page or not pages:
             passed = set(shown)
             own = [w for w in allowed(list(pool) + (list(PUNCTUATION) if words else []), words) if w not in passed]
@@ -540,7 +546,7 @@ class JevWriter:
         }
 
     def _runoff_questions(self, words: Sequence[str], options: Sequence[str]) -> dict[str, dict[str, Any]]:
-        criteria = {w: self._stop_description if w == STOP else PUNCTUATION.get(w) for w in options}
+        criteria = {w: self._stop_description if w == STOP else None for w in options}
         questions: dict[str, dict[str, Any]] = {
             "next": {"type": "choice", "instructions": self._blank_instructions, "criteria": criteria}
         }
