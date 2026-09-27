@@ -188,11 +188,13 @@ class TempBotCommands(commands.Cog):
     async def clear_history_command(self, ctx: commands.Context) -> None:
         """Clear conversation history for this channel.
 
-        This removes all previous messages from the bots' memory,
-        allowing you to start fresh. The bots will only see messages
-        sent after this command.
+        This removes all previous messages from the bots' memory (Jev's
+        included), allowing you to start fresh. The bots will only see
+        messages sent after this command, even after a restart; a reply
+        being written from the old chat is dropped.
 
         Usage: !clear
+        As a reply to a message: forget that message and everything before it.
         """
         coordinator = self.bot.get_cog("ChatCoordinator")
         if not coordinator:
@@ -200,18 +202,12 @@ class TempBotCommands(commands.Cog):
             return
 
         channel_id = ctx.channel.id
+        reference = ctx.message.reference
+        up_to = reference.message_id if reference is not None and reference.message_id else ctx.message.id
+        # The clear point also covers the summary cache, which reads the same table.
+        await coordinator.clear_history(channel_id, up_to)
 
-        # Clear in-memory history for this channel
-        if channel_id in coordinator.channel_histories:
-            coordinator.channel_histories[channel_id].clear()
-
-        # Set clear point in database (soft delete for summarization)
-        # All summaries and cached messages before this message will be ignored
-        if coordinator.summary_cache:
-            coordinator.summary_cache.set_clear_point(channel_id, ctx.message.id)
-            _LOG.info(f"Set clear point for channel {channel_id} at message {ctx.message.id}")
-
-        _LOG.info(f"Cleared conversation history for channel {channel_id}")
+        _LOG.info("Cleared conversation history for channel %s up to message %s", channel_id, up_to)
         await ctx.message.add_reaction("\u2705")  # Checkmark
 
     @commands.command(name="recall")

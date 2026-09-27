@@ -51,6 +51,16 @@ human replying straight to another bot's message is left to that bot.
   `jev/spawns.py`, the copies registered in `chat_coordinator.setup`;
   `temp_bot_commands.py` routes `!spawn jev` / `jev2` there.
 
+## Forgetting the chat (`!clear`)
+
+Jev reads the last 5 messages of the coordinator's channel history, its own
+replies included, which is how it gets stuck on a topic. `!clear` empties that
+history up to and including the command (as a reply: up to the replied-to
+message), for every bot in the channel, and drops a reply still being written
+from the old chat. The clear point is saved (`channel_clear_points`), so a
+restart's backfill from Discord doesn't bring the old chat back. Learned words
+and the reply log are untouched.
+
 ## Cameos in Wendy's channels (`JEV_CAMEO_CHANNELS`)
 
 In each channel listed in `JEV_CAMEO_CHANNELS` (Wendy's: chat and coding;

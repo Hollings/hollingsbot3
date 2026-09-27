@@ -631,3 +631,32 @@ def resolve_user_by_display_name(display_name: str, channel_id: int | None = Non
         )
         row = cur.fetchone()
         return row[0] if row else None
+
+
+# ------------------------- Channel clear points -------------------------
+# `!clear` marks a message; chat history (what the bots read) starts after it, even once the
+# bot restarts and backfills from Discord. The summary cache reads the same table.
+
+
+def set_channel_clear_point(channel_id: int, message_id: int) -> None:
+    """Forget the channel's chat up to and including ``message_id``."""
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO channel_clear_points (channel_id, clear_after_message_id, cleared_at)
+            VALUES (?, ?, ?)
+            """,
+            (channel_id, message_id, int(datetime.now().timestamp())),
+        )
+
+
+def get_channel_clear_point(channel_id: int) -> int | None:
+    """The last message ID ``!clear`` forgot in this channel, or None."""
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT clear_after_message_id FROM channel_clear_points WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+        return row[0] if row else None

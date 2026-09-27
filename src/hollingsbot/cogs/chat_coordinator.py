@@ -15,6 +15,7 @@ from discord.ext import commands
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn
 from hollingsbot.cogs.typing_tracker import TypingTracker
+from hollingsbot.prompt_db import get_channel_clear_point, set_channel_clear_point
 
 # Summarization imports
 from hollingsbot.summarization import (
@@ -141,6 +142,20 @@ class ChatCoordinator(commands.Cog):
             self._history_locks[channel_id] = lock
         return lock
 
+    async def clear_history(self, channel_id: int, up_to_message_id: int) -> None:
+        """Forget the channel's chat up to and including ``up_to_message_id`` (`!clear`), for good.
+
+        Replies being written from the old chat are cancelled, and the clear point is saved,
+        so a restart's backfill from Discord skips everything before it too.
+        """
+        await self._cancel_all_generations(channel_id)
+        await asyncio.to_thread(set_channel_clear_point, channel_id, up_to_message_id)
+        async with self._lock_for_channel(channel_id):
+            history = self._history_for_channel(channel_id)
+            kept = [t for t in history if t.message_id is not None and t.message_id > up_to_message_id]
+            history.clear()
+            history.extend(kept)
+
     async def recent_history(self, channel: discord.abc.Messageable) -> list[ConversationTurn]:
         """A copy of the channel's history, backfilled from Discord first if nothing has been said here yet.
 
@@ -187,8 +202,11 @@ class ChatCoordinator(commands.Cog):
             if not isinstance(channel, discord.TextChannel | discord.Thread | discord.DMChannel):
                 return
 
+            clear_point = await asyncio.to_thread(get_channel_clear_point, channel_id)
             messages = []
             async for msg in channel.history(limit=self.history_limit * 3):
+                if clear_point is not None and msg.id <= clear_point:
+                    break  # newest first: everything from here back was `!clear`ed
                 messages.append(msg)
             messages.reverse()
 
