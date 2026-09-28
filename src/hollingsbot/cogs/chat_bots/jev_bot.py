@@ -73,6 +73,7 @@ import os
 import random
 import re
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -87,7 +88,7 @@ from hollingsbot.jev.pieces import make_writer
 from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
 from hollingsbot.jev.writer import NO_REPEAT_MODES, STOP_MODES, UNITS
-from hollingsbot.prompt_db import get_temp_bots_for_channel
+from hollingsbot.prompt_db import get_channel_clear_time, get_temp_bots_for_channel
 from hollingsbot.settings import parse_id_set
 from hollingsbot.utils.discord_utils import get_display_name
 
@@ -527,7 +528,9 @@ class JevBot:
         draft = Reply()
 
         try:
-            learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.learned_limit)
+            cleared_at = await asyncio.to_thread(get_channel_clear_time, channel.id)
+            since = datetime.fromtimestamp(cleared_at, timezone.utc) if cleared_at is not None else None
+            learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.learned_limit, since=since)
             async with channel.typing():
                 reply = await self._get_writer().write(chat, draft=draft, learned=learned)
                 # Don't talk over someone mid-message (if they send, this task is cancelled).

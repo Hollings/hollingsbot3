@@ -647,7 +647,7 @@ def set_channel_clear_point(channel_id: int, message_id: int) -> None:
             INSERT OR REPLACE INTO channel_clear_points (channel_id, clear_after_message_id, cleared_at)
             VALUES (?, ?, ?)
             """,
-            (channel_id, message_id, int(datetime.now().timestamp())),
+            (channel_id, message_id, datetime.now().timestamp()),
         )
 
 
@@ -660,3 +660,14 @@ def get_channel_clear_point(channel_id: int) -> int | None:
             (channel_id,),
         ).fetchone()
         return row[0] if row else None
+
+
+def get_channel_clear_time(channel_id: int) -> float | None:
+    """When this channel was last cleared, as a Unix timestamp."""
+    init_db()
+    with _connect() as conn:
+        row = conn.execute(
+            "SELECT cleared_at FROM channel_clear_points WHERE channel_id = ?",
+            (channel_id,),
+        ).fetchone()
+        return float(row[0]) if row else None

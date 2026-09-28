@@ -9,6 +9,7 @@ from hollingsbot.jev.pieces import PieceWriter, clean_piece, join_piece, make_wr
 from hollingsbot.jev.writer import DEEP_TOP, STOP
 
 CHAT = [ChatLine("Hollings", "jev whats your favorite thing about fall?")]
+FILLER_CHAT = [ChatLine("Hollings", "the")]
 
 
 class FakeSuggester:
@@ -111,7 +112,7 @@ async def test_no_repeat_takes_used_pieces_off_the_menu(mode, third_menu, fourth
     jev = ScriptedJev(script)
     w = writer(jev, FakeSuggester({"*": ["the", "cat", "sat", "on"]}), min_words=3, no_repeat=mode)
 
-    reply = await w.write(CHAT)
+    reply = await w.write(FILLER_CHAT)
 
     assert reply.text == "the cat sat"
     menus_shown = jev.menus()
@@ -124,13 +125,21 @@ async def test_turns_to_the_next_page_when_its_piece_isnt_here():
     jev = ScriptedJev({"___": "gold"})
     w = writer(jev, suggester, llm_pages=2, page_size=2, min_words=1)
 
-    reply = await w.write(CHAT)
+    reply = await w.write(FILLER_CHAT)
 
     assert reply.text == "gold"
     assert reply.steps[0].page == 1 and reply.steps[0].source == "llm" and reply.steps[0].other == 0.0
     assert jev.menus()[:2] == [["red", "blue"], ["green", "gold"]]
     assert "other" in jev.requests[0] and "other" not in jev.requests[1]  # the last page asks nothing
     assert suggester.calls[0][1] == DEEP_TOP  # more than one LLM page: the deep list
+
+
+async def test_latest_content_word_is_an_extra_piece_option():
+    jev = ScriptedJev({"___": "autumn"})
+    w = writer(jev, FakeSuggester({"*": ["red", "blue"]}), max_words=1)
+    reply = await w.write([ChatLine("Hollings", "the autumn and fall")])
+    assert reply.text == "autumn"
+    assert {"red", "blue", "autumn", "fall"} <= set(jev.menus()[0])
 
 
 async def test_own_words_are_the_menu_when_the_llm_is_down():
@@ -141,6 +150,14 @@ async def test_own_words_are_the_menu_when_the_llm_is_down():
 
     assert reply.text == "zebra"
     assert reply.steps[0].source == "own"
+
+
+async def test_latest_content_word_survives_a_full_fallback_menu():
+    jev = ScriptedJev({"___": "glimmer"})
+    w = writer(jev, FakeSuggester(fail=True), bucket_size=2, max_words=1)
+    reply = await w.write([ChatLine("Hollings", "the a glimmer")])
+    assert reply.text == "glimmer"
+    assert jev.menus()[:2] == [["the", "a"], ["glimmer"]]
 
 
 async def test_own_page_comes_after_the_llm_pages_without_what_was_shown():

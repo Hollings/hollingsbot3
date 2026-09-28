@@ -151,7 +151,12 @@ class NextWordSuggester:
         self, chat: Sequence[ChatLine], name: str, words: Sequence[str], style: str, top: int
     ) -> dict[str, Any]:
         log = "\n".join(f"{line.speaker}: {line.text}" for line in chat)
-        system = f"Continue this Discord chat log. {style} Output only the next words of {name}'s last message."
+        system = (
+            f"Continue this Discord chat log. {style} "
+            f"The final post is the one {name} is answering; earlier posts are background. "
+            "If the final post changes the subject, follow its new subject. "
+            f"Output only the next words of {name}'s reply."
+        )
         # Only providers that actually return logprobs, fastest first. require_parameters does
         # not check how many: a deep list must go where it is served, or it errors.
         provider: dict[str, Any] = {"require_parameters": True, "sort": "latency"}

@@ -58,8 +58,16 @@ replies included, which is how it gets stuck on a topic. `!clear` empties that
 history up to and including the command (as a reply: up to the replied-to
 message), for every bot in the channel, and drops a reply still being written
 from the old chat. The clear point is saved (`channel_clear_points`), so a
-restart's backfill from Discord doesn't bring the old chat back. Learned words
-and the reply log are untouched.
+restart's backfill from Discord doesn't bring the old chat back. Jev also uses
+only words heard after the clear when replying in that channel. Its learned
+vocabulary records and reply log remain available elsewhere.
+
+Jev's word and piece menus also include distinct non-filler words from the
+final post, even when the normal menu is full or the LLM did not suggest them.
+Existing options stay available; an unusually long post may require another
+Choice bucket or page and therefore more requests. The decision questions and
+the optional LLM suggester explicitly treat the final post as the reply target
+and earlier posts as background.
 
 ## Cameos in Wendy's channels (`JEV_CAMEO_CHANNELS`)
 

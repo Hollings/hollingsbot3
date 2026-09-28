@@ -41,6 +41,7 @@ async def test_clear_forgets_up_to_the_message_and_stops_old_replies(db, mock_bo
     assert ids(coordinator) == [4, 5]  # sent after the clear point: kept
     jev._cancel_generation.assert_awaited_once_with(CHANNEL)  # no reply from the old chat
     assert prompt_db.get_channel_clear_point(CHANNEL) == 3
+    assert prompt_db.get_channel_clear_time(CHANNEL) is not None
     assert prompt_db.get_channel_clear_point(1) is None
 
 

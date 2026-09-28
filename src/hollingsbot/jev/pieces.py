@@ -48,6 +48,7 @@ from hollingsbot.jev.writer import (
     Reply,
     Step,
     _chat_json,
+    _latest_content_words,
     _newest_first,
     _other,
     _probabilities,
@@ -117,7 +118,9 @@ class PieceWriter(JevWriter):
             raise ValueError(f"unknown no_repeat mode {self.config.no_repeat!r}")
         style = f"{self._style_line} " if self._style_line else ""
         self._piece_instructions = (
-            f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
+            f"{name} is a member of this Discord chat. {style}"
+            "The final post in `chat` is the one to answer. Earlier posts are background; "
+            "if the final post changes the subject, follow its new subject. "
             f"`{self._reply_key}` is {name}'s reply so far, typed a piece at a time. The blank ({BLANK}) is "
             "where it would continue, if it continues. Each option is a piece of text: it either finishes the "
             "word right before the blank or starts the next word. Which piece goes in the blank, or is the "
@@ -140,12 +143,13 @@ class PieceWriter(JevWriter):
         pieces, steps, usage = reply.words, reply.steps, reply.usage
         chat_state = {"chat": _chat_json(chat)}
         own = self._single_pool(chat, learned)
+        latest = _latest_content_words(chat)
         joins = self._vocab_prefixes | prefixes(context_words(_newest_first(chat), 1000) + list(learned))
         used: list[str] = []  # lowercase, in order
         stop_reason = "max_words"
 
         while len(pieces) < cfg.max_words:
-            pages, suggested = await self._pages_for(chat, reply.text, own, self._banned(used), usage)
+            pages, suggested = await self._pages_for(chat, reply.text, own, self._banned(used), usage, latest)
             if not pages:
                 stop_reason = "no_options"
                 break
@@ -199,7 +203,13 @@ class PieceWriter(JevWriter):
         return set()
 
     async def _pages_for(
-        self, chat: Sequence[ChatLine], text: str, own: Sequence[str], banned: set[str], usage: Usage
+        self,
+        chat: Sequence[ChatLine],
+        text: str,
+        own: Sequence[str],
+        banned: set[str],
+        usage: Usage,
+        latest: Sequence[str] = (),
     ) -> tuple[list[tuple[str, list[str]]], dict[str, float]]:
         """The menus for one piece as (source, options), and the LLM's probability of each piece."""
         cfg = self.config
@@ -217,12 +227,28 @@ class PieceWriter(JevWriter):
             piece = clean_piece(token)
             if piece is not None and piece.lower() not in banned:
                 suggested[piece] = suggested.get(piece, 0.0) + p
-        size = max(1, cfg.page_size)
+        capacity = min(cfg.bucket_size, 254)  # leave room for STOP
+        size = max(1, min(cfg.page_size, capacity))
         shown = list(suggested)[: size * max(1, cfg.llm_pages)]
         pages = [("llm", shown[i : i + size]) for i in range(0, len(shown), size)]
-        if cfg.own_page or not pages:
-            passed = {p.lower() for p in shown} | banned
-            pages.append(("own", [w for w in own if w not in passed]))
+        if not pages:
+            own_words = [w for w in dict.fromkeys([*own, *latest]) if w.lower() not in banned]
+            pages = [("own", own_words[i : i + capacity]) for i in range(0, len(own_words), capacity)]
+            pages = [(src, opts) for src, opts in pages if opts]
+            if cfg.shuffle:
+                for _, options in pages:
+                    self.rng.shuffle(options)
+            return pages, suggested
+        bonus = [w for w in latest if w.lower() not in banned and w not in shown]
+        first = pages[0][1]
+        added = max(0, capacity - len(first))
+        pages[0] = ("llm", first + bonus[:added])
+        bonus = bonus[added:]
+        pages.extend(("latest", bonus[i : i + capacity]) for i in range(0, len(bonus), capacity))
+        if cfg.own_page:
+            passed = {p.lower() for p in shown} | {w.lower() for w in latest} | banned
+            own_words = [w for w in own if w not in passed]
+            pages.extend(("own", own_words[i : i + capacity]) for i in range(0, len(own_words), capacity))
         pages = [(src, opts) for src, opts in pages if opts]
         if cfg.shuffle:
             for _, options in pages:

@@ -6,11 +6,14 @@ import asyncio
 import contextlib
 import dataclasses
 import sqlite3
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
 import discord
 import pytest
 
+from hollingsbot import prompt_db
 from hollingsbot.cogs.chat_bots import jev_bot as jev_bot_mod
 from hollingsbot.cogs.chat_bots.jev_bot import CUT_OFF_MARK, JevBot, JevBotSettings, chat_lines
 from hollingsbot.cogs.chat_coordinator import ChatCoordinator
@@ -123,7 +126,8 @@ def temp_bots(monkeypatch):
 
 
 @pytest.fixture
-def jev(temp_db, mock_bot, temp_bots):
+def jev(temp_db, mock_bot, temp_bots, monkeypatch):
+    monkeypatch.setattr(prompt_db, "DB_PATH", Path(temp_db))
     coordinator = MagicMock()
     coordinator._add_response_to_history = AsyncMock()
     coordinator.recent_history = AsyncMock(return_value=[])
@@ -146,6 +150,22 @@ async def test_learns_every_word_a_human_says_and_writes_with_them(jev):
     assert {w for w, _ in summary.newest} == {"i", "love", "quokkas"}
     assert dict(summary.newest)["quokkas"] == "Hollings"
     assert "quokkas" in jev._writer.learned[0]
+
+
+async def test_clear_hides_older_learned_words_in_that_channel(jev):
+    old = datetime.now(timezone.utc) - timedelta(days=1)
+    jev.lexicon.learn("headed orders", speaker="Hollings", channel_id=CHANNEL, now=old)
+    prompt_db.set_channel_clear_point(CHANNEL, 1)
+    webhook, _ = make_webhook()
+    message = make_message(make_channel(webhook), "meowdy")
+    jev._writer = FakeWriter(["hi"])
+
+    await jev.receive_message(message, [turn(message)])
+
+    assert "meowdy" in jev._writer.learned[0]
+    assert "headed" not in jev._writer.learned[0]
+    assert "orders" not in jev._writer.learned[0]
+    assert {"headed", "orders"} <= set(jev.lexicon.ranked(100))  # other channels still know them
 
 
 async def test_ignored_messages_teach_nothing(jev):

@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 
 VOCAB = ["the", "a", "i", "is", "like", "pizza", "you", "yes", "no", "dog", "cat", "blue"]
 CHAT = [ChatLine("Mallory", "hey"), ChatLine("Hollings", "Jev whats your favorite food")]
+FILLER_CHAT = [ChatLine("Jev", "the")]
 
 
 class ScriptedJev:
@@ -114,6 +115,7 @@ async def test_word_questions_mark_the_next_word_with_a_blank():
         {"from": "Mallory", "text": "hey"},
         {"from": "Hollings", "text": "Jev whats your favorite food"},
     ]
+    assert "final post in `chat` is the one to answer" in fake.requests[0][1]["b0"]["instructions"]
 
 
 async def test_stop_check_sees_the_chat_and_the_reply_but_no_blank():
@@ -285,6 +287,30 @@ def test_single_pool_keeps_born_words_then_chat_words_then_learned():
     assert len(pool) == 8 and "sushi" not in pool  # bucket_size caps it: no room left for learned words
 
 
+async def test_latest_content_word_gets_extra_bucket_without_evicting_the_full_menu():
+    chat = [ChatLine("Hollings", "the a i an and to of for in on glimmer")]
+    fake = ScriptedJev(["glimmer"])
+    writer = single_writer(fake, vocab_size=3, bucket_size=8, max_words=1)
+    original = writer._single_pool(chat)
+    reply = await writer.write(chat)
+    buckets = fake.requests[0][1]
+    offered = [word for question in buckets.values() for word in question["criteria"]]
+    assert reply.text == "glimmer"
+    assert set(original) <= set(offered)
+    assert "glimmer" in offered and "an" in offered  # filler remains on the original menu
+    assert all(len(question["criteria"]) <= 8 for question in buckets.values())
+
+
+async def test_latest_content_words_join_suggestions_without_replacing_them():
+    chat = [ChatLine("Hollings", "the glimmer and shimmer")]
+    fake = ScriptedJev(["shimmer"])
+    suggester = FakeSuggester([Suggestion([("i", 0.6), ("like", 0.4)])])
+    reply = await suggesting_writer(fake, suggester, shuffle=False, max_words=1).write(chat)
+    menu = list(fake.requests[0][1]["next"]["criteria"])
+    assert reply.text == "shimmer"
+    assert menu == ["i", "like", "glimmer", "shimmer"]
+
+
 def test_learned_words_fill_leftover_room_in_rank_order():
     writer = single_writer(ScriptedJev([]), vocab_size=3, bucket_size=12)
     pool = writer._single_pool([ChatLine("A", "hey")], learned=["sushi", "the", "tacos", "burrito"])
@@ -337,7 +363,7 @@ def suggesting_writer(fake, suggester, **cfg) -> JevWriter:
 async def test_suggestions_are_jevs_menu():
     suggester = FakeSuggester([Suggestion([("i", 0.5), ("like", 0.3), ("zebra", 0.2)])])
     fake = ScriptedJev(["i", "like"])
-    reply = await suggesting_writer(fake, suggester, shuffle=False).write(CHAT)
+    reply = await suggesting_writer(fake, suggester, shuffle=False).write(FILLER_CHAT)
     assert reply.text == "i like"
     assert list(fake.requests[0][1]["next"]["criteria"]) == ["i", "like", "zebra"]
     assert reply.steps[0].suggested == 0.5
@@ -350,7 +376,7 @@ async def test_suggestions_are_jevs_menu():
 async def test_suggestions_are_shuffled_so_their_rank_cannot_leak():
     ranked = [(w, 1 / (i + 2)) for i, w in enumerate(VOCAB)]
     fake = ScriptedJev(["i"])
-    await suggesting_writer(fake, FakeSuggester([Suggestion(ranked)])).write(CHAT)
+    await suggesting_writer(fake, FakeSuggester([Suggestion(ranked)])).write(FILLER_CHAT)
     shown = list(fake.requests[0][1]["next"]["criteria"])
     assert sorted(shown) == sorted(VOCAB) and shown != VOCAB
 
@@ -365,7 +391,7 @@ RANKED = Suggestion([("the", 0.4), ("a", 0.3), ("i", 0.2), ("is", 0.1)])
 async def test_jev_turns_the_page_when_its_word_is_not_on_it():
     suggester = FakeSuggester([RANKED])
     fake = ScriptedJev(["i"])
-    reply = await paging_writer(fake, suggester, llm_pages=2).write(CHAT)
+    reply = await paging_writer(fake, suggester, llm_pages=2).write(FILLER_CHAT)
     assert reply.text == "i"
     first, second = (q for _, q in fake.requests[:2])
     assert list(first["next"]["criteria"]) == ["the", "a"] and "other" in first
@@ -383,7 +409,7 @@ async def test_jev_stays_on_the_page_that_has_its_word():
 
 async def test_own_page_comes_last_without_the_words_jev_passed():
     fake = ScriptedJev(["pizza"])
-    reply = await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, own_page=True).write(CHAT)
+    reply = await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, own_page=True).write(FILLER_CHAT)
     assert reply.text == "pizza"
     menus = [list(q["next"]["criteria"]) for _, q in fake.requests[:3]]
     assert menus[:2] == [["the", "a"], ["i", "is"]]
@@ -394,7 +420,7 @@ async def test_own_page_comes_last_without_the_words_jev_passed():
 
 async def test_every_page_offers_punctuation_after_the_first_word():
     fake = ScriptedJev(["the", "i"])
-    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(CHAT)
+    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2).write(FILLER_CHAT)
     first_word = list(fake.requests[0][1]["next"]["criteria"])
     assert not set(PUNCTUATION) & set(first_word)  # a reply never starts with punctuation
     second_word = fake.requests[1][1]["next"]["criteria"]  # the LLM proposed none; Jev still gets them
@@ -404,7 +430,7 @@ async def test_every_page_offers_punctuation_after_the_first_word():
 
 async def test_punctuation_can_be_left_to_the_llm():
     fake = ScriptedJev(["the", "i"])
-    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, always_punctuation=False).write(CHAT)
+    await paging_writer(fake, FakeSuggester([RANKED]), llm_pages=2, always_punctuation=False).write(FILLER_CHAT)
     assert list(fake.requests[1][1]["next"]["criteria"]) == ["a", "i"]
 
 
@@ -428,14 +454,14 @@ def test_page_turn_is_sampled_with_jevs_probability():
 async def test_known_only_keeps_jev_to_words_it_knows():
     suggester = FakeSuggester([Suggestion([("zebra", 0.9), ("i", 0.1)])])
     fake = ScriptedJev(["i"])
-    await suggesting_writer(fake, suggester, known_only=True).write(CHAT)
+    await suggesting_writer(fake, suggester, known_only=True).write(FILLER_CHAT)
     assert list(fake.requests[0][1]["next"]["criteria"]) == ["i"]  # zebra: never born with, heard or learned
 
 
 async def test_known_only_falls_back_to_known_words_when_nothing_survives():
     suggester = FakeSuggester([Suggestion([("zebra", 1.0)])])
     fake = ScriptedJev(["i"])
-    await suggesting_writer(fake, suggester, known_only=True).write(CHAT)
+    await suggesting_writer(fake, suggester, known_only=True).write(FILLER_CHAT)
     menu = list(fake.requests[0][1]["next"]["criteria"])
     assert "zebra" not in menu and "i" in menu and "jev" in menu  # the static menu: chat words + born words
 

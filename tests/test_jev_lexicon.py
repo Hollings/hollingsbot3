@@ -46,6 +46,7 @@ def test_ranked_prefers_heard_often_and_recently(temp_db):
     assert lex.ranked(10, now=T0) == ["burrito", "tacos", "sushi"]
     assert lex.ranked(2, now=T0) == ["burrito", "tacos"]
     assert lex.ranked(10, exclude={"tacos"}, now=T0) == ["burrito", "sushi"]
+    assert lex.ranked(10, now=T0, since=T0 - timedelta(hours=1)) == ["burrito", "tacos"]
 
 
 def test_summary_can_leave_out_the_words_jev_was_born_with(temp_db):

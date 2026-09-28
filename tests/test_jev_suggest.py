@@ -82,6 +82,7 @@ async def test_suggest_asks_for_top_logprobs_and_maps_them():
     assert got.completes is None
     assert seen["max_tokens"] == 1 and seen["top_logprobs"] == 20 and seen["logprobs"] is True
     assert seen["messages"][1]["content"].endswith("Hollings: ramen or pizza?\nJev: i like")
+    assert "The final post is the one Jev is answering" in seen["messages"][0]["content"]
     assert usage.calls == 1
 
 

@@ -57,7 +57,7 @@ from typing import TYPE_CHECKING, Any
 from hollingsbot.jev.client import DecisionsClient, JevError, Usage
 from hollingsbot.jev.decoding import allowed, finalists, pick, repetition_factor
 from hollingsbot.jev.suggest import Suggestion
-from hollingsbot.jev.text import PUNCTUATION, context_words, join_words
+from hollingsbot.jev.text import PUNCTUATION, context_words, join_words, words_in
 from hollingsbot.jev.vocab import load_vocab
 
 if TYPE_CHECKING:
@@ -68,7 +68,9 @@ _LOG = logging.getLogger(__name__)
 BLANK = "___"
 NEXT_WORD_Q = "Is `next` a natural next word right after `text`, in fluent English?"
 FIRST_WORD_Q = "Does `text` read as fluent, grammatical English so far? It may be unfinished."
-SENSE_Q = "Does `text` make sense as the start of a reply to the latest message in `chat`?"
+SENSE_Q = (
+    "Does `text` make sense as the start of a reply to the final post in `chat`? Treat earlier posts as background."
+)
 SEND_OPTIONS = {"send": "send the message as it is", "keep typing": "add more to it first"}
 STOP_MODES = ("threshold", "sample", "choice")  # see WriterConfig.stop
 UNITS = ("words", "pieces")  # see WriterConfig.units
@@ -84,6 +86,54 @@ OTHER_OPTIONS = {"pick": "pick one of `options`", "other": "type a word that isn
 # Top tokens asked of the LLM when Jev can page past the first 20: 100-130 whole words, 60-100
 # of them known in strict mode (only some providers serve more than 20; ~0.5 s).
 DEEP_TOP = 200
+# Only the bonus menu skips these. They still appear through the usual chat and
+# vocabulary menus when there is room, so grammar is never taken away.
+FILLER_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "the",
+        "and",
+        "or",
+        "but",
+        "to",
+        "of",
+        "for",
+        "in",
+        "on",
+        "at",
+        "by",
+        "with",
+        "from",
+        "as",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "been",
+        "being",
+        "do",
+        "does",
+        "did",
+        "i",
+        "you",
+        "we",
+        "they",
+        "he",
+        "she",
+        "it",
+        "me",
+        "my",
+        "your",
+        "our",
+        "their",
+        "um",
+        "uh",
+        "er",
+        "like",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -223,21 +273,26 @@ class JevWriter:
         self._style_line = style_line
         style = f"{style_line} " if style_line else ""
         self._blank_instructions = (
-            f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
+            f"{name} is a member of this Discord chat. {style}"
+            "The final post in `chat` is the one to answer. Earlier posts are background; "
+            "if the final post changes the subject, follow its new subject. "
             f"`{self._reply_key}` is {name}'s reply so far, and the blank ({BLANK}) marks the next word. "
             "Which word goes in the blank?"
         )
         # With STOP on the menu, the blank is where the reply continues *if* it does (probed:
         # this wording gave STOP up to 0.49 at a finished sentence, the plain one up to 0.29).
         self._stop_blank_instructions = (
-            f"{name} is a member of this Discord chat and is writing a reply to the latest message. {style}"
+            f"{name} is a member of this Discord chat. {style}"
+            "The final post in `chat` is the one to answer. Earlier posts are background; "
+            "if the final post changes the subject, follow its new subject. "
             f"`{self._reply_key}` is {name}'s reply so far. The blank ({BLANK}) is where it would continue, "
             "if it continues: which word goes in the blank, or is the message finished?"
         )
         self._stop_description = STOP_DESCRIPTION.format(name=name)
         self._stop_fit_question = STOP_FIT_Q.format(name=name)
         self._send_instructions = (
-            f"{style}{name} has typed `text` so far as a reply to the latest message in `chat`. "
+            f"{style}{name} has typed `text` so far as a reply to the final post in `chat`. "
+            "Earlier posts are background; follow the final post if it changes the subject. "
             f"What does {name} do now?"
         )
         self._other_instructions = f"{name} is choosing the word for the blank. What does {name} do?"
@@ -264,9 +319,16 @@ class JevWriter:
         reply.model = self.client.model
         words, steps, usage = reply.words, reply.steps, reply.usage
         chat_state = {"chat": _chat_json(chat)}
+        latest = _latest_content_words(chat)
         if self.one_request:
-            pool = self._single_pool(chat, learned)
+            pool = list(dict.fromkeys(self._single_pool(chat, learned) + latest))
+            # A Choice holds at most bucket_size words. A full original menu is
+            # preserved and the extra latest-post words get another bucket.
+            one_request = self.suggester is not None or len(pool) <= cfg.bucket_size
+            if not one_request:
+                bucket_questions = self._pool_bucket_questions(pool)
         else:
+            one_request = False
             bucket_questions = self._bucket_questions(chat, learned)
         if self.suggester is not None:
             heard = context_words(_newest_first(chat), 1000) + list(learned)
@@ -278,7 +340,7 @@ class JevWriter:
             send, sense = 0.0, 1.0
             suggested: dict[str, float] = {}
             page, other, source = 0, 0.0, ""
-            if self.one_request:
+            if one_request:
                 if self.suggester is not None:
                     try:
                         suggestion = await self.suggester.suggest(
@@ -300,7 +362,7 @@ class JevWriter:
                             await on_word(reply.text)
                         continue
                     suggested = dict(suggestion.options)
-                    pages = self._pages(suggestion.options, known, pool, words)
+                    pages = self._pages(suggestion.options, known, pool, words, latest=latest)
                 else:
                     pages = [("", allowed(pool + (list(PUNCTUATION) if words else []), words))]
                 pages = [(src, opts) for src, opts in pages if opts]
@@ -451,7 +513,7 @@ class JevWriter:
         # The chat's own words (and speakers' names) lead, so a topic word like "sushi" is
         # always on the menu even when it isn't a common word; then learned words.
         ctx = context_words(_newest_first(chat), size)
-        extra = ctx + [w for w in dict.fromkeys(learned) if w not in set(ctx)]
+        extra = list(dict.fromkeys(ctx + _latest_content_words(chat) + list(learned)))
         in_extra = set(extra)
         common = [w for w in self.vocab[: self.config.vocab_size] if w not in in_extra]
         buckets = [extra[i : i + size] for i in range(0, len(extra), size)]
@@ -463,6 +525,18 @@ class JevWriter:
                 "criteria": dict.fromkeys(bucket),
             }
             for i, bucket in enumerate(b for b in buckets if b)
+        }
+
+    def _pool_bucket_questions(self, pool: Sequence[str]) -> dict[str, dict[str, Any]]:
+        """Split an expanded small menu without evicting its original options."""
+        size = self.config.bucket_size
+        return {
+            f"b{i}": {
+                "type": "choice",
+                "instructions": self._blank_instructions,
+                "criteria": dict.fromkeys(pool[i : i + size]),
+            }
+            for i in range(0, len(pool), size)
         }
 
     def _single_pool(self, chat: Sequence[ChatLine], learned: Sequence[str] = ()) -> list[str]:
@@ -486,7 +560,13 @@ class JevWriter:
         return ctx + fill + base
 
     def _pages(
-        self, ranked: Sequence[tuple[str, float]], known: set[str], pool: Sequence[str], words: Sequence[str]
+        self,
+        ranked: Sequence[tuple[str, float]],
+        known: set[str],
+        pool: Sequence[str],
+        words: Sequence[str],
+        *,
+        latest: Sequence[str] = (),
     ) -> list[tuple[str, list[str]]]:
         """The menus Jev may turn through for one word, in order, as (source, options).
 
@@ -496,16 +576,34 @@ class JevWriter:
         """
         cfg = self.config
         proposals = allowed([w for w, _ in ranked if not cfg.known_only or w in known or w in PUNCTUATION], words)
-        size = max(1, cfg.page_size)
+        # Leave room for punctuation and STOP when both can be on the page.
+        page_capacity = min(cfg.bucket_size, 249 if cfg.always_punctuation and self.stop_mode == "choice" else 250)
+        size = max(1, min(cfg.page_size, page_capacity))
         shown = proposals[: size * max(1, cfg.llm_pages)]
         pages = [("llm", shown[i : i + size]) for i in range(0, len(shown), size)]
+        if not pages:
+            own = allowed(list(pool) + (list(PUNCTUATION) if words else []), words)
+            pages = [("own", own[i : i + page_capacity]) for i in range(0, len(own), page_capacity)]
+            if cfg.shuffle:
+                for _, options in pages:
+                    self.rng.shuffle(options)
+            return pages
+        # The newest post's content words need not have been proposed by the
+        # suggester. Add them without displacing any of its ranked options.
+        bonus = [w for w in allowed(latest, words) if w not in shown]
+        first = pages[0][1]
+        added = max(0, page_capacity - len(first))
+        pages[0] = ("llm", first + bonus[:added])
+        bonus = bonus[added:]
+        extra_pages = [("latest", bonus[i : i + page_capacity]) for i in range(0, len(bonus), page_capacity)]
+        pages.extend(extra_pages)
         if cfg.always_punctuation:
             marks = allowed(list(PUNCTUATION), words)
             pages = [(src, options + [m for m in marks if m not in options]) for src, options in pages]
-        if cfg.own_page or not pages:
-            passed = set(shown)
+        if cfg.own_page:
+            passed = set(shown) | set(latest)
             own = [w for w in allowed(list(pool) + (list(PUNCTUATION) if words else []), words) if w not in passed]
-            pages.append(("own", own))
+            pages.extend(("own", own[i : i + page_capacity]) for i in range(0, len(own), page_capacity))
         if cfg.shuffle:
             for _, options in pages:
                 self.rng.shuffle(options)
@@ -567,6 +665,11 @@ class JevWriter:
 def _newest_first(chat: Sequence[ChatLine]) -> list[str]:
     """Texts then speakers' names, newest first: the order chat words claim menu room."""
     return [line.text for line in reversed(chat)] + [line.speaker for line in reversed(chat)]
+
+
+def _latest_content_words(chat: Sequence[ChatLine]) -> list[str]:
+    """Distinct non-filler words in the post Jev is answering."""
+    return [w for w in dict.fromkeys(words_in(chat[-1].text)) if w not in FILLER_WORDS] if chat else []
 
 
 def _chat_json(chat: Sequence[ChatLine]) -> list[dict[str, str]]:

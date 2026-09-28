@@ -88,8 +88,15 @@ class Lexicon:
             )
         return [w for w in words if w not in known]
 
-    def ranked(self, limit: int, *, exclude: Iterable[str] = (), now: datetime | None = None) -> list[str]:
-        """Up to ``limit`` learned words, the most heard and most recently heard first."""
+    def ranked(
+        self,
+        limit: int,
+        *,
+        exclude: Iterable[str] = (),
+        now: datetime | None = None,
+        since: datetime | None = None,
+    ) -> list[str]:
+        """Up to ``limit`` learned words, optionally only those heard since a channel clear."""
         now = now or datetime.now(timezone.utc)
         skip = set(exclude)
         with self._connect() as conn:
@@ -98,7 +105,10 @@ class Lexicon:
         for word, uses, last_heard in rows:
             if word in skip:
                 continue
-            age_days = max(0.0, (now - datetime.fromisoformat(last_heard)).total_seconds() / 86400)
+            heard_at = datetime.fromisoformat(last_heard)
+            if since is not None and heard_at < since:
+                continue
+            age_days = max(0.0, (now - heard_at).total_seconds() / 86400)
             scored.append((uses * 0.5 ** (age_days / self.half_life_days), last_heard, word))
         scored.sort(reverse=True)
         return [word for _, _, word in scored[:limit]]
