@@ -34,6 +34,7 @@ from hollingsbot.prompt_db import (
 )
 from hollingsbot.tasks import generate_llm_chat_response
 
+from .avatar import fallback_avatar
 from .debug_log import DebugLogStore
 from .identity import generate_bot_identity
 from .names import departure_message
@@ -1036,15 +1037,17 @@ class TempBotManager:
                             _LOG.info(f"Including replied-to message {reply_message.id} as initial context")
 
                 try:
-                    # Create and register the webhook first. Its avatar is generated
-                    # alongside the first reply, then applied before that reply posts.
+                    # Give the webhook a local avatar immediately. The generated
+                    # portrait replaces it before the first reply when available.
+                    avatar_bytes = fallback_avatar(bot_name)
                     webhook = await ctx.channel.create_webhook(
                         name=f"TempBot-{bot_name}",
+                        avatar=avatar_bytes,
                         reason=f"Temporary LLM bot spawned by {ctx.author}",
                     )
 
-                    # Register in database with spawn_message_id; the avatar is saved
-                    # once generation and the webhook edit succeed.
+                    # Store the fallback so recalls have a picture even when
+                    # Replicate is unavailable. A successful portrait replaces it.
                     create_temp_bot(
                         channel_id=ctx.channel.id,
                         webhook_id=webhook.id,
@@ -1053,7 +1056,7 @@ class TempBotManager:
                         spawn_prompt=initial_prompt,
                         replies_remaining=reply_count,
                         spawn_message_id=spawn_message_id,
-                        avatar_bytes=None,
+                        avatar_bytes=avatar_bytes,
                     )
 
                     _LOG.info(
@@ -1287,7 +1290,7 @@ class TempBotManager:
 
         bot_name = bot_data["name"]
         spawn_prompt = bot_data["spawn_prompt"]
-        avatar_bytes = bot_data.get("avatar_bytes")
+        avatar_bytes = bot_data.get("avatar_bytes") or fallback_avatar(bot_name)
         conversation_summary = bot_data.get("conversation_summary")
 
         # Temp bots should only see messages from their spawn point forward

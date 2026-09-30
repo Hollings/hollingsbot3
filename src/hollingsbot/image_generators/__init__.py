@@ -14,8 +14,8 @@ __all__ = [
 
 _LOG = logging.getLogger(__name__)
 
-# Default model for avatar generation
-AVATAR_MODEL = "black-forest-labs/flux-schnell"
+# Fast, warm official model for avatar generation
+AVATAR_MODEL = "black-forest-labs/flux-2-klein-4b"
 
 
 def get_image_generator(
@@ -51,18 +51,18 @@ async def generate_avatar(prompt: str, model: str = AVATAR_MODEL) -> bytes | Non
     """Generate an avatar image from a prompt using Replicate.
 
     This is a convenience function for LLM cogs to generate profile pictures.
-    Uses flux-schnell by default for fast generation.
+    Uses FLUX.2 klein 4B by default for fast generation.
 
     Args:
         prompt: Description of the avatar to generate
-        model: Replicate model to use (default: flux-schnell)
+        model: Replicate model to use (default: FLUX.2 klein 4B)
 
     Returns:
         Image bytes on success, None on failure
     """
     generator = None
     try:
-        model_options = {"output_format": "png"} if model == AVATAR_MODEL else None
+        model_options = {"output_format": "png", "go_fast": True} if model == AVATAR_MODEL else None
         generator = ReplicateImageGenerator(model=model, model_options=model_options)
         _LOG.info("Generating avatar with prompt: %s", prompt[:100])
         image_bytes = await generator.generate(prompt)

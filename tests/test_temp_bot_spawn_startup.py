@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import asyncio
+import io
 from unittest.mock import AsyncMock, MagicMock
 
 import replicate
+from PIL import Image
 
 from hollingsbot import prompt_db, temp_bot_db
-from hollingsbot.cogs.chat_bots.temp_bot import identity, manager
+from hollingsbot.cogs.chat_bots.temp_bot import avatar, identity, manager
 from hollingsbot.image_generators import generate_avatar
 from hollingsbot.image_generators.replicate_api import ReplicateImageGenerator
 
@@ -40,7 +42,8 @@ async def test_avatar_requests_png_and_handles_missing_credentials(monkeypatch):
 
     monkeypatch.setattr("hollingsbot.image_generators.ReplicateImageGenerator", Generator)
     assert await generate_avatar("a portrait") == b"png"
-    assert instances[0].kwargs["model_options"] == {"output_format": "png"}
+    assert instances[0].kwargs["model"] == "black-forest-labs/flux-2-klein-4b"
+    assert instances[0].kwargs["model_options"] == {"output_format": "png", "go_fast": True}
     instances[0].aclose.assert_awaited_once()
 
     def missing_token(**kwargs):
@@ -58,10 +61,23 @@ async def test_replicate_file_output_reads_data_uri_without_http():
 
 
 async def test_avatar_model_sends_png_option_to_replicate():
-    generator = ReplicateImageGenerator(api_token="test-token", model_options={"output_format": "png"})
+    generator = ReplicateImageGenerator(
+        api_token="test-token",
+        model="black-forest-labs/flux-2-klein-4b",
+        model_options={"output_format": "png", "go_fast": True},
+    )
     generator._client.async_run = AsyncMock(return_value=[b"image"])
     assert await generator.generate("a portrait") == b"image"
     assert generator._client.async_run.await_args.kwargs["input"]["output_format"] == "png"
+
+
+def test_fallback_avatar_is_a_distinct_valid_png():
+    first = avatar.fallback_avatar("Captain Fern")
+    second = avatar.fallback_avatar("Cryptic Herald")
+    assert first.startswith(b"\x89PNG")
+    assert first != second
+    with Image.open(io.BytesIO(first)) as picture:
+        assert picture.size == (256, 256)
 
 
 async def test_avatar_is_saved_after_webhook_edit(monkeypatch):
