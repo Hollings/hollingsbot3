@@ -60,8 +60,10 @@ async def generate_avatar(prompt: str, model: str = AVATAR_MODEL) -> bytes | Non
     Returns:
         Image bytes on success, None on failure
     """
-    generator = ReplicateImageGenerator(model=model)
+    generator = None
     try:
+        model_options = {"output_format": "png"} if model == AVATAR_MODEL else None
+        generator = ReplicateImageGenerator(model=model, model_options=model_options)
         _LOG.info("Generating avatar with prompt: %s", prompt[:100])
         image_bytes = await generator.generate(prompt)
         _LOG.info("Avatar generated successfully (%d bytes)", len(image_bytes))
@@ -70,4 +72,5 @@ async def generate_avatar(prompt: str, model: str = AVATAR_MODEL) -> bytes | Non
         _LOG.exception("Failed to generate avatar")
         return None
     finally:
-        await generator.aclose()
+        if generator is not None:
+            await generator.aclose()

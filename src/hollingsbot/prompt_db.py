@@ -472,6 +472,7 @@ get_temp_bot_previous_messages = _temp_bot_db.get_temp_bot_previous_messages
 get_temp_bots_for_channel = _temp_bot_db.get_temp_bots_for_channel
 increment_temp_bot_replies = _temp_bot_db.increment_temp_bot_replies
 search_temp_bots = _temp_bot_db.search_temp_bots
+set_temp_bot_avatar = _temp_bot_db.set_temp_bot_avatar
 
 
 # ------------------------- LLM API logging -------------------------

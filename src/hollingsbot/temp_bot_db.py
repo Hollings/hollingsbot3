@@ -134,6 +134,15 @@ def create_temp_bot(
         return cur.lastrowid
 
 
+def set_temp_bot_avatar(webhook_id: int, avatar_bytes: bytes) -> None:
+    """Save an avatar generated after the webhook was created for future recalls."""
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE temp_bots SET avatar_bytes = ? WHERE webhook_id = ? AND is_active = 1",
+            (avatar_bytes, webhook_id),
+        )
+
+
 def get_temp_bots_for_channel(channel_id: int) -> list[dict]:
     """Get all active temp bots for a specific channel."""
     init_db()

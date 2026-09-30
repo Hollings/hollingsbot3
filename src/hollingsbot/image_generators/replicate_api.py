@@ -8,7 +8,7 @@ import os
 from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from tempfile import NamedTemporaryFile
-from typing import Any, BinaryIO, Final
+from typing import Any, BinaryIO
 
 import aiohttp
 import replicate
@@ -257,20 +257,17 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         if self._session and not self._session.closed:
             await self._session.close()
 
-    _StreamTypes: Final = (
-        bytes,
-        bytearray,
-        replicate.helpers.FileOutput if hasattr(replicate.helpers, "FileOutput") else (),
-    )
+    _FileOutput = getattr(replicate.helpers, "FileOutput", None)
 
     async def _normalise_output(self, data: Any) -> bytes:
         if isinstance(data, list | tuple) and data and all(isinstance(x, bytes | bytearray) for x in data):
             return b"".join(data)
 
-        if isinstance(data, self._StreamTypes):
-            if not isinstance(data, bytes | bytearray):
-                return await self._download(str(data))
+        if isinstance(data, bytes | bytearray):
             return bytes(data)
+
+        if self._FileOutput is not None and isinstance(data, self._FileOutput):
+            return await data.aread()
 
         if isinstance(data, AsyncIterator) or hasattr(data, "__aiter__"):
             async for chunk in data:
@@ -304,8 +301,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             out.append(await self._download(data))
             return out
 
-        if isinstance(data, self._StreamTypes) and not isinstance(data, bytes | bytearray):
-            out.append(await self._download(str(data)))
+        if self._FileOutput is not None and isinstance(data, self._FileOutput):
+            out.append(await data.aread())
             return out
 
         # Async iterator / stream

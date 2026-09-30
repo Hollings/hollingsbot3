@@ -30,6 +30,7 @@ from hollingsbot.prompt_db import (
     get_temp_bot_previous_messages,
     get_temp_bots_for_channel,
     increment_temp_bot_replies,
+    set_temp_bot_avatar,
 )
 from hollingsbot.tasks import generate_llm_chat_response
 
@@ -47,6 +48,7 @@ MAX_PROMPT_LENGTH = 500
 CLEANUP_INTERVAL_SECONDS = 60
 RESPONSE_PROBABILITY = 0.5  # 50% chance temp bot responds
 MAX_TEMP_BOTS_PER_CHANNEL = 3  # Maximum concurrent temp bots per channel
+AVATAR_TIMEOUT_SECONDS = 20
 MAX_CANCELLATIONS_BEFORE_FORCE = 2  # After this many cancellations, force the response through
 MIN_GENERATION_TIME_BEFORE_CANCEL = 2.0  # Don't cancel if generation started less than this many seconds ago
 
@@ -922,6 +924,19 @@ class TempBotManager:
 
     # ==================== Commands ====================
 
+    async def _apply_spawn_avatar(self, webhook: discord.Webhook, prompt: str, bot_name: str) -> None:
+        """Generate and save the avatar while the first reply is being written."""
+        try:
+            avatar_bytes = await asyncio.wait_for(generate_avatar(prompt), timeout=AVATAR_TIMEOUT_SECONDS)
+            if not avatar_bytes:
+                _LOG.warning("Failed to generate avatar for '%s'", bot_name)
+                return
+            await webhook.edit(avatar=avatar_bytes)
+            set_temp_bot_avatar(webhook.id, avatar_bytes)
+            _LOG.info("Avatar set for '%s' (%d bytes)", bot_name, len(avatar_bytes))
+        except Exception:
+            _LOG.exception("Failed to set avatar for '%s'", bot_name)
+
     async def handle_spawn_command(
         self,
         ctx: commands.Context,
@@ -978,9 +993,7 @@ class TempBotManager:
             await self.handle_recall_command(ctx, reply_count, bot_data=existing_bot)
             return
 
-        # Immediate feedback: spawning runs an LLM call for the identity, an
-        # image generation for the avatar, and a full completion for the first
-        # message - without this the user stares at nothing for a long time.
+        # Immediate feedback while identity, avatar, and first reply run.
         with suppress(discord.HTTPException):
             await ctx.message.add_reaction("\N{HOURGLASS WITH FLOWING SAND}")
 
@@ -1023,24 +1036,15 @@ class TempBotManager:
                             _LOG.info(f"Including replied-to message {reply_message.id} as initial context")
 
                 try:
-                    # Generate avatar image from the AI-generated prompt
-                    avatar_bytes = None
-                    if avatar_prompt:
-                        _LOG.info(f"Generating avatar for '{bot_name}' with prompt: {avatar_prompt[:80]}...")
-                        avatar_bytes = await generate_avatar(avatar_prompt)
-                        if avatar_bytes:
-                            _LOG.info(f"Avatar generated for '{bot_name}' ({len(avatar_bytes)} bytes)")
-                        else:
-                            _LOG.warning(f"Failed to generate avatar for '{bot_name}'")
-
-                    # Create webhook with avatar if available
+                    # Create and register the webhook first. Its avatar is generated
+                    # alongside the first reply, then applied before that reply posts.
                     webhook = await ctx.channel.create_webhook(
                         name=f"TempBot-{bot_name}",
-                        avatar=avatar_bytes,
                         reason=f"Temporary LLM bot spawned by {ctx.author}",
                     )
 
-                    # Register in database with spawn_message_id and avatar_bytes
+                    # Register in database with spawn_message_id; the avatar is saved
+                    # once generation and the webhook edit succeed.
                     create_temp_bot(
                         channel_id=ctx.channel.id,
                         webhook_id=webhook.id,
@@ -1049,7 +1053,7 @@ class TempBotManager:
                         spawn_prompt=initial_prompt,
                         replies_remaining=reply_count,
                         spawn_message_id=spawn_message_id,
-                        avatar_bytes=avatar_bytes,
+                        avatar_bytes=None,
                     )
 
                     _LOG.info(
@@ -1058,15 +1062,24 @@ class TempBotManager:
                         f"spawn_message_id={spawn_message_id}, initial_context={len(initial_context)} messages"
                     )
 
-                    # Send initial response
-                    await self._send_initial_response(
-                        ctx.channel,
-                        webhook.id,
-                        bot_name,
-                        initial_prompt,
-                        spawn_message_id,
-                        initial_context=initial_context,
+                    avatar_task = (
+                        asyncio.create_task(self._apply_spawn_avatar(webhook, avatar_prompt, bot_name))
+                        if avatar_prompt
+                        else None
                     )
+                    try:
+                        await self._send_initial_response(
+                            ctx.channel,
+                            webhook.id,
+                            bot_name,
+                            initial_prompt,
+                            spawn_message_id,
+                            initial_context=initial_context,
+                            avatar_task=avatar_task,
+                        )
+                    finally:
+                        if avatar_task is not None:
+                            await avatar_task
 
                 except discord.Forbidden:
                     await ctx.send("I don't have permission to create webhooks in this channel.")
@@ -1086,6 +1099,7 @@ class TempBotManager:
         spawn_message_id: int | None,
         initial_context: list[ConversationTurn] | None = None,
         recall_context: dict | None = None,
+        avatar_task: asyncio.Task[None] | None = None,
     ) -> None:
         """Send temp bot's initial response to spawn prompt.
 
@@ -1128,6 +1142,8 @@ class TempBotManager:
 
             # Generate response
             response_text = await self._generate_response(conversation)
+            if avatar_task is not None:
+                await avatar_task
             response_text = _strip_self_name_prefix(response_text, bot_name)
             if not response_text or not response_text.strip():
                 _LOG.error("Empty initial response for temp bot")
