@@ -14,10 +14,10 @@
   },
   "$$": {
     "api": "replicate",
-    "model": "black-forest-labs/flux-2-max",
-    "safety_tolerance": 5,
-    "resolution": "2 MP",
-    "price_per_image": 0.08
+    "model": "black-forest-labs/flux-3-image",
+    "safety_tolerance": 4,
+    "resolution": "2k",
+    "price_per_image": 0.05
   },
   "$$$": {
     "api": "replicate",

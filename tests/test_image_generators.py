@@ -93,7 +93,7 @@ class TestModelCapabilityFlags:
     @pytest.mark.parametrize(
         "model,expected",
         [
-            ("black-forest-labs/flux-2-max", True),
+            ("black-forest-labs/flux-3-image", True),
             ("some/flux-thing", True),
             ("openai/gpt-image-2", False),
             ("bytedance/seedream-4.5", False),
