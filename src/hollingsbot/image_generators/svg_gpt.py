@@ -10,6 +10,8 @@ import time
 from openai import AsyncOpenAI
 from PIL import Image, ImageDraw, ImageFont
 
+from hollingsbot.text_generators.client_cache import get_client
+
 logger = logging.getLogger(__name__)
 
 # --- Cairo / rasterization availability ---------------------------------------------------------
@@ -26,14 +28,11 @@ except Exception as e:  # pragma: no cover - optional dependency
 
 from .base import ImageGeneratorAPI
 
-# --- Client singleton ---------------------------------------------------------------------------
-_CLIENT: AsyncOpenAI | None = None
-
 
 def _client() -> AsyncOpenAI:
-    """Create or return a shared AsyncOpenAI client with reasonable defaults."""
-    global _CLIENT
-    if _CLIENT is None:
+    """Reuse the SDK client only within its owning event loop."""
+
+    def build() -> AsyncOpenAI:
         http_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "30"))
         max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
         logger.debug(
@@ -41,8 +40,9 @@ def _client() -> AsyncOpenAI:
             http_timeout,
             max_retries,
         )
-        _CLIENT = AsyncOpenAI(timeout=http_timeout, max_retries=max_retries)
-    return _CLIENT
+        return AsyncOpenAI(timeout=http_timeout, max_retries=max_retries)
+
+    return get_client("svg-openai", build)
 
 
 # --- Helpers ------------------------------------------------------------------------------------

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
@@ -67,6 +68,81 @@ async def test_a_restart_backfill_skips_what_was_cleared(db, mock_bot):
     await coordinator._warm_channel(channel)
 
     assert ids(coordinator) == [4, 5]
+
+
+async def test_clear_during_slow_backfill_does_not_restore_old_messages(db, mock_bot):
+    coordinator = ChatCoordinator(mock_bot)
+    coordinator._build_history_turn = AsyncMock(side_effect=lambda msg: said(msg.id))
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = CHANNEL
+    started, resume = asyncio.Event(), asyncio.Event()
+
+    async def newest_first(limit):
+        started.set()
+        await resume.wait()
+        for mid in (5, 4, 3, 2, 1):
+            msg = MagicMock(id=mid, content=f"message {mid}", webhook_id=None)
+            msg.author.bot = False
+            yield msg
+
+    channel.history = newest_first
+    warming = asyncio.create_task(coordinator._warm_channel(channel))
+    await started.wait()
+    await coordinator.clear_history(CHANNEL, 3)
+    resume.set()
+    await warming
+    assert ids(coordinator) == [4, 5]
+
+
+async def test_concurrent_messages_cancel_the_previous_registered_response(db, mock_bot):
+    coordinator = ChatCoordinator(mock_bot)
+    coordinator._ensure_channel_warm = AsyncMock()
+    preparing, resume = asyncio.Event(), asyncio.Event()
+    responding, cancelled = asyncio.Event(), asyncio.Event()
+
+    async def prepare(msg):
+        if msg.id == 1:
+            preparing.set()
+            await resume.wait()
+        return said(msg.id)
+
+    async def respond(channel_id, msg, history):
+        if msg.id == 1:
+            responding.set()
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.set()
+
+    coordinator._prepare_full_turn = prepare
+    coordinator._try_bot_responses = respond
+
+    def message(mid):
+        msg = MagicMock(id=mid, content="hello", attachments=[], webhook_id=None)
+        msg.channel.id = CHANNEL
+        msg.author.bot = False
+        return msg
+
+    first = asyncio.create_task(coordinator.on_message(message(1)))
+    await preparing.wait()
+    second = asyncio.create_task(coordinator.on_message(message(2)))
+    resume.set()
+    await asyncio.wait_for(responding.wait(), 1)
+    await asyncio.wait_for(asyncio.gather(first, second), 1)
+    assert cancelled.is_set()
+    assert ids(coordinator) == [1, 2]
+    assert not coordinator._active_message_tasks
+
+
+async def test_delayed_event_before_clear_point_is_ignored(db, mock_bot):
+    coordinator = ChatCoordinator(mock_bot)
+    await coordinator.clear_history(CHANNEL, 3)
+    message = MagicMock(id=2, content="hello", attachments=[], webhook_id=None)
+    message.channel.id = CHANNEL
+    coordinator._prepare_full_turn = AsyncMock()
+    await coordinator.on_message(message)
+    coordinator._prepare_full_turn.assert_not_awaited()
+    assert ids(coordinator) == []
 
 
 @pytest.mark.parametrize(("reply_to", "expected"), [(None, 77), (40, 40)])

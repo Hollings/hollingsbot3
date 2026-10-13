@@ -222,6 +222,20 @@ class SummaryCache:
         """Get groups that have summaries at a specific level."""
         return self._query_groups(channel_id, level, summary_filter="summarized")
 
+    def _recent_summarized_groups(self, channel_id: int, level: int, clear_point: int | None) -> list[MessageGroup]:
+        """Read only the small context window, rather than the channel's entire archive."""
+        with self._get_connection(row_factory=True) as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM message_groups
+                WHERE channel_id = ? AND level = ? AND start_message_id > ?
+                  AND summary_text IS NOT NULL AND TRIM(summary_text) != ''
+                ORDER BY start_message_id DESC LIMIT ?
+                """,
+                (channel_id, level, clear_point or 0, GROUP_SIZE),
+            ).fetchall()
+        return [self._row_to_message_group(row) for row in reversed(rows)]
+
     def _query_groups(
         self,
         channel_id: int,
@@ -300,23 +314,9 @@ class SummaryCache:
         if clear_point:
             raw_messages = [m for m in raw_messages if m.message_id > clear_point]
 
-        # Extract level-1 groups (most recent GROUP_SIZE, allow overlap with raw)
-        level_1_all = self.get_summarized_groups(channel_id, 1)
-        level_1_groups = self._extract_groups(
-            level_1_all[-GROUP_SIZE:],  # Take most recent, not oldest!
-            exclude_end_ids=set(),  # Don't exclude - overlap is intentional
-            limit=GROUP_SIZE,
-            min_start_id=clear_point,
-        )
-
-        # Extract level-2 groups (most recent GROUP_SIZE)
-        level_2_all = self.get_summarized_groups(channel_id, 2)
-        level_2_groups = self._extract_groups(
-            level_2_all[-GROUP_SIZE:],
-            exclude_end_ids=set(),
-            limit=GROUP_SIZE,
-            min_start_id=clear_point,
-        )
+        # Overlap between levels and raw messages is intentional.
+        level_1_groups = self._recent_summarized_groups(channel_id, 1, clear_point)
+        level_2_groups = self._recent_summarized_groups(channel_id, 2, clear_point)
 
         level_1_coverage = sum(g.message_count for g in level_1_groups)
         level_2_coverage = sum(g.message_count for g in level_2_groups)
@@ -328,41 +328,6 @@ class SummaryCache:
             "level_2_groups": level_2_groups,
             "total_message_coverage": total_coverage,
         }
-
-    def _extract_groups(
-        self,
-        groups: list[MessageGroup],
-        exclude_end_ids: set[int],
-        limit: int,
-        min_start_id: int | None = None,
-    ) -> list[MessageGroup]:
-        """Extract message groups that pass filtering criteria.
-
-        Args:
-            groups: List of MessageGroup objects to filter.
-            exclude_end_ids: Set of message IDs - skip groups whose end_message_id
-                            is in this set.
-            limit: Maximum number of groups to return.
-            min_start_id: If set, skip groups whose start_message_id <= this value
-                         (used for clear point filtering).
-
-        Returns:
-            List of MessageGroup objects that pass filters.
-        """
-        result = []
-
-        for group in groups:
-            # Skip groups before clear point
-            if min_start_id is not None and group.start_message_id <= min_start_id:
-                continue
-            if group.end_message_id in exclude_end_ids:
-                continue
-            if group.summary_text:
-                result.append(group)
-            if len(result) >= limit:
-                break
-
-        return result
 
     # ==================== Clear Points ====================
 

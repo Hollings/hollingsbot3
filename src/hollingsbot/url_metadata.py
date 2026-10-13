@@ -8,10 +8,13 @@ import io
 import logging
 import re
 from dataclasses import dataclass
+from urllib.parse import urlsplit
 
 import aiohttp
 from bs4 import BeautifulSoup
 from PIL import Image
+
+from hollingsbot.utils.http_utils import download_public_url
 
 _LOG = logging.getLogger(__name__)
 
@@ -191,7 +194,11 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
         URLMetadata object if successful, None otherwise
     """
     # Try Twitter syndication endpoint first for Twitter/X URLs
-    if "twitter.com" in url.lower() or "x.com" in url.lower():
+    try:
+        host = (urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return None
+    if host in {"twitter.com", "www.twitter.com", "mobile.twitter.com", "x.com", "www.x.com"}:
         twitter_metadata = await fetch_twitter_syndication_data(url)
         if twitter_metadata:
             return twitter_metadata
@@ -199,29 +206,11 @@ async def fetch_url_metadata(url: str) -> URLMetadata | None:
 
     # Fall back to Open Graph metadata for non-Twitter URLs or if syndication fails
     try:
-        timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
-        # Increase header size limits for sites like X/Twitter that send large cookies
-        connector = aiohttp.TCPConnector(limit_per_host=5)
-        async with aiohttp.ClientSession(
-            timeout=timeout, connector=connector, max_line_size=16384, max_field_size=16384
-        ) as session:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"}
-            async with session.get(url, headers=headers, allow_redirects=True) as response:
-                # Check content length
-                content_length = response.headers.get("Content-Length")
-                if content_length and int(content_length) > _MAX_CONTENT_LENGTH:
-                    _LOG.warning("Skipping URL %s: content too large (%s bytes)", url, content_length)
-                    return None
-
-                # Only process HTML content
-                content_type = response.headers.get("Content-Type", "")
-                if "text/html" not in content_type.lower():
-                    _LOG.debug("Skipping URL %s: not HTML (Content-Type: %s)", url, content_type)
-                    return None
-
-                html = await response.text()
-
-        metadata = _parse_metadata(url, html)
+        download = await download_public_url(
+            url, max_bytes=_MAX_CONTENT_LENGTH, timeout=_REQUEST_TIMEOUT, html_only=True
+        )
+        html = download.data.decode(download.charset, errors="replace")
+        metadata = await asyncio.to_thread(_parse_metadata, url, html)
 
         # Log extracted metadata for debugging
         if metadata.image_urls:
@@ -365,17 +354,16 @@ async def download_and_process_image(image_url: str, index: int = 1) -> ImageAtt
         ImageAttachment object with processed image data, or None if failed
     """
     try:
-        timeout = aiohttp.ClientTimeout(total=_REQUEST_TIMEOUT)
-        async with aiohttp.ClientSession(timeout=timeout) as session:
-            headers = {"User-Agent": "Mozilla/5.0 (compatible; DiscordBot/1.0; +https://discord.com)"}
-            async with session.get(image_url, headers=headers) as response:
-                if response.status != 200:
-                    _LOG.warning("Failed to download image from %s: HTTP %d", image_url, response.status)
-                    return None
+        download = await download_public_url(image_url, max_bytes=20_000_000, timeout=_REQUEST_TIMEOUT)
+        return await asyncio.to_thread(_process_downloaded_image, download.data, image_url, index)
+    except Exception as exc:
+        _LOG.warning("Failed to download/process image from %s: %s", image_url, exc)
+        return None
 
-                image_data = await response.read()
 
-        # Process the image
+def _process_downloaded_image(image_data: bytes, image_url: str, index: int) -> ImageAttachment | None:
+    """Decode and resize outside the Discord event loop."""
+    try:
         with Image.open(io.BytesIO(image_data)) as img:
             img = img.convert("RGB")
             width, height = img.size
@@ -456,7 +444,7 @@ async def extract_url_metadata(text: str, max_urls: int = 3) -> list[URLMetadata
         return []
 
     # Limit to avoid processing too many URLs
-    urls = urls[:max_urls]
+    urls = list(dict.fromkeys(urls))[:max_urls]
 
     metadata_list = []
     for url in urls:

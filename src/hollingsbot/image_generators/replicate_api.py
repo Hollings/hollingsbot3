@@ -43,8 +43,8 @@ def _scale_image_to_max_dimension(image_bytes: bytes, max_dim: int) -> bytes:
         return buf.getvalue()
 
     scale = max_dim / longest_side
-    new_width = int(width * scale)
-    new_height = int(height * scale)
+    new_width = max(1, int(width * scale))
+    new_height = max(1, int(height * scale))
 
     img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
 
@@ -165,10 +165,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         inputs["image"] = prepared[0] if prepared else None
                         # Prepare mask as single input
                         mask_prepared, mask_cleanup = self._prepare_image_inputs([mask])
-                        try:
-                            inputs["mask"] = mask_prepared[0] if mask_prepared else None
-                        finally:
-                            self._cleanup_files(mask_cleanup)
+                        cleanup.extend(mask_cleanup)
+                        inputs["mask"] = mask_prepared[0] if mask_prepared else None
                     else:
                         # Standard edit mode with image_input array
                         inputs["image_input"] = prepared
@@ -371,10 +369,8 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     inputs["image"] = prepared[0] if prepared else None
                     # Prepare mask as single input
                     mask_prepared, mask_cleanup = self._prepare_image_inputs([mask])
-                    try:
-                        inputs["mask"] = mask_prepared[0] if mask_prepared else None
-                    finally:
-                        self._cleanup_files(mask_cleanup)
+                    cleanup.extend(mask_cleanup)
+                    inputs["mask"] = mask_prepared[0] if mask_prepared else None
                 else:
                     # Standard edit mode with image_input array
                     inputs["image_input"] = prepared

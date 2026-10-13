@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 import os
-import time
 from contextlib import suppress
 from typing import TYPE_CHECKING, Any
 
@@ -15,6 +13,7 @@ import discord
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.chat_bots.completion_trim import trim_completion
 from hollingsbot.tasks import generate_text
+from hollingsbot.utils.celery_utils import run_task
 
 if TYPE_CHECKING:
     from discord.ext import commands
@@ -27,7 +26,6 @@ class GenerationJob:
 
     def __init__(self):
         self.task: asyncio.Task | None = None
-        self.result: Any = None
 
 
 class LlamaBot:
@@ -224,27 +222,11 @@ class LlamaBot:
         """Run LLM generation via Celery with raw text prompt."""
         _LOG.info(f"Sending raw prompt to {self.default_provider}/{self.default_model}: {prompt[:100]}...")
 
-        async_result = generate_text.apply_async(
+        text = await run_task(
+            generate_text,
             (self.default_provider, self.default_model, prompt),
             kwargs={"temperature": 1.0},
-        )
-        job.result = async_result
-        start = time.monotonic()
-
-        while True:
-            # ready()/revoke() are synchronous Redis round-trips; run them in a
-            # thread so a slow broker can't starve the Discord heartbeat.
-            if await asyncio.to_thread(async_result.ready):
-                break
-            if (time.monotonic() - start) > self.text_timeout:
-                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
-                raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
-            await asyncio.sleep(0.5)
-
-        loop = asyncio.get_running_loop()
-        text = await loop.run_in_executor(
-            None,
-            functools.partial(async_result.get, timeout=0.1),
+            timeout=self.text_timeout,
         )
 
         return str(text)
@@ -257,11 +239,10 @@ class LlamaBot:
 
         if job.task and not job.task.done():
             job.task.cancel()
-            if job.result:
-                await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
             with suppress(asyncio.CancelledError, TimeoutError):
-                await asyncio.wait_for(job.task, timeout=0.5)
-            self._active_generations.pop(channel_id, None)
+                await asyncio.wait_for(asyncio.shield(job.task), timeout=0.5)
+            if self._active_generations.get(channel_id) is job:
+                self._active_generations.pop(channel_id, None)
 
     async def _wait_for_typing_to_clear(self, channel_id: int) -> None:
         """Wait for human typing to stop."""

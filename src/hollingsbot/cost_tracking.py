@@ -13,10 +13,20 @@ from __future__ import annotations
 
 import contextlib
 import logging
+import math
 import sqlite3
 from datetime import datetime, timezone
 
 _log = logging.getLogger(__name__)
+
+
+def validate_amount(value: float, *, allow_negative: bool = False) -> float:
+    """Reject invalid amounts before they reach configuration or SQLite."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value):
+        raise ValueError("Amount must be a finite number")
+    if not allow_negative and value < 0:
+        raise ValueError("Amount must be a non-negative number")
+    return value
 
 
 class CostTracker:
@@ -33,6 +43,14 @@ class CostTracker:
         self.daily_free_budget = daily_free_budget
         # Tables are created by prompt_db.init_db() which runs at bot startup
         _log.info(f"CostTracker initialized with db_path={db_path}, daily_free_budget=${daily_free_budget:.2f}")
+
+    @property
+    def daily_free_budget(self) -> float:
+        return self._daily_free_budget
+
+    @daily_free_budget.setter
+    def daily_free_budget(self, value: float) -> None:
+        self._daily_free_budget = validate_amount(value)
 
     def _get_today_string(self) -> str:
         """Get today's date as a string in YYYY-MM-DD format (UTC).
@@ -105,6 +123,12 @@ class CostTracker:
             return current_budget
 
         current_budget, last_tick_minute = row
+        # A reduced configuration cap takes effect even within the same minute.
+        if current_budget > self.daily_free_budget:
+            current_budget = self.daily_free_budget
+            conn.execute(
+                "UPDATE user_hourly_budget SET current_budget = ? WHERE user_id = ?", (current_budget, user_id)
+            )
         last_tick_minute = datetime.fromisoformat(last_tick_minute)
 
         # Calculate minutes elapsed since last tick
@@ -143,11 +167,11 @@ class CostTracker:
             ValueError: If cost is negative or not a valid number
         """
         # Validate cost input
-        if not isinstance(cost, int | float) or cost < 0:
-            raise ValueError(f"Cost must be a non-negative number, got: {cost}")
+        validate_amount(cost)
 
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
 
             # Update and get current hourly budget (commit the tick: this is a
             # standalone read path, not part of a larger transaction)
@@ -180,8 +204,8 @@ class CostTracker:
         # since budget accrues per minute and the wait is computable.
         minute_rate = self.daily_free_budget / 1440.0
         shortfall_after_credits = cost - current_budget - credit_balance
-        if minute_rate > 0:
-            minutes_needed = int(shortfall_after_credits / minute_rate) + 1
+        if minute_rate > 0 and cost <= self.daily_free_budget + credit_balance:
+            minutes_needed = math.ceil(shortfall_after_credits / minute_rate)
             wait = f"~{minutes_needed} min" if minutes_needed < 60 else f"~{minutes_needed / 60:.1f} hours"
             wait_line = f"You'll have enough free budget in {wait}.\n"
         else:
@@ -214,8 +238,7 @@ class CostTracker:
             ValueError: If cost is negative or not a valid number
         """
         # Validate cost input
-        if not isinstance(cost, int | float) or cost < 0:
-            raise ValueError(f"Cost must be a non-negative number, got: {cost}")
+        validate_amount(cost)
 
         today = self._get_today_string()
 
@@ -299,6 +322,7 @@ class CostTracker:
 
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.row_factory = sqlite3.Row
+            conn.execute("BEGIN IMMEDIATE")
 
             # Update and get current hourly budget (commit the tick: this is a
             # standalone read path, not part of a larger transaction)
@@ -342,6 +366,7 @@ class CostTracker:
             user_id: Discord user ID
             amount: Amount of credits to grant (can be negative to deduct)
         """
+        validate_amount(amount, allow_negative=True)
         with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute(
                 """

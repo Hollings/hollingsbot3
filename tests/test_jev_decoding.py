@@ -9,6 +9,10 @@ from hollingsbot.jev.decoding import allowed, finalists, pick, repetition_factor
 from hollingsbot.jev.text import context_words, join_words, words_in
 
 
+def test_low_temperature_does_not_underflow_all_weights():
+    assert pick({"best": 0.6, "other": 0.4}, random.Random(0), 0.00001, 1.0) == "best"
+
+
 class TestText:
     def test_join_attaches_punctuation(self):
         assert join_words(["i", "like", "pizza", ".", "you", "?"]) == "i like pizza. you?"

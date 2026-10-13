@@ -81,6 +81,9 @@ class JevSpawns:
         """It posted a reply here: how many it has left (0 ends the visit), None if it isn't visiting."""
         key = (channel_id, self.bot)
         with self._connect() as conn:
+            # The read and decrement must share a write lock across callers.
+            if not conn.in_transaction:
+                conn.execute("BEGIN IMMEDIATE")
             row = conn.execute("SELECT replies_left FROM jev_visits WHERE channel_id = ? AND bot = ?", key).fetchone()
             if row is None:
                 return None

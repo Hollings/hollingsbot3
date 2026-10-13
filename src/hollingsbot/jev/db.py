@@ -28,6 +28,6 @@ def connect(db_path: str | Path | None, schema: Sequence[str]) -> Iterator[sqlit
         if key not in _ready:
             for statement in schema:
                 conn.execute(statement)
-            _ready.add(key)
         yield conn
         conn.commit()
+        _ready.add(key)

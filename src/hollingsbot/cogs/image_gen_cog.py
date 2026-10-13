@@ -23,7 +23,6 @@ import logging
 import os
 import random
 import re
-import time
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from io import BytesIO
@@ -34,12 +33,14 @@ import discord
 import emoji
 from discord.ext import commands
 
+from hollingsbot import prompt_db
 from hollingsbot.caption import add_caption
-from hollingsbot.cost_tracking import CostTracker
+from hollingsbot.cost_tracking import CostTracker, validate_amount
 from hollingsbot.prompt_db import bulk_add_prompts, init_db
 from hollingsbot.settings import parse_id_set
 from hollingsbot.tasks import generate_image  # celery task
 from hollingsbot.text_generators import get_text_generator
+from hollingsbot.utils.celery_utils import run_task
 from hollingsbot.utils.image_utils import compress_image_to_fit
 from hollingsbot.utils.outpaint_utils import create_outpaint_images
 
@@ -200,6 +201,12 @@ def spec_from_dict(
         spec_kwargs.setdefault("mode", parent.mode)
         spec_kwargs.setdefault("quality", parent.quality)
     spec = GeneratorSpec(**spec_kwargs)
+    if not all(isinstance(value, str) and value.strip() for value in (spec.api, spec.model)):
+        raise ValueError("Image generator api and model must be non-empty strings")
+    if spec.mode not in {"generate", "edit", "outpaint"}:
+        raise ValueError(f"Unknown image generator mode: {spec.mode}")
+    if spec.price_per_image is not None:
+        validate_amount(spec.price_per_image)
     fallback_raw = raw.get("fallback")
     if isinstance(fallback_raw, dict):
         fallback = spec_from_dict(fallback_raw, parent=spec, prefixes=prefixes, _ref_chain=_ref_chain)
@@ -275,11 +282,11 @@ class ImageGenCog(commands.Cog):
             self._reload_config()
 
         # Initialize cost tracker
-        db_path = os.getenv("PROMPT_DB_PATH", "prompts.db")
-        self._cost_tracker = CostTracker(db_path, self._daily_free_budget)
+        self._cost_tracker = CostTracker(str(prompt_db.DB_PATH), self._daily_free_budget)
 
         self._run_task = task_runner or self._default_celery_runner
         self._pending: set[asyncio.Task[None]] = set()
+        self._user_generation_locks: dict[int, asyncio.Lock] = {}
 
     def _reload_config(self) -> None:
         if self._cfg_path is None:
@@ -294,22 +301,24 @@ class ImageGenCog(commands.Cog):
             return
         try:
             raw_cfg: dict = json.loads(self._cfg_path.read_text("utf8"))
+            # Validate the entire replacement before changing any live state.
+            daily_free_budget = validate_amount(raw_cfg.get("daily_free_budget", 0.50))
+            default_price = validate_amount(raw_cfg.get("default_price_per_image", 0.03))
+            prefix_map = build_prefix_map(
+                {
+                    key: spec
+                    for key, spec in raw_cfg.items()
+                    if key not in ("daily_free_budget", "default_price_per_image") and isinstance(spec, dict)
+                }
+            )
         except Exception as exc:
             _log.exception("Failed to parse %s: %s; keeping old config", self._cfg_path, exc)
             return
 
         # Extract global config values
-        self._daily_free_budget = raw_cfg.get("daily_free_budget", 0.50)
-        self._default_price = raw_cfg.get("default_price_per_image", 0.03)
-
-        # Build prefix map, excluding non-prefix keys
-        self._prefix_map = build_prefix_map(
-            {
-                key: spec
-                for key, spec in raw_cfg.items()
-                if key not in ("daily_free_budget", "default_price_per_image") and isinstance(spec, dict)
-            }
-        )
+        self._daily_free_budget = daily_free_budget
+        self._default_price = default_price
+        self._prefix_map = prefix_map
 
         # Update cost tracker with new budget
         if hasattr(self, "_cost_tracker"):
@@ -331,7 +340,7 @@ class ImageGenCog(commands.Cog):
         for prefix, spec in sorted(self._prefix_map.items()):
             prefix_display = f"`{prefix}`" if prefix else "(default)"
             mode_display = f" / mode={spec.mode}" if getattr(spec, "mode", "generate") != "generate" else ""
-            price = getattr(spec, "price_per_image", self._default_price)
+            price = spec.price_per_image if spec.price_per_image is not None else self._default_price
             price_display = f" / ${price:.3f}" if price < 0.01 else f" / ${price:.2f}"
             chain: list[str] = []
             fallback = spec.fallback
@@ -404,7 +413,8 @@ class ImageGenCog(commands.Cog):
         payload_images = bytes_list_to_data_urls(image_input) if image_input else None
         payload_mask = bytes_to_data_url(mask) if mask else None
 
-        async_result = generate_image.apply_async(
+        return await run_task(
+            generate_image,
             (prompt_id, api, model, prompt, seed),
             kwargs={
                 "image_input": payload_images,
@@ -415,23 +425,9 @@ class ImageGenCog(commands.Cog):
                 "model_options": model_options,
             },
             queue="image",
+            timeout=timeout,
+            poll_interval=poll_interval,
         )
-
-        # ready()/failed() are synchronous Redis round-trips - keep them off
-        # the event loop so a slow/unreachable broker can't freeze the bot.
-        start = time.monotonic()
-        while not await asyncio.to_thread(async_result.ready):
-            if time.monotonic() - start >= timeout:
-                async_result.revoke(terminate=True)
-                raise TimeoutError(f"Image generation timed out after {timeout}s")
-            await asyncio.sleep(poll_interval)
-
-        # Check for task failure
-        if await asyncio.to_thread(async_result.failed):
-            error = async_result.result
-            raise RuntimeError(f"Image generation failed: {error}")
-
-        return await asyncio.to_thread(async_result.get)
 
     async def _react(self, msg: discord.Message, emoji: str, *, remove: bool = False) -> None:
         """
@@ -969,7 +965,7 @@ class ImageGenCog(commands.Cog):
         seed: int,
         skip_caption: bool,
         reply_target: discord.Message,
-    ) -> bool:
+    ) -> int:
         """
         Process generation results and send them to Discord.
 
@@ -983,9 +979,9 @@ class ImageGenCog(commands.Cog):
             reply_target: Message to reply to for edit/outpaint modes
 
         Returns:
-            True if all results succeeded, False otherwise
+            Number of prompt variants successfully delivered to Discord.
         """
-        overall_success = True
+        delivered = 0
 
         # Determine file size limit
         guild_limit = getattr(message.guild, "filesize_limit", None)
@@ -994,7 +990,6 @@ class ImageGenCog(commands.Cog):
 
         for prompt_variant, result in zip(prompts, results, strict=False):
             if isinstance(result, Exception):
-                overall_success = False
                 _log.exception("Generation failed for %r: %s", prompt_variant, result)
                 # Tell the user what happened - a bare X reaction after a long
                 # wait gives them nothing to act on.
@@ -1027,16 +1022,34 @@ class ImageGenCog(commands.Cog):
                     await reply_target.reply(files=files, mention_author=False)
                 else:  # Regular generation
                     await message.channel.send(files=files)
+                delivered += 1
 
             except Exception as exc:
-                overall_success = False
                 _log.exception("Post-processing failed: %s", exc)
                 error_msg = f"Image post-processing failed for **{prompt_variant[:200]}**:\n> {str(exc)[:500]}"
                 await self._send_error_message(message, error_msg, reply_to=reply_target if skip_caption else None)
 
-        return overall_success
+        return delivered
 
     async def _handle_generation(
+        self,
+        message: discord.Message,
+        raw_prompt: str,
+        spec: GeneratorSpec,
+    ) -> None:
+        # Keep affordability checks and billing in order for each user, including
+        # requests in different channels. Different users can still run in parallel.
+        lock = self._user_generation_locks.setdefault(message.author.id, asyncio.Lock())
+        async with lock:
+            try:
+                await self._generate_for_user(message, raw_prompt, spec)
+            except Exception:
+                _log.exception("Image generation failed for message %s", message.id)
+                await self._react(message, THINKING, remove=True)
+                await self._react(message, FAILURE)
+                await self._send_error_message(message, "Image generation failed. Please try again.")
+
+    async def _generate_for_user(
         self,
         message: discord.Message,
         raw_prompt: str,
@@ -1055,10 +1068,6 @@ class ImageGenCog(commands.Cog):
         # a 3s timeout). It's computed in the background and swapped in later.
         working_emoji = THINKING
         await self._react(message, working_emoji)
-        thematic_emoji_task = asyncio.create_task(self._get_thematic_emoji(raw_prompt))
-        # No side effects until the swap point below, so early returns can
-        # simply abandon the task.
-        thematic_emoji_task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
 
         # Parse seed and clean prompt
         raw_prompt, seed = self._parse_seed_from_prompt(raw_prompt)
@@ -1097,7 +1106,10 @@ class ImageGenCog(commands.Cog):
 
         # Collect images for edit/outpaint modes
         is_edit_mode = spec.mode == "edit"
-        all_edit_images, history_source = await self._collect_images_for_editing(message)
+        all_edit_images: list[bytes] = []
+        history_source = None
+        if is_edit_mode or is_outpaint:
+            all_edit_images, history_source = await self._collect_images_for_editing(message)
 
         do_edit = bool(all_edit_images) and is_edit_mode
         do_outpaint = bool(all_edit_images) and is_outpaint
@@ -1180,18 +1192,26 @@ class ImageGenCog(commands.Cog):
             )
         )
 
-        # Swap the placeholder reaction for the thematic emoji, if we got one.
-        with suppress(Exception):
-            themed = await thematic_emoji_task
-            if themed and themed != working_emoji:
-                await self._react(message, themed)
-                await self._react(message, working_emoji, remove=True)
-                working_emoji = themed
+        thematic_emoji_task = asyncio.create_task(self._get_thematic_emoji(raw_prompt))
+        try:
+            # Both child tasks belong to this request, including when it is
+            # cancelled while the placeholder reaction is being replaced.
+            with suppress(Exception):
+                themed = await thematic_emoji_task
+                if themed and themed != working_emoji:
+                    await self._react(message, themed)
+                    await self._react(message, working_emoji, remove=True)
+                    working_emoji = themed
 
-        results = await generation_task
+            results = await generation_task
+        finally:
+            for task in (generation_task, thematic_emoji_task):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(generation_task, thematic_emoji_task, return_exceptions=True)
 
         # Process and send results
-        overall_success = await self._process_and_send_results(
+        delivered = await self._process_and_send_results(
             message,
             results,
             prompts,
@@ -1202,15 +1222,15 @@ class ImageGenCog(commands.Cog):
         )
 
         # Deduct cost only if generation was successful
-        if overall_success:
+        if delivered:
             try:
-                self._cost_tracker.deduct_cost(message.author.id, cost)
+                self._cost_tracker.deduct_cost(message.author.id, per_image_cost * delivered)
             except Exception as exc:
                 _log.exception("Failed to deduct cost for user %s: %s", message.author.id, exc)
                 # Don't fail the generation - user already received their image
 
         await self._react(message, working_emoji, remove=True)
-        await self._react(message, SUCCESS if overall_success else FAILURE)
+        await self._react(message, SUCCESS if delivered == len(prompts) else FAILURE)
 
     @commands.Cog.listener()
     async def on_message(self, message: discord.Message) -> None:

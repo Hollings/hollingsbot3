@@ -96,6 +96,15 @@ class TestEnsureSvgNamespaces:
 class TestFixCommonEntities:
     """Tests for entity fixing."""
 
+    def test_preserves_escaped_markup_and_attributes(self):
+        from xml.etree import ElementTree
+
+        svg = '<svg><text data-label="say &quot;hi&quot;">&lt;script&gt; &amp; &#60; &nbsp;</text></svg>'
+        root = ElementTree.fromstring(_fix_common_entities(svg))
+        assert root[0].attrib["data-label"] == 'say "hi"'
+        assert root[0].text == "<script> & < \u00a0"
+        assert len(root[0]) == 0
+
     def test_fixes_nbsp_entity(self):
         """Test that &nbsp; is converted."""
         svg = "<text>&nbsp;</text>"

@@ -16,6 +16,7 @@ These tests verify both the DB-level guard and the cleanup ordering.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -217,7 +218,7 @@ async def test_cleanup_marks_inactive_before_any_await(temp_bot_db):
     # so check it directly.
     import sqlite3
 
-    with sqlite3.connect(temp_bot_db) as conn:
+    with contextlib.closing(sqlite3.connect(temp_bot_db)) as conn:
         cur = conn.execute("SELECT is_active FROM temp_bots WHERE webhook_id = ?", (webhook_id,))
         is_active = cur.fetchone()[0]
     assert is_active == 0, "bot must be marked inactive even when cleanup is cancelled"
@@ -271,7 +272,7 @@ async def test_cleanup_survives_refund_attempt_during_cleanup(temp_bot_db):
 
     import sqlite3
 
-    with sqlite3.connect(temp_bot_db) as conn:
+    with contextlib.closing(sqlite3.connect(temp_bot_db)) as conn:
         cur = conn.execute("SELECT is_active FROM temp_bots WHERE webhook_id = ?", (webhook_id,))
         is_active = cur.fetchone()[0]
     assert is_active == 0

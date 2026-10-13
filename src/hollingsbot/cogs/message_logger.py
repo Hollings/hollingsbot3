@@ -105,7 +105,7 @@ class MessageLoggerCog(commands.Cog):
         """
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             # Create table if not exists
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS message_history (
@@ -204,7 +204,7 @@ class MessageLoggerCog(commands.Cog):
         except sqlite3.Error as e:
             # Reset connection on database errors
             _LOG.exception("Database error logging message %s, resetting connection: %s", message.id, e)
-            self._conn = None
+            self.cog_unload()
         except Exception as e:
             _LOG.exception("Failed to log message %s: %s", message.id, e)
 
@@ -254,7 +254,7 @@ class MessageLoggerCog(commands.Cog):
             conn.commit()
         except sqlite3.Error as e:
             _LOG.exception("Database error updating message %s, resetting connection: %s", payload.message_id, e)
-            self._conn = None
+            self.cog_unload()
         except Exception as e:
             _LOG.exception("Failed to update edited message %s: %s", payload.message_id, e)
 

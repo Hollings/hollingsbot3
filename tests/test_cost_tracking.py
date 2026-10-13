@@ -76,6 +76,29 @@ class TestCostTrackerInit:
         assert tracker.daily_free_budget == 0
 
 
+@pytest.mark.parametrize("amount", [float("nan"), float("inf"), float("-inf"), True, "1"])
+def test_invalid_amounts_cannot_modify_balances(tracker, amount):
+    for action in (tracker.can_afford, tracker.deduct_cost, tracker.grant_credits):
+        with pytest.raises(ValueError):
+            action(123, amount)
+    with pytest.raises(ValueError):
+        tracker.daily_free_budget = amount
+    assert tracker.daily_free_budget == 1.0
+    assert tracker.get_user_status(123)["credit_balance"] == 0
+
+
+def test_reduced_budget_applies_without_waiting_for_a_tick(tracker):
+    tracker.get_user_status(123)
+    tracker.daily_free_budget = 0.25
+    assert tracker.get_user_status(123)["current_budget"] == 0.25
+
+
+def test_no_wait_promise_for_cost_above_budget_cap(tracker):
+    affordable, message = tracker.can_afford(123, 2.0)
+    assert not affordable
+    assert "You'll have enough" not in message
+
+
 class TestCanAfford:
     """Tests for the can_afford method."""
 

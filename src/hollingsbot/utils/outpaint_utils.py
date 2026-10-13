@@ -25,8 +25,8 @@ def create_outpaint_images(image_bytes: bytes) -> tuple[bytes, bytes]:
     orig_width, orig_height = original.size
 
     # Calculate scaled dimensions (50% of original)
-    scaled_width = orig_width // 2
-    scaled_height = orig_height // 2
+    scaled_width = max(1, orig_width // 2)
+    scaled_height = max(1, orig_height // 2)
 
     # Create canvas at original size with black background
     canvas = Image.new("RGB", (orig_width, orig_height), color=(0, 0, 0))

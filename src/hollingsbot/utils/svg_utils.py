@@ -93,10 +93,12 @@ def _fix_common_entities(svg_xml: str) -> str:
     """
     # Add semicolons when commonly omitted
     common = ("amp", "lt", "gt", "quot", "apos", "nbsp", "copy", "reg", "times", "euro", "mdash", "ndash")
-    svg_xml = re.sub(r"&(" + "|".join(common) + r")(?!;)", r"&\1;", svg_xml, flags=re.IGNORECASE)
+    svg_xml = re.sub(r"&(" + "|".join(common) + r")(?![a-z0-9;])", r"&\1;", svg_xml, flags=re.IGNORECASE)
 
-    # Convert HTML entities to characters
-    svg_xml = html.unescape(svg_xml)
+    # Decode named HTML entities individually, retaining XML escaping for
+    # markup characters. Unescaping the entire document turns &lt; in text
+    # into a tag and &quot; in attributes into an attribute terminator.
+    svg_xml = re.sub(r"&[a-zA-Z][a-zA-Z0-9]+;", lambda m: html.escape(html.unescape(m.group())), svg_xml)
 
     # Re-escape stray ampersands that are not entities like &#123; or &#xAF; or &name;
     svg_xml = re.sub(r"&(?!(?:#\d+|#x[0-9a-fA-F]+|\w+);)", "&amp;", svg_xml)

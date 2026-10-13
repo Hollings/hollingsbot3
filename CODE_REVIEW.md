@@ -1,189 +1,88 @@
-# Code Review: hollingsbot3 Discord Bot
+# Codebase review and repair
 
-## Executive Summary
+Reviewed October 12, 2026 (America/Los_Angeles), against Git baseline `4852f15`.
 
-The hollingsbot3 Discord bot is a well-architected, feature-rich system built on discord.py with Celery task queue integration for asynchronous processing. The codebase demonstrates solid design patterns with modular cog-based organization, clean separation of concerns between text/image generation, and appropriate use of Docker containerization for deployment. However, there are notable areas for improvement in error handling, security practices, and test coverage.
+This review examined the production bot, cogs, database transactions, Celery
+workers, provider adapters, tool execution, summarization, image processing,
+configuration, tests, and development checks. The emphasis was reproducible
+failures, concurrency, resource ownership, and removing duplicated work. This
+report replaces the older review, which referenced removed modules and included
+unsupported claims such as JSON parsing permitting code injection.
 
-## 1. High-Level Code Flow Analysis
+## Findings repaired
 
-The system operates through multiple interconnected layers:
+| Area | Failure or inefficiency | Applied fix |
+| --- | --- | --- |
+| Token accounting | Concurrent token deductions could both spend the same balance; redemption could debit tokens without granting credits. | Acquire a SQLite write transaction before checking balances; perform token redemption and credit grant in one transaction. Test simultaneous spend and rollback on credit-write failure. |
+| Image accounting | Accounting cogs could use a different default database or stale budget. Concurrent image requests could all pass affordability checks. Partial batches were delivered without being charged. | Share the image cog's tracker and configured DB; serialize generation per user within the bot process; charge only successfully delivered prompt variants. |
+| Price and budget configuration | NaN, infinity, negative prices, and malformed reloads could produce invalid accounting or partially replace live settings. `!models` failed on omitted prices. | Validate finite amounts and generator fields before changing live state; retain previous configuration on failure; use the default price when the per-model price is absent. Apply reduced budget caps immediately and avoid promising impossible accrual waits. |
+| Celery integration | Publishing could block Discord's event loop. Duplicated polling paths handled cancellation inconsistently, including cancellation during submission. | Consolidate publishing, polling, result retrieval, timeout handling, and revocation in `utils/celery_utils.py`; run blocking broker calls in threads. |
+| Worker resource lifecycle | Image generators were closed on a different event loop; cached SDK clients survived worker loops. Factory/output/disk errors could leave prompt status incorrect. | Generate and close on the same loop, close cached text/SVG clients before loop teardown, validate output, and record terminal failures for all these error paths. |
+| Text generation | A broad `TypeError` fallback could retry a programming error as another paid generation and bypass normal failure handling. | Remove the retry; preserve the original failure and normal logging/cleanup. Enforce the text timeout for plain text tasks too. |
+| Temporary bot replies | Cancellation could lose a reply reservation, refund a delivered reply, or continue into another bot's response. | Propagate cancellation and give each request ownership of its refund. Cover cancellation during preparation, before the child starts, during generation, and after delivery. |
+| Bot shutdown/retry | Startup retries reused a closed Discord client across event loops; background workers and HTTP clients lacked coordinated cleanup. | Retry on one loop, reopen the client, stop restart/summary/generation tasks, and close owned clients. Scheduled restart exits after cleanup. |
+| Image child tasks | Cancelling during emoji lookup could leave image generation running. Early rejected requests still started emoji generation. | Start optional emoji work after validation, and cancel/await both child tasks when the request ends. |
+| Chat history | Concurrent events could prepare responses before the previous response was registered. A slow backfill could restore messages after `!clear`. | Serialize preparation through response registration, release the lock before awaiting the reply, recheck the clear point after backfill, and ignore delayed events older than the clear point. |
+| Tool context | A mutable global context could mix identities/channel context between concurrent tool calls. | Use task-local `ContextVar` storage and copy values at the boundary. |
+| URL previews | User URLs and redirects could reach private network addresses; a missing or misleading Content-Length bypassed download limits. | Validate HTTP(S) destinations and DNS results at connection time, validate every redirect, bound decoded streamed bytes, and apply a deadline to the entire chain. |
+| Preview performance | HTML parsing and image decoding ran on the event loop; duplicate URLs were fetched repeatedly. | Move CPU work into threads and deduplicate links before fetching. Match Twitter/X by hostname instead of arbitrary substrings. |
+| Image generation overhead | Plain text-to-image requests downloaded unrelated edit/history images. | Fetch editing inputs only for edit/outpaint modes. |
+| Outpaint/image edges | Mask files closed before Replicate uploaded them; very narrow or one-pixel images could be resized to zero pixels. | Keep mask handles open through both single and multi-image requests and clamp dimensions to at least one pixel. |
+| SVG repair | Whole-document HTML unescaping turned escaped text into markup and broke quoted attributes. | Decode named entities individually while retaining XML escaping. |
+| Summaries | Triggers arriving during a summary run could be discarded; empty provider output could mark a group summarized. Context retrieval loaded the entire summary archive. | Coalesce pending triggers, reject empty summaries, move worker DB calls to threads, and query only the most recent context groups. Remove the unused Python filtering helper. |
+| Jev state | Failed schema transactions could mark initialization complete; reply reservations could race; low temperatures could underflow every sampling weight. | Cache schema readiness after commit, reserve replies under a write transaction, and normalize scores before exponentiation. |
+| Smaller lifecycle issues | SQLite connections were not always closed, failed starboard sends prevented retries, and overlapping streak events could duplicate announcements or erase a new streak. | Close/reset connections explicitly, release failed starboard reservations, and remove completed streak state before awaiting delivery. Reject nonpositive message chunk limits. |
+| Development checks | The development extra did not install the security scanner required by `make check`. | Include `bandit[toml]` in the development dependencies and installation target. |
 
-1. **Entry Point** (`__main__.py`):
-   - Bot initialization with dynamic prefix handling (mention or `!` based on channel context)
-   - Cog loading system with conditional features (e.g., starboard based on ENV)
-   - Robust retry mechanism for connection failures
-   - Auto-restart loop every 6 hours for stability
+## Verification
 
-2. **Core Message Flow**:
-   - User message → `on_message` event → Privacy logging check → `process_commands`
-   - For image generation: Channel ID validation → Prefix matching → Rate limit check → Celery task dispatch
-   - For LLM chat: Channel whitelist check → History warming → Turn collection → Celery task → Response streaming
+The baseline suite passed **517 tests**. The expanded suite contains **590
+passing tests**, including regression tests for transaction rollback and races,
+task cancellation, startup retry, loop-bound cleanup, malformed configuration,
+partial image delivery, private-address redirects, bounded streaming, mask
+lifetimes, SVG escaping, and low-temperature sampling.
 
-3. **Task Queue Architecture**:
-   - Redis broker mediates between bot and workers
-   - Text queue (concurrency=1): LLM chat, text generation
-   - Image queue (concurrency=2, GPU-enabled): Image generation/editing
-   - Results stored in filesystem with SQLite tracking
+- Ruff lint and formatting checks pass for `src`, `tests`, and `scripts`.
+- Bandit reports no findings using the existing project configuration. Its
+  configured rule exclusions still apply; this is not a complete security audit.
+- Mypy reports **107 errors in 29 files**, versus **113 errors in 29 files** on
+  the unchanged baseline using the same installed dependencies. Comparing
+  diagnostics with line numbers normalized found no newly introduced errors.
+  `make check` therefore still fails at its type-check stage.
+- Combined statement/branch coverage is approximately **48%**. Accounting,
+  decoding, summary storage, and Jev behavior have substantially better coverage
+  than several legacy bot/provider and Discord presentation paths.
+- Git whitespace validation passes when treating the checkout's CRLF line
+  endings correctly (`git -c core.whitespace=cr-at-eol diff --check`).
 
-4. **Generator Pattern Flow**:
-   - Factory methods (`get_image_generator`, `get_text_generator`) create API-specific instances
-   - Generators implement base interfaces (`ImageGeneratorAPI`, `TextGeneratorAPI`)
-   - Async context managers handle resource cleanup
-   - Support for provider-specific features (seed, temperature, image editing)
+Checks were run on Windows with Python 3.13.2 and the existing local environment.
+Provider requests, Discord delivery, and Celery broker behavior were mocked in
+tests; no paid provider calls, live Discord posts, or deployment were performed.
+Python 3.10/Linux container behavior still needs deployment-environment testing.
 
-5. **State Management**:
-   - SQLite database for persistent data (rate limits, starboard posts, model preferences)
-   - In-memory conversation history with deque-based circular buffers
-   - JSON state files for LLM system prompts and user preferences
-   - Docker volumes for data persistence across restarts
+## Remaining constraints and follow-up work
 
-## 2. Top 5 Weaknesses
+1. **Type-check backlog:** Most diagnostics involve Discord channel/user unions,
+   dynamically registered cog attributes, Pillow annotations, and payload types.
+   They were retained rather than hidden with broad ignores or casts. A focused
+   type-contract cleanup can make `make check` fully green.
+2. **Live integration coverage:** Exercise reconnect/restart, worker revocation,
+   image fallback, webhook delivery, and shutdown against a staging Discord bot
+   and Redis/Celery deployment before production rollout. Coverage does not yet
+   establish every provider path or platform combination.
+3. **Accounting boundaries:** Per-user image serialization is scoped to one bot
+   process. Multiple bot replicas would need a persistent reservation mechanism.
+   A process crash between Discord delivery and billing can still leave an
+   uncharged image; solving that requires durable delivery/accounting state.
+4. **External cancellation:** Revocation is best effort. A provider request
+   already accepted remotely may still complete and incur cost even after the
+   local task or worker is stopped.
+5. **Scale and retention:** Recent summary context is now bounded, but discovering
+   unsummarized groups still examines historical records. Large archives would
+   benefit from incremental checkpoints and an explicit retention policy for
+   generated files, logs, and archived messages. This review does not delete user
+   history or choose a retention policy.
 
-### 1. **Security: Unsafe Dynamic Configuration Loading** [Critical]
-**Location**: `src/hollingsbot/cogs/image_gen_cog.py:122-127`
-```python
-raw_cfg: Mapping[str, Mapping[str, str]] = json.loads(
-    self._cfg_path.read_text("utf8")
-)
-```
-**Impact**: Hot-reloading JSON configuration without validation could allow code injection if the file is compromised. No schema validation or sanitization of model names/APIs.
-**Fix**: Implement Pydantic models for config validation, restrict file permissions, add integrity checks.
-
-### 2. **Performance: Inefficient Twitter Syndication Token Generation** [Medium]
-**Location**: `src/hollingsbot/url_metadata.py:102-119`
-```python
-def _generate_syndication_token(tweet_id: str) -> str:
-    # Manual base36 conversion with string concatenation in loop
-    while int_part > 0:
-        base36_str = str(digit) + base36_str  # String concatenation
-```
-**Impact**: String concatenation in loops is O(n²) complexity. For large tweet IDs, this becomes slow.
-**Fix**: Use list append + join pattern or utilize built-in base conversion functions.
-
-### 3. **Logic: Race Condition in Conversation History** [High]
-**Location**: `src/hollingsbot/cogs/llm_chat.py:271-277`
-```python
-def _history_for_channel(self, channel_id: int) -> Deque[ConversationTurn]:
-    history = self.channel_histories.get(channel_id)
-    if history is None or history.maxlen != self.history_limit:
-        existing = list(history) if history else []
-        history = deque(existing, maxlen=self.history_limit)
-```
-**Impact**: Non-atomic check-and-update could cause lost messages when multiple users trigger simultaneously.
-**Fix**: Acquire lock before checking/updating history, or use thread-safe collections.
-
-### 4. **Future-proofing: Hardcoded Model References** [Medium]
-**Location**: Multiple locations including `image_gen_config.json` and generator implementations
-**Impact**: Model names like "google/imagen-4" and "black-forest-labs/flux-schnell" are hardcoded throughout. API deprecation requires manual updates across files.
-**Fix**: Create model registry with versioning support, abstract model capabilities into configuration.
-
-### 5. **Modularity: Tight Coupling in Tool System** [Low]
-**Location**: `src/hollingsbot/tools/parser.py:29-38`
-```python
-pattern = r'TOOL_CALL:\s*(\w+)\((.*?)\)'  # Hardcoded format
-```
-**Impact**: Tool calling format is rigid, making it difficult to support alternative formats or integrate with standard function calling APIs.
-**Fix**: Abstract tool parsing into strategy pattern, support multiple formats (OpenAI function calling, Anthropic tools, etc.).
-
-## 3. Top 5 Strengths
-
-### 1. **Clean Architecture with Cog Pattern**
-The Discord.py cog system is used excellently to separate concerns. Each feature (image gen, LLM chat, starboard) is isolated in its own cog with clear boundaries. The `_ensure_loaded` pattern in `__main__.py:56-60` prevents double-loading across restart cycles.
-
-### 2. **Robust Task Queue Implementation**
-The Celery integration with separate queues for text/image processing is well-designed. The GPU-enabled image worker with proper resource allocation (`docker-compose.yml:46-51`) and graceful timeout handling (`tasks.py:108-112`) shows production-grade thinking.
-
-### 3. **Excellent Configuration Management**
-The multi-tiered configuration approach is sophisticated:
-- Environment variables for secrets
-- JSON configs for model routing with hot-reload capability
-- File-based system prompts with mtime caching
-- Per-user preferences stored in database
-This provides flexibility while maintaining security.
-
-### 4. **Smart Rate Limiting System**
-The database-backed rate limiting (`prompt_db.py:98-165`) with atomic transactions and daily windows is well-implemented. The bulk insert with limit checking in a single transaction prevents race conditions and provides clear error messages.
-
-### 5. **Comprehensive Image Handling**
-The image processing pipeline is robust:
-- Multi-format support with smart detection (`_guess_ext`)
-- Automatic resizing and compression to fit Discord limits
-- Outpainting support with mask generation
-- Base64 encoding for LLM integration
-- Efficient streaming for large images
-
-## 4. Recommended Next Steps
-
-1. **Add comprehensive test coverage** - Currently only URL metadata has tests. Priority areas: rate limiting, task queue integration, cog loading
-2. **Implement structured logging** - Replace print statements with structured logs using correlation IDs for request tracking
-3. **Add health check endpoints** - Monitor Celery worker health, Redis connectivity, and GPU availability
-4. **Create deployment documentation** - Document GPU requirements, environment variables, and production configuration
-5. **Implement graceful shutdown** - Ensure in-flight Celery tasks complete before container stops
-
-## Notable Patterns and Anti-patterns
-
-**Good Patterns:**
-- Factory pattern for generator instantiation
-- Async context managers for resource management
-- Deque-based circular buffers for memory-efficient history
-- Docker volume mounting for development hot-reload
-
-**Anti-patterns to Address:**
-- Direct `os._exit(0)` instead of graceful shutdown (`__main__.py:52`)
-- Bare except clauses that could mask critical errors
-- Missing connection pooling for external API calls
-- No circuit breaker pattern for failing external services
-
-## Security Considerations
-
-- **API keys properly isolated** in environment variables
-- **SQL injection protection** via parameterized queries
-- **But concerning**: No input sanitization for prompts sent to external APIs
-- **Missing**: Request signing/verification for webhook endpoints
-- **Good**: Privacy mode for logging sensitive content
-
-## Performance Analysis
-
-**Strengths:**
-- Async/await used appropriately throughout
-- Celery workers with proper concurrency limits
-- Image compression before Discord upload
-- Efficient mtime-based caching for config files
-
-**Weaknesses:**
-- No connection pooling for Replicate API
-- Synchronous file I/O in async contexts
-- Missing Redis connection pooling configuration
-- No CDN/caching for generated images
-
-## Final Assessment
-
-The hollingsbot3 codebase is a mature, well-structured Discord bot with impressive features and generally solid implementation. The architecture shows good understanding of distributed systems with appropriate use of task queues and containerization. The main areas for improvement are around test coverage, error handling robustness, and some security hardening. With the recommended improvements, this would be a production-ready system suitable for high-traffic Discord servers.
-
-## Key Findings Summary
-
-### Strengths 🟢
-1. **Excellent architecture** - Clean separation with Discord.py cogs and Celery task queues
-2. **Robust task queue** - Well-designed GPU/CPU worker separation with proper resource allocation
-3. **Smart configuration** - Multi-tiered config system balancing flexibility and security
-4. **Production-grade rate limiting** - Database-backed with atomic transactions
-5. **Comprehensive image handling** - Multi-format support, resizing, compression, and LLM integration
-
-### Weaknesses 🔴
-1. **Security risk** - Unsafe dynamic config loading without validation (Critical)
-2. **Performance issue** - Inefficient string concatenation in Twitter token generation
-3. **Race condition** - Non-atomic conversation history updates could lose messages
-4. **Hardcoded models** - API deprecation requires manual updates across multiple files
-5. **Tool system coupling** - Rigid format makes integration with standard APIs difficult
-
-### Priority Recommendations 📋
-1. Add comprehensive test coverage (currently minimal)
-2. Implement structured logging with correlation IDs
-3. Add health monitoring for workers and dependencies
-4. Fix the critical security issue with config validation
-5. Implement graceful shutdown handling
-
----
-
-*Generated on: November 2, 2025*
-*Project: hollingsbot3 - Discord Bot with LLM and Image Generation*
+All changes are left in the working tree for review. The pre-existing change to
+`docker-compose.orange-pi.yml` was preserved. No commit, push, or deployment was
+made.

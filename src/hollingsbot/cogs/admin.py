@@ -10,7 +10,8 @@ from pathlib import Path
 import discord
 from discord.ext import commands
 
-from hollingsbot.cost_tracking import CostTracker
+from hollingsbot import prompt_db
+from hollingsbot.cost_tracking import CostTracker, validate_amount
 from hollingsbot.settings import get_admin_user_ids
 from hollingsbot.utils.file_utils import atomic_write_json
 
@@ -33,9 +34,10 @@ class Admin(commands.Cog):
         self.bot = bot
 
         # Initialize cost tracker for admin commands
-        db_path = os.getenv("PROMPT_DB_PATH", "prompts.db")
+        db_path = str(prompt_db.DB_PATH)
         daily_free_budget = float(os.getenv("DAILY_FREE_BUDGET", "0.50"))
-        self._cost_tracker = CostTracker(db_path, daily_free_budget)
+        image_cog = bot.get_cog("ImageGenCog")
+        self._cost_tracker = getattr(image_cog, "_cost_tracker", None) or CostTracker(db_path, daily_free_budget)
 
         # Load admin user IDs
         self._admin_ids = get_admin_user_ids()
@@ -413,6 +415,7 @@ class Admin(commands.Cog):
             return
 
         try:
+            validate_amount(price)
             # Load config
             config_path = Path(__file__).resolve().parents[1] / "image_gen_config.json"
             with open(config_path, encoding="utf8") as f:
@@ -457,6 +460,7 @@ class Admin(commands.Cog):
             return
 
         try:
+            validate_amount(budget)
             # Load config
             config_path = Path(__file__).resolve().parents[1] / "image_gen_config.json"
             with open(config_path, encoding="utf8") as f:

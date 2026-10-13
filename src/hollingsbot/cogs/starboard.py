@@ -277,17 +277,21 @@ class Starboard(commands.Cog):
         # and produce duplicate starboard posts.
         self._seen_message_ids.append(message.id)
 
-        # Resolve and validate starboard channel
-        starboard_channel = await self._resolve_channel(self.starboard_channel_id)
-        if not self._validate_starboard_channel(starboard_channel, payload.guild_id):
-            return
+        sent_message = None
+        try:
+            starboard_channel = await self._resolve_channel(self.starboard_channel_id)
+            if not self._validate_starboard_channel(starboard_channel, payload.guild_id):
+                return
 
-        # Send to starboard
-        sent_message = await self._send_to_starboard(starboard_channel, message)
-        if sent_message is None:
-            return
-
-        self._log_starboard_entry(payload, message, starboard_channel.id, sent_message.id)
+            sent_message = await self._send_to_starboard(starboard_channel, message)
+            if sent_message is not None:
+                self._log_starboard_entry(payload, message, starboard_channel.id, sent_message.id)
+        finally:
+            # Keep duplicate protection while sending, but permit a later
+            # reaction to retry after a transient delivery or channel failure.
+            if sent_message is None:
+                with suppress(ValueError):
+                    self._seen_message_ids.remove(message.id)
 
     @staticmethod
     def _get_author_display_name(author: discord.User | discord.Member) -> str:

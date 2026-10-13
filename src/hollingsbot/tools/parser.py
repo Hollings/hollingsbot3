@@ -4,23 +4,23 @@ from __future__ import annotations
 
 import logging
 import re
+from contextvars import ContextVar
 from typing import NamedTuple
 
 _LOG = logging.getLogger(__name__)
 
-# Global context for tool execution (set by the calling code)
-_tool_context: dict[str, object] = {}
+# Each concurrent response has its own execution context.
+_tool_context: ContextVar[dict[str, object] | None] = ContextVar("tool_context", default=None)
 
 
 def set_current_context(context: dict[str, object]) -> None:
     """Set the current execution context for tools."""
-    global _tool_context
-    _tool_context = context.copy()
+    _tool_context.set(context.copy())
 
 
 def get_current_context() -> dict[str, object]:
     """Get the current execution context for tools."""
-    return _tool_context.copy()
+    return (_tool_context.get() or {}).copy()
 
 
 class ToolCall(NamedTuple):

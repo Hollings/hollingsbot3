@@ -559,8 +559,11 @@ def deduct_user_tokens(user_id: int, amount: int) -> tuple[bool, int]:
 
     Returns (False, current_balance) if user doesn't have enough tokens.
     """
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+        raise ValueError("Token amount must be a positive integer")
     init_db()
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
         cur = conn.execute(
             "SELECT tokens FROM user_tokens WHERE user_id = ?",
             (user_id,),
@@ -577,6 +580,34 @@ def deduct_user_tokens(user_id: int, amount: int) -> tuple[bool, int]:
         )
         conn.commit()
         return (True, current_balance - amount)
+
+
+def redeem_user_tokens(user_id: int, amount: int, credits: float) -> tuple[bool, int]:
+    """Atomically exchange tokens for credits, returning (success, token balance)."""
+    from hollingsbot.cost_tracking import validate_amount
+
+    if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
+        raise ValueError("Token amount must be a positive integer")
+    validate_amount(credits)
+    init_db()
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT tokens FROM user_tokens WHERE user_id = ?", (user_id,)).fetchone()
+        balance = row[0] if row else 0
+        if balance < amount:
+            return False, balance
+        conn.execute("UPDATE user_tokens SET tokens = tokens - ? WHERE user_id = ?", (amount, user_id))
+        conn.execute(
+            """
+            INSERT INTO user_credits (user_id, balance, lifetime_spent, last_updated)
+            VALUES (?, ?, 0, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                balance = balance + excluded.balance,
+                last_updated = excluded.last_updated
+            """,
+            (user_id, credits, datetime.utcnow().isoformat()),
+        )
+        return True, balance - amount
 
 
 def get_token_leaderboard(limit: int = 10) -> list[tuple[int, int]]:

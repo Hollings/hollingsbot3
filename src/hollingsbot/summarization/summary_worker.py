@@ -35,6 +35,7 @@ class SummaryWorker:
         self.cache = cache
         self.summarizer = summarizer
         self._job_locks: dict[int, asyncio.Lock] = {}
+        self._pending: set[int] = set()
 
     def _get_lock(self, channel_id: int) -> asyncio.Lock:
         """Get or create a lock for a specific channel.
@@ -79,6 +80,9 @@ class SummaryWorker:
             end_timestamp = groups[-1].end_timestamp
             message_count = sum(g.message_count for g in groups)
 
+        if not summary_text.strip():
+            raise ValueError("The summary provider returned empty text")
+
         group = MessageGroup(
             id=None,
             channel_id=channel_id,
@@ -90,7 +94,7 @@ class SummaryWorker:
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
         )
-        self.cache.save_message_group(group)
+        await asyncio.to_thread(self.cache.save_message_group, group)
 
         _LOG.info(
             "Generated level-%d summary for channel %d: messages %d-%d (%d total)",
@@ -110,7 +114,7 @@ class SummaryWorker:
         Returns:
             Number of summaries generated.
         """
-        groups_to_summarize = self.cache.get_messages_needing_level1_summary(channel_id)
+        groups_to_summarize = await asyncio.to_thread(self.cache.get_messages_needing_level1_summary, channel_id)
         if not groups_to_summarize:
             return 0
 
@@ -128,7 +132,7 @@ class SummaryWorker:
         Returns:
             Number of summaries generated.
         """
-        groups_to_summarize = self.cache.get_level1_groups_needing_level2(channel_id)
+        groups_to_summarize = await asyncio.to_thread(self.cache.get_level1_groups_needing_level2, channel_id)
         if not groups_to_summarize:
             return 0
 
@@ -167,27 +171,25 @@ class SummaryWorker:
     async def trigger_summarization(self, channel_id: int) -> None:
         """Trigger background summarization for a channel.
 
-        If summarization is already running for this channel, this method
-        returns immediately without doing anything.
+        If this channel is already running, mark it for another pass so messages
+        arriving during a slow provider call are not left waiting for the next message.
 
         Args:
             channel_id: The Discord channel ID to summarize.
         """
         lock = self._get_lock(channel_id)
 
-        # Use non-blocking acquire to skip if lock is already held
-        # This is atomic and avoids the race condition of check-then-lock
+        self._pending.add(channel_id)
         if lock.locked():
             return
 
-        # Try to acquire lock, but another task might have acquired it
-        # between our check and now, so use try_lock pattern
+        # No await separates the locked check from acquiring an available lock.
         try:
             async with lock:
-                try:
+                while channel_id in self._pending:
+                    self._pending.discard(channel_id)
                     await self._run_summarization(channel_id)
-                except Exception:
-                    _LOG.exception("Error during summarization for channel %d", channel_id)
-        except RuntimeError:
-            # Lock was acquired by another task between our check and acquire
-            pass
+        except Exception:
+            _LOG.exception("Error during summarization for channel %d", channel_id)
+        finally:
+            self._pending.discard(channel_id)

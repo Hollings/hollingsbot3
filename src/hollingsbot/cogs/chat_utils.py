@@ -206,6 +206,8 @@ DISCORD_MESSAGE_LIMIT = 2000
 
 def chunk_message(text: str, limit: int = DISCORD_MESSAGE_LIMIT) -> list[str]:
     """Split a message into Discord-sized chunks, preferring newline boundaries."""
+    if limit <= 0:
+        raise ValueError("Message chunk limit must be positive")
     if len(text) <= limit:
         return [text]
     chunks = []

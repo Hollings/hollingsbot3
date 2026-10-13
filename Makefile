@@ -11,7 +11,7 @@ install:  ## Install production dependencies
 
 install-dev:  ## Install development dependencies (includes linters, testing tools)
 	pip install -r requirements.txt
-	pip install ruff pytest pytest-asyncio pytest-cov pre-commit mypy bandit
+	pip install ruff pytest pytest-asyncio pytest-cov pre-commit mypy 'bandit[toml]'
 
 lint:  ## Run linter (ruff)
 	ruff check src/ tests/ scripts/

@@ -11,8 +11,9 @@ import os
 
 from discord.ext import commands
 
+from hollingsbot import prompt_db
 from hollingsbot.cost_tracking import CostTracker
-from hollingsbot.prompt_db import deduct_user_tokens, get_user_token_balance
+from hollingsbot.prompt_db import get_user_token_balance, redeem_user_tokens
 
 __all__ = ["CreditsCog"]
 
@@ -36,10 +37,11 @@ class CreditsCog(commands.Cog):
         self.bot = bot
 
         # Get cost tracker configuration
-        db_path = os.getenv("PROMPT_DB_PATH", "prompts.db")
+        db_path = str(prompt_db.DB_PATH)
         daily_free_budget = float(os.getenv("DAILY_FREE_BUDGET", "0.50"))
 
-        self._cost_tracker = CostTracker(db_path, daily_free_budget)
+        image_cog = bot.get_cog("ImageGenCog")
+        self._cost_tracker = getattr(image_cog, "_cost_tracker", None) or CostTracker(db_path, daily_free_budget)
         _log.info("CreditsCog initialized")
 
     @commands.command(name="usage")
@@ -110,18 +112,15 @@ class CreditsCog(commands.Cog):
             await ctx.send("Amount must be a positive number.")
             return
 
-        # Check balance and deduct tokens
-        success, new_balance = deduct_user_tokens(ctx.author.id, amount)
+        # Transfer tokens and credits in one transaction: failures cannot lose tokens.
+        credits_earned = amount * DOLLARS_PER_TOKEN
+        success, new_balance = redeem_user_tokens(ctx.author.id, amount, credits_earned)
 
         if not success:
             await ctx.send(
                 f"You don't have enough tokens. You have {new_balance} tokens, but tried to redeem {amount}."
             )
             return
-
-        # Calculate credits and grant them
-        credits_earned = amount * DOLLARS_PER_TOKEN
-        self._cost_tracker.grant_credits(ctx.author.id, credits_earned)
 
         await ctx.send(
             f"Redeemed {amount} tokens for ${credits_earned:.2f} in credits!\nRemaining tokens: {new_balance}"

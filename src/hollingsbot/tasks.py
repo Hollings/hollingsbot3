@@ -11,6 +11,7 @@ from celery.utils.log import get_task_logger
 from hollingsbot.image_generators import get_image_generator
 from hollingsbot.prompt_db import log_llm_api_call, update_status
 from hollingsbot.text_generators import get_text_generator
+from hollingsbot.text_generators.client_cache import close_clients
 
 logger = get_task_logger(__name__)
 
@@ -97,42 +98,38 @@ def generate_image(
     )
     update_status(prompt_id, "started")
 
-    generator = get_image_generator(api, model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options)
-    gen_sig = signature(generator.generate)
-    gen_many = getattr(generator, "generate_many", None)
-    gen_many_sig = signature(gen_many) if callable(gen_many) else None
-
-    async def _run_single() -> bytes:
-        kwargs = {}
-        if "seed" in gen_sig.parameters:
-            kwargs["seed"] = seed
-        if image_input and "image_input" in gen_sig.parameters:
-            kwargs["image_input"] = image_input
-        if mask and "mask" in gen_sig.parameters:
-            kwargs["mask"] = mask
-        if output_format and "output_format" in gen_sig.parameters:
-            kwargs["output_format"] = output_format
-        return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
-
-    async def _run_many() -> list[bytes]:
-        assert gen_many_sig is not None
-        kwargs = {}
-        if "seed" in gen_many_sig.parameters:
-            kwargs["seed"] = seed
-        if image_input and "image_input" in gen_many_sig.parameters:
-            kwargs["image_input"] = image_input
-        if mask and "mask" in gen_many_sig.parameters:
-            kwargs["mask"] = mask
-        if output_format and "output_format" in gen_many_sig.parameters:
-            kwargs["output_format"] = output_format
-        return await asyncio.wait_for(gen_many(prompt, **kwargs), timeout)  # type: ignore[misc]
+    async def _run() -> tuple[list[bytes], bool]:
+        generator = get_image_generator(
+            api, model, quality=quality, aspect_ratio=aspect_ratio, model_options=model_options
+        )
+        try:
+            generate_many = getattr(generator, "generate_many", None)
+            multiple = callable(generate_many)
+            generate = generate_many if callable(generate_many) else generator.generate
+            parameters = signature(generate).parameters
+            options = {"seed": seed, "image_input": image_input, "mask": mask, "output_format": output_format}
+            kwargs = {key: value for key, value in options.items() if key in parameters and value is not None}
+            result = await asyncio.wait_for(generate(prompt, **kwargs), timeout)
+            return (result if multiple else [result]), multiple
+        finally:
+            try:
+                await generator.aclose()
+            except Exception:
+                logger.warning("generate_image[%s] cleanup failed", prompt_id, exc_info=True)
+            await close_clients()
 
     try:
-        # Prefer multi-image generation when available
-        if callable(gen_many):
-            images_bytes: list[bytes] = asyncio.run(_run_many())
-        else:
-            image_bytes: bytes = asyncio.run(_run_single())
+        images_bytes, multiple = asyncio.run(_run())
+        if not images_bytes or any(not isinstance(img, bytes) or not img for img in images_bytes):
+            raise RuntimeError("Generator returned no image data.")
+        ts = time.time_ns()
+        _ensure_output_dir()
+        paths: list[str] = []
+        for idx, img in enumerate(images_bytes, start=1):
+            fp = OUTPUT_DIR / f"{prompt_id}_{ts}_{idx:02d}.png"
+            fp.write_bytes(img)
+            paths.append(str(fp))
+        update_status(prompt_id, "completed")
     except asyncio.TimeoutError as exc:
         err = f"Generation exceeded {timeout}s timeout."
         logger.error("generate_image[%s] TIMEOUT: %s", prompt_id, err)
@@ -143,43 +140,18 @@ def generate_image(
         logger.exception("generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc)
         update_status(prompt_id, f"failed: {exc}")
         raise
+    duration = time.monotonic() - start
+    logger.info("generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths))
+    return paths if multiple else paths[0]
+
+
+async def _generate_text(generator, prompt, **kwargs) -> str:
+    """Run a worker request and release SDK pools on their owning event loop."""
+    try:
+        timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
+        return await asyncio.wait_for(generator.generate(prompt, **kwargs), timeout)
     finally:
-        try:
-            asyncio.run(generator.aclose())
-        except Exception:
-            logger.debug("generate_image[%s] aclose() raised, ignored.", prompt_id)
-
-    ts = int(time.time())
-    _ensure_output_dir()
-    if callable(gen_many):
-        # Write all images and return list of paths
-        if not images_bytes:
-            raise RuntimeError("Generator returned no images.")
-        paths: list[str] = []
-        for idx, img in enumerate(images_bytes, start=1):
-            filename = f"{prompt_id}_{ts}_{idx:02d}.png"
-            fp = OUTPUT_DIR / filename
-            fp.write_bytes(img)
-            paths.append(str(fp))
-        update_status(prompt_id, "completed")
-        duration = time.monotonic() - start
-        logger.info("generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths))
-        return paths
-    else:
-        filename = f"{prompt_id}_{ts}.png"
-        file_path = OUTPUT_DIR / filename
-        file_path.write_bytes(image_bytes)
-
-        update_status(prompt_id, "completed")
-        duration = time.monotonic() - start
-        logger.info(
-            "generate_image[%s] FINISH in %.2fs | wrote %s (size=%d bytes)",
-            prompt_id,
-            duration,
-            file_path,
-            len(image_bytes),
-        )
-        return str(file_path)
+        await close_clients()
 
 
 @celery_app.task(name="tasks.generate_text", queue="text")
@@ -203,9 +175,9 @@ def generate_text(
         generator = get_text_generator(api, model)
         gen_sig = signature(generator.generate)
         if "temperature" in gen_sig.parameters:
-            text = asyncio.run(generator.generate(prompt, temperature=temperature))
+            text = asyncio.run(_generate_text(generator, prompt, temperature=temperature))
         else:
-            text = asyncio.run(generator.generate(prompt))
+            text = asyncio.run(_generate_text(generator, prompt))
     except Exception as exc:
         duration = time.monotonic() - start
         logger.exception("generate_text FAILED after %.2fs | %s", duration, exc)
@@ -405,14 +377,7 @@ def generate_llm_chat_response(
         else:
             payload = _conversation_to_text(conversation)
 
-        _text_timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
-        text = asyncio.run(asyncio.wait_for(generator.generate(payload, **kwargs), _text_timeout))
-        response_text = text
-        status = "success"
-    except TypeError:
-        # Some generators insist on plain text; fall back to flattened transcript.
-        _text_timeout = float(os.getenv("TEXT_TIMEOUT", "180"))
-        text = asyncio.run(asyncio.wait_for(generator.generate(_conversation_to_text(conversation)), _text_timeout))
+        text = asyncio.run(_generate_text(generator, payload, **kwargs))
         response_text = text
         status = "success"
     except Exception as exc:

@@ -38,6 +38,32 @@ def _make_gen(**kwargs) -> ReplicateImageGenerator:
     return ReplicateImageGenerator(**kwargs)
 
 
+@pytest.mark.parametrize("method", ["generate", "generate_many"])
+async def test_outpaint_mask_stays_open_until_upload_finishes(method, tmp_path):
+    gen = _make_gen(model="black-forest-labs/flux-fill-dev")
+    mask = tmp_path / "mask.png"
+    mask.write_bytes(_png_bytes(4, 4))
+    handles = []
+
+    async def run(model, input):
+        handles.extend([input["image"], input["mask"]])
+        assert all(not handle.closed for handle in handles)
+        assert input["mask"].read() == mask.read_bytes()
+        return [b"outpainted"]
+
+    gen._client.async_run = run
+    await getattr(gen, method)("extend", image_input=[_png_bytes(4, 4)], mask=str(mask))
+    assert all(handle.closed for handle in handles)
+
+
+def test_one_pixel_outpaint_input():
+    from hollingsbot.utils.outpaint_utils import create_outpaint_images
+
+    canvas, mask = create_outpaint_images(_png_bytes(1, 1))
+    assert Image.open(io.BytesIO(canvas)).size == (1, 1)
+    assert Image.open(io.BytesIO(mask)).size == (1, 1)
+
+
 class TestGetImageGenerator:
     """Factory dispatch tests."""
 
@@ -181,6 +207,10 @@ class TestSeedreamDefaults:
 
 
 class TestScaleImage:
+    def test_extreme_aspect_ratio_keeps_one_pixel_dimension(self):
+        out = _scale_image_to_max_dimension(_png_bytes(1, 2048), 1024)
+        assert Image.open(io.BytesIO(out)).size == (1, 1024)
+
     def test_no_scale_when_within_limit(self):
         out = _scale_image_to_max_dimension(_png_bytes(100, 80), 1024)
         assert Image.open(io.BytesIO(out)).size == (100, 80)

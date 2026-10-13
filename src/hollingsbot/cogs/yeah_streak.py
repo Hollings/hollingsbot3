@@ -42,7 +42,7 @@ class YeahStreakCog(commands.Cog):
 
     def _init_db(self) -> None:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        with sqlite3.connect(self.db_path) as conn:
+        with contextlib.closing(sqlite3.connect(self.db_path)) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS yeah_streaks (
                     user_id INTEGER PRIMARY KEY,
@@ -98,11 +98,9 @@ class YeahStreakCog(commands.Cog):
             self.current_streaks[key] = self.current_streaks.get(key, 0) + 1
         else:
             # Check if they had a streak worth announcing (4+)
-            streak = self.current_streaks.get(key, 0)
+            streak = self.current_streaks.pop(key, 0)
             if streak >= 4:
                 await self._announce_streak_end(message.channel, message.author, streak)
-            # Reset streak
-            self.current_streaks[key] = 0
 
     async def _announce_streak_end(self, channel: discord.abc.Messageable, user: discord.User, streak: int) -> None:
         """Announce streak end with obnoxious message and image."""

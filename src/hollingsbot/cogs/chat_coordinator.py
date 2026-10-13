@@ -102,6 +102,20 @@ class ChatCoordinator(commands.Cog):
         bot_name = bot_instance.__class__.__name__
         _LOG.info(f"Registered bot: {bot_name}")
 
+    async def cog_unload(self) -> None:
+        """Finish cancellation before a reload creates replacement workers."""
+        pending = [*self._active_message_tasks.values(), *self._warming_tasks.values(), *self._summary_tasks]
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        for instance in self.bots:
+            close = getattr(instance, "aclose", None)
+            if close is not None:
+                try:
+                    await close()
+                except Exception:
+                    _LOG.exception("Failed to close %s", type(instance).__name__)
+
     # ==================== Generation Cancellation ====================
 
     async def _cancel_all_generations(self, channel_id: int) -> None:
@@ -116,7 +130,7 @@ class ChatCoordinator(commands.Cog):
             _LOG.info(f"Cancelling previous message processing in channel {channel_id}")
             old_task.cancel()
             with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
-                await asyncio.wait_for(old_task, timeout=0.1)
+                await asyncio.wait_for(asyncio.shield(old_task), timeout=0.1)
 
         # Ask each bot to cancel its generation for this channel
         for bot_instance in self.bots:
@@ -148,13 +162,14 @@ class ChatCoordinator(commands.Cog):
         Replies being written from the old chat are cancelled, and the clear point is saved,
         so a restart's backfill from Discord skips everything before it too.
         """
-        await self._cancel_all_generations(channel_id)
-        await asyncio.to_thread(set_channel_clear_point, channel_id, up_to_message_id)
-        async with self._lock_for_channel(channel_id):
-            history = self._history_for_channel(channel_id)
-            kept = [t for t in history if t.message_id is not None and t.message_id > up_to_message_id]
-            history.clear()
-            history.extend(kept)
+        async with self._processing_lock_for_channel(channel_id):
+            await self._cancel_all_generations(channel_id)
+            await asyncio.to_thread(set_channel_clear_point, channel_id, up_to_message_id)
+            async with self._lock_for_channel(channel_id):
+                history = self._history_for_channel(channel_id)
+                kept = [t for t in history if t.message_id is not None and t.message_id > up_to_message_id]
+                history.clear()
+                history.extend(kept)
 
     async def recent_history(self, channel: discord.abc.Messageable) -> list[ConversationTurn]:
         """A copy of the channel's history, backfilled from Discord first if nothing has been said here yet.
@@ -212,9 +227,13 @@ class ChatCoordinator(commands.Cog):
 
             lock = self._lock_for_channel(channel_id)
             async with lock:
+                # A clear may have completed while Discord history was loading.
+                clear_point = await asyncio.to_thread(get_channel_clear_point, channel_id)
                 history = self._history_for_channel(channel_id)
                 existing_ids = {t.message_id for t in history if t.message_id is not None}
                 for msg in messages:
+                    if clear_point is not None and msg.id <= clear_point:
+                        continue
                     if msg.id in existing_ids:
                         continue
 
@@ -302,6 +321,27 @@ class ChatCoordinator(commands.Cog):
 
         channel_id = message.channel.id
 
+        # Serialize preparation through registration, but release the lock
+        # before waiting for a reply so the next message can cancel it.
+        async with self._processing_lock_for_channel(channel_id):
+            task = await self._prepare_response(message)
+        if task is None:
+            return
+        try:
+            await task
+        except asyncio.CancelledError:
+            _LOG.info("Message processing cancelled for channel %s", channel_id)
+        finally:
+            if self._active_message_tasks.get(channel_id) is task:
+                self._active_message_tasks.pop(channel_id, None)
+
+    async def _prepare_response(self, message: discord.Message) -> asyncio.Task | None:
+        """Prepare history and register its response before the next event proceeds."""
+        channel_id = message.channel.id
+        clear_point = await asyncio.to_thread(get_channel_clear_point, channel_id)
+        if clear_point is not None and message.id <= clear_point:
+            return None
+
         # Cancel any active generations ONLY for human messages (not bot responses)
         if not message.author.bot and not message.webhook_id:
             await self._cancel_all_generations(channel_id)
@@ -337,18 +377,12 @@ class ChatCoordinator(commands.Cog):
                 # Get snapshot for bots to use
                 snapshot = list(history)
 
-        # Try to get a bot response (wrapped in task for cancellation)
+        # Register while still holding the processing lock.
         if turn:
             task = asyncio.create_task(self._try_bot_responses(channel_id, message, snapshot))
             self._active_message_tasks[channel_id] = task
-            try:
-                await task
-            except asyncio.CancelledError:
-                _LOG.info(f"Message processing cancelled for channel {channel_id}")
-            finally:
-                # Clean up task reference if it's still ours
-                if self._active_message_tasks.get(channel_id) is task:
-                    self._active_message_tasks.pop(channel_id, None)
+            return task
+        return None
 
     async def _try_bot_responses(
         self, channel_id: int, message: discord.Message, snapshot: list[ConversationTurn]

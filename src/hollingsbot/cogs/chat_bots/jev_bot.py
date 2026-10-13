@@ -520,6 +520,18 @@ class JevBot:
             )
         return self._writer
 
+    async def aclose(self) -> None:
+        pending = list(self._active.values())
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
+        await asyncio.gather(*self._cleanups, return_exceptions=True)
+        if self._writer is not None:
+            await self._writer.client.aclose()
+            if self._writer.suggester is not None:
+                await self._writer.suggester.aclose()
+            self._writer = None
+
     async def _write_and_send(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
         """Write the whole reply behind a typing indicator, then post it once."""
         channel = message.channel

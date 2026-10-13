@@ -26,6 +26,7 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 
 from hollingsbot.settings import parse_id_set
+from hollingsbot.text_generators.client_cache import close_clients
 
 load_dotenv()
 
@@ -94,6 +95,7 @@ async def on_command_error(ctx: commands.Context, error: commands.CommandError) 
 
 
 RESTART_INTERVAL = int(os.getenv("BOT_RESTART_INTERVAL", 6 * 60 * 60))
+_restart_requested = False
 
 
 def _exit_for_restart() -> None:
@@ -130,13 +132,14 @@ def _exit_for_restart() -> None:
 
 @tasks.loop(seconds=RESTART_INTERVAL)
 async def restart_task():
+    global _restart_requested
     # tasks.loop runs its first iteration immediately on start; the restart
     # should only happen once a full interval has elapsed.
     if restart_task.current_loop == 0:
         return
     logger.warning("Restart interval (%ss) reached; exiting for supervisor restart", RESTART_INTERVAL)
+    _restart_requested = True
     await bot.close()
-    _exit_for_restart()
 
 
 @restart_task.before_loop
@@ -184,13 +187,26 @@ async def on_message(message):
     await bot.process_commands(message)
 
 
-if __name__ == "__main__":
-    # Robust launcher: retry on transient connect errors (e.g., gateway timeouts)
+async def run_bot() -> None:
+    """Retry startup with a reopened client and a single owning event loop."""
     while True:
         try:
-            asyncio.run(main())
-            break  # Normal exit
+            await main()
+            return
         except Exception as e:
-            # Log and retry with backoff; discord.py sometimes raises during initial connect
             logger.exception("Bot crashed during startup/connect; retrying in 5s: %s", e)
-            time.sleep(5)
+        finally:
+            restart_task.cancel()
+            restart = restart_task.get_task()
+            if restart is not None:
+                await asyncio.gather(restart, return_exceptions=True)
+            await close_clients()
+            if _restart_requested:
+                _exit_for_restart()
+        # async with bot closes it on failure. Reopen it before retrying.
+        bot.clear()
+        await asyncio.sleep(5)
+
+
+if __name__ == "__main__":
+    asyncio.run(run_bot())

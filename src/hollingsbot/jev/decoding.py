@@ -92,5 +92,8 @@ def pick(scores: Mapping[str, float], rng: random.Random, temperature: float, to
         acc += s / total
         if acc >= top_p:
             break
-    weights = [s ** (1.0 / temperature) for _, s in kept]
+    # Scale to a maximum of 1 before exponentiation. At very low temperatures,
+    # raw probabilities all underflow to zero and random.choices rejects them.
+    maximum = kept[0][1]
+    weights = [(s / maximum) ** (1.0 / temperature) for _, s in kept]
     return rng.choices([w for w, _ in kept], weights=weights)[0]

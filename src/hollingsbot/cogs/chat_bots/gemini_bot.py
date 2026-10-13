@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import json
 import logging
 import os
@@ -18,6 +17,7 @@ import discord
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.utils.celery_utils import run_task
 from hollingsbot.utils.file_utils import atomic_write_json
 from hollingsbot.utils.svg_utils import extract_render_and_strip_svgs
 
@@ -32,7 +32,6 @@ class GenerationJob:
 
     def __init__(self):
         self.task: asyncio.Task | None = None
-        self.result: Any = None
 
 
 class GeminiBot:
@@ -570,27 +569,11 @@ class GeminiBot:
         if alternation_issues > 0:
             _LOG.warning(f"Found {alternation_issues} role alternation issues - this may cause empty responses!")
 
-        async_result = generate_llm_chat_response.apply_async(
+        result = await run_task(
+            generate_llm_chat_response,
             (provider, model, conversation),
             kwargs={"temperature": 1.0},
-        )
-        job.result = async_result
-        start = time.monotonic()
-
-        while True:
-            # ready()/revoke() are synchronous Redis round-trips; run them in a
-            # thread so a slow broker can't starve the Discord heartbeat.
-            if await asyncio.to_thread(async_result.ready):
-                break
-            if (time.monotonic() - start) > self.text_timeout:
-                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
-                raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
-            await asyncio.sleep(0.5)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            functools.partial(async_result.get, timeout=0.1),
+            timeout=self.text_timeout,
         )
 
         # Extract text and debug info from result
@@ -619,17 +602,13 @@ class GeminiBot:
             # Cancel the local asyncio task first
             job.task.cancel()
 
-            # Revoke the Celery task immediately
-            if job.result:
-                await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
-                _LOG.info("Revoked Celery task for channel %s (terminate=True)", channel_id)
-
-            # Now wait for local task cleanup (TimeoutError if it takes >0.5s
-            # to unwind - still proceed to clear the job entry below)
+            # The shared Celery bridge revokes the remote job while unwinding.
+            # Let cleanup finish even if it exceeds this short wait.
             with suppress(asyncio.CancelledError, TimeoutError):
-                await asyncio.wait_for(job.task, timeout=0.5)
+                await asyncio.wait_for(asyncio.shield(job.task), timeout=0.5)
 
-            self._active_generations.pop(channel_id, None)
+            if self._active_generations.get(channel_id) is job:
+                self._active_generations.pop(channel_id, None)
             _LOG.info("Cancelled active generation in channel %s", channel_id)
 
     async def _wait_for_typing_to_clear(self, channel_id: int) -> None:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import functools
 import logging
 import os
 import random
@@ -33,6 +32,7 @@ from hollingsbot.prompt_db import (
     set_temp_bot_avatar,
 )
 from hollingsbot.tasks import generate_llm_chat_response
+from hollingsbot.utils.celery_utils import run_task
 
 from .avatar import fallback_avatar
 from .debug_log import DebugLogStore
@@ -96,7 +96,7 @@ class GenerationJob:
 
     def __init__(self, webhook_id: int | None = None):
         self.task: asyncio.Task | None = None
-        self.result: Any = None
+        self.started = False
         self.webhook_id: int | None = webhook_id  # For refunding on cancellation
         self.start_time: float = time.monotonic()  # When generation started
 
@@ -133,6 +133,16 @@ class TempBotManager:
         self.cleanup_task.start()
 
         _LOG.info("TempBotManager initialized")
+
+    async def aclose(self) -> None:
+        self.cleanup_task.cancel()
+        pending = [job.task for job in self._active_generations.values() if job.task is not None]
+        cleanup = self.cleanup_task.get_task()
+        if cleanup is not None:
+            pending.append(cleanup)
+        for task in pending:
+            task.cancel()
+        await asyncio.gather(*pending, return_exceptions=True)
 
     # ==================== Debug Log Storage ====================
 
@@ -208,6 +218,7 @@ class TempBotManager:
         # Mark this webhook as actively generating (prevents cleanup during generation)
         self._generating_webhooks.add(webhook_id)
 
+        job = None
         try:
             # Build current turn
             current_turn = self._extract_current_turn(message, history)
@@ -256,12 +267,21 @@ class TempBotManager:
             return await task
         except asyncio.CancelledError:
             _LOG.info(f"Temp bot '{bot_name}' generation cancelled")
+            if job is None or not job.started:
+                increment_temp_bot_replies(webhook_id)
             self._generating_webhooks.discard(webhook_id)
-            return None
+            raise
         except Exception:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
+            if job is None or not job.started:
+                increment_temp_bot_replies(webhook_id)
             self._generating_webhooks.discard(webhook_id)
             return None
+        finally:
+            # A task cancelled before its first instruction never enters the
+            # generation's finally block, so its owner must remove the job.
+            if job is not None and not job.started and self._active_generations.get(channel_id) is job:
+                self._active_generations.pop(channel_id, None)
 
     def _select_responding_bot(self, message: discord.Message, temp_bots: list[dict]) -> dict | None:
         """Select which temp bot (if any) should respond to this message.
@@ -544,6 +564,7 @@ class TempBotManager:
         Returns dict with message_id, text, webhook_id, bot_name or None on failure.
         """
         llm_debug: dict[str, Any] = {}
+        job.started = True
         response_text = ""
         stored_conversation = conversation.copy()
         message_sent = False
@@ -551,7 +572,7 @@ class TempBotManager:
         try:
             _LOG.info(f"Temp bot '{bot_name}' starting generation...")
 
-            # Store Celery async_result in job for cancellation
+            # The shared bridge owns remote task cancellation.
             response_text, llm_debug, stored_conversation = await self._generate_response_with_job(conversation, job)
             response_text = _strip_self_name_prefix(response_text, bot_name)
             _LOG.info(f"Temp bot '{bot_name}' generated response: {response_text[:100]}...")
@@ -629,6 +650,8 @@ class TempBotManager:
             }
 
         except asyncio.CancelledError:
+            if not message_sent:
+                increment_temp_bot_replies(webhook_id)
             # Store debug log even for cancelled generations (if we got a response)
             if response_text and request_message_id:
                 llm_debug["status"] = "cancelled"
@@ -704,29 +727,15 @@ class TempBotManager:
         # Cancel the local asyncio task first
         job.task.cancel()
 
-        # Revoke the Celery task immediately (don't wait for local task)
-        # terminate=True sends SIGTERM to worker, stopping the API call ASAP
-        if job.result:
-            await asyncio.to_thread(functools.partial(job.result.revoke, terminate=True))
-            _LOG.info("Revoked temp bot Celery task for channel %s (terminate=True)", channel_id)
-
-        # Now wait for local task cleanup. Suppress TimeoutError too - if the
-        # cancelled task takes >0.5s to unwind we must still refund and clear
-        # the job entry below.
+        # The generation owns its refund; the Celery bridge owns revocation.
         with suppress(asyncio.CancelledError, TimeoutError):
-            await asyncio.wait_for(job.task, timeout=0.5)
-
-        # Refund the reply count since the message wasn't sent
-        if job.webhook_id:
-            new_count = increment_temp_bot_replies(job.webhook_id)
-            _LOG.info(
-                "Refunded reply for cancelled generation (webhook %s), now has %d replies", job.webhook_id, new_count
-            )
+            await asyncio.wait_for(asyncio.shield(job.task), timeout=0.5)
 
         # Increment cancellation count for this channel
         self._cancellation_counts[channel_id] = cancellation_count + 1
 
-        self._active_generations.pop(channel_id, None)
+        if self._active_generations.get(channel_id) is job:
+            self._active_generations.pop(channel_id, None)
         _LOG.info(
             "Cancelled active temp bot generation in channel %s (cancellation #%d)",
             channel_id,
@@ -768,7 +777,7 @@ class TempBotManager:
     async def _generate_response_with_job(
         self, conversation: list[dict[str, Any]], job: GenerationJob
     ) -> tuple[str, dict[str, Any], list[dict[str, Any]]]:
-        """Generate LLM response via Celery, storing async_result in job for cancellation.
+        """Generate LLM response via the cancellation-aware Celery bridge.
 
         Returns (text, llm_debug, conversation).
         """
@@ -788,30 +797,13 @@ class TempBotManager:
             if conversation[i]["role"] == conversation[i - 1]["role"] and conversation[i]["role"] != "system":
                 _LOG.warning(f"Role alternation issue: turns {i - 1} and {i} both have role={conversation[i]['role']}")
 
-        async_result = generate_llm_chat_response.apply_async(
+        result = await run_task(
+            generate_llm_chat_response,
             (provider, model, conversation),
             kwargs={"temperature": 1.0},
-        )
-        job.result = async_result
-
-        start = time.monotonic()
-        while True:
-            # ready()/revoke() are synchronous Redis round-trips; run them in a
-            # thread so a slow broker can't starve the Discord heartbeat.
-            if await asyncio.to_thread(async_result.ready):
-                break
-            if (time.monotonic() - start) > self.text_timeout:
-                await asyncio.to_thread(functools.partial(async_result.revoke, terminate=True))
-                raise TimeoutError(f"timed out after {self.text_timeout:.0f}s")
-            await asyncio.sleep(0.5)
-
-        loop = asyncio.get_running_loop()
-        result = await loop.run_in_executor(
-            None,
-            functools.partial(async_result.get, timeout=0.1),
+            timeout=self.text_timeout,
         )
 
-        # Extract text and debug info from result
         if isinstance(result, dict):
             text = str(result.get("text", ""))
             llm_debug = result.get("debug", {})
