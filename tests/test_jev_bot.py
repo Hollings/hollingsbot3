@@ -763,8 +763,11 @@ async def test_recent_history_warms_the_channel_and_hands_out_a_copy(mock_bot):
     assert list(coordinator._history_for_channel(CHANNEL)) == [said]
 
 
-async def test_a_jev_post_goes_to_the_other_bots_and_into_history_once(mock_bot):
+async def test_a_jev_post_goes_to_the_other_bots_and_into_history_once(mock_bot, monkeypatch, tmp_path):
     """Jev's own posts reach the other bots (another Jev answers them), recorded once in history."""
+    from hollingsbot import prompt_db
+
+    monkeypatch.setattr(prompt_db, "DB_PATH", tmp_path / "history.db")
     coordinator = ChatCoordinator(mock_bot)
     coordinator._ensure_channel_warm = AsyncMock()
     message = make_message(make_channel(make_webhook()[0]), "knock", bot=True, webhook_id=555, mid=5)

@@ -2,7 +2,7 @@
 
 import asyncio
 from pathlib import Path
-from unittest.mock import AsyncMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
@@ -49,8 +49,14 @@ def test_image_cleanup_runs_on_generation_loop(worker, monkeypatch, outcome):
 
 @pytest.mark.parametrize("failure", ["factory", "empty", "disk"])
 def test_image_failures_always_update_status(worker, monkeypatch, failure):
-    generator = Mock(generate_many=AsyncMock(return_value=[] if failure == "empty" else [b"image"]))
-    generator.aclose = AsyncMock()
+    class Generator:
+        async def generate_many(self, prompt):
+            return [] if failure == "empty" else [b"image"]
+
+        async def aclose(self):
+            pass
+
+    generator = Generator()
     factory = Mock(return_value=generator)
     if failure == "factory":
         factory.side_effect = ValueError("bad model")
