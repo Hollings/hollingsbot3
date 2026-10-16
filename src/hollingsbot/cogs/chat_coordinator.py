@@ -28,6 +28,7 @@ from hollingsbot.text_generators.anthropic import AnthropicTextGenerator
 from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
+_HISTORY_IMAGE_TIMEOUT = 3.0  # historical pixels are optional; don't hold new replies behind them
 
 
 class _SummarizerLLM:
@@ -275,8 +276,14 @@ class ChatCoordinator(commands.Cog):
             if chat_utils.is_text_attachment(att)
         ]
 
-        # Collect images (full processing even for history)
-        images = await chat_utils.collect_image_attachments(message)
+        # Keep historical text even when an old CDN download stalls.
+        try:
+            images = await asyncio.wait_for(
+                chat_utils.collect_image_attachments(message), timeout=_HISTORY_IMAGE_TIMEOUT
+            )
+        except asyncio.TimeoutError:
+            _LOG.warning("Skipping slow historical images on message %s", message.id)
+            images = []
 
         # Build simple content
         content = f"<{display}>: {base_text}"

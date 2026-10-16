@@ -30,6 +30,40 @@ def ids(coordinator):
     return [t.message_id for t in coordinator._history_for_channel(CHANNEL)]
 
 
+async def test_stalled_historical_image_keeps_text_and_allows_backfill_to_finish(db, mock_bot, monkeypatch):
+    from hollingsbot.cogs import chat_coordinator as coordinator_mod
+
+    monkeypatch.setattr(coordinator_mod, "_HISTORY_IMAGE_TIMEOUT", 0.01)
+    cancelled = asyncio.Event()
+
+    async def stalled(message):
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    monkeypatch.setattr(coordinator_mod.chat_utils, "collect_image_attachments", stalled)
+    coordinator = ChatCoordinator(mock_bot)
+    channel = MagicMock(spec=discord.TextChannel)
+    channel.id = CHANNEL
+    msg = MagicMock(spec=discord.Message)
+    msg.id, msg.content, msg.webhook_id, msg.attachments = 9, "where is the cat?", None, []
+    msg.author = MagicMock(bot=False, nick=None, global_name="Human")
+    msg.mentions = []
+    msg.guild = None
+
+    async def history(limit):
+        yield msg
+
+    channel.history = history
+    await asyncio.wait_for(coordinator._ensure_channel_warm(channel), 1)
+    assert cancelled.is_set()
+    assert CHANNEL in coordinator._warmed_channels
+    assert ids(coordinator) == [9]
+    assert "where is the cat?" in coordinator.channel_histories[CHANNEL][0].content
+    assert coordinator.channel_histories[CHANNEL][0].images == []
+
+
 async def test_clear_forgets_up_to_the_message_and_stops_old_replies(db, mock_bot):
     coordinator = ChatCoordinator(mock_bot)
     jev = MagicMock(spec=["receive_message", "_cancel_generation"])

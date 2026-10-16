@@ -60,3 +60,24 @@ def test_token_with_digit_run_does_not_confuse_id():
 )
 def test_should_ignore_message(content, expected):
     assert should_ignore_message(content) is expected
+
+
+async def test_image_download_timeout_cancels_stalled_read(monkeypatch):
+    import asyncio
+    from unittest.mock import MagicMock
+
+    from hollingsbot.cogs import chat_utils
+
+    monkeypatch.setattr(chat_utils, "_IMAGE_DOWNLOAD_TIMEOUT", 0.01)
+    cancelled = asyncio.Event()
+
+    async def read():
+        try:
+            await asyncio.Event().wait()
+        finally:
+            cancelled.set()
+
+    attachment = MagicMock(size=100, filename="image.png")
+    attachment.read = read
+    assert await asyncio.wait_for(chat_utils.prepare_image_attachment(attachment), 1) is None
+    assert cancelled.is_set()

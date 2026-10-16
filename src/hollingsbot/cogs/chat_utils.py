@@ -62,6 +62,7 @@ _MAX_TEXT_ATTACHMENT_BYTES = 120_000  # 120KB
 _IMAGE_MAX_EDGE = 2048
 _IMAGE_MAX_BYTES = 10_000_000  # ~9.5MB after base64
 _IMAGE_MAX_DOWNLOAD_BYTES = 50_000_000  # 50MB max download to prevent memory issues
+_IMAGE_DOWNLOAD_TIMEOUT = 15.0  # stale Discord CDN URLs must not stall a channel
 
 
 # ==================== Message Cleaning ====================
@@ -271,7 +272,7 @@ async def prepare_image_attachment(attachment: discord.Attachment) -> ImageAttac
         return None
 
     try:
-        data = await attachment.read()
+        data = await asyncio.wait_for(attachment.read(), timeout=_IMAGE_DOWNLOAD_TIMEOUT)
     except Exception:
         _LOG.exception("Failed to download image attachment %s", attachment.filename)
         return None
