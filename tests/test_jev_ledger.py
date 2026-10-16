@@ -40,3 +40,11 @@ def test_record_keeps_the_trace_and_override_reason(temp_db):
     assert (text, reason, words, calls, model) == ("paris", "interrupted", 1, 4, "jev-1.13")
     assert json.loads(chat_json) == [{"speaker": "Hollings", "text": "Jev capital of France?"}]
     assert json.loads(steps_json)[0]["word"] == "paris"
+
+
+def test_record_does_not_duplicate_image_bytes(temp_db):
+    chat = [ChatLine("H", "look [image]", ("data:image/jpeg;base64,large-image",))]
+    JevLedger(temp_db).record(reply(0.001), chat, channel_id=1, message_id=2)
+    with contextlib.closing(sqlite3.connect(temp_db)) as conn:
+        stored = conn.execute("SELECT chat_json FROM jev_replies").fetchone()[0]
+    assert json.loads(stored) == [{"speaker": "H", "text": "look [image]"}]

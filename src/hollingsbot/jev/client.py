@@ -28,8 +28,8 @@ import httpx
 _LOG = logging.getLogger(__name__)
 
 DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions"
-# The tilde is part of the slug: without it OpenRouter answers "model does not exist".
-DEFAULT_MODEL = "~typesafe/jev-latest"
+# Pin the vision-capable release so aliases cannot silently change the writer.
+DEFAULT_MODEL = "typesafe/jev-1.14"
 
 _RETRY_STATUSES = frozenset({429, 500, 502, 503, 504, 529})
 

@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from hollingsbot.jev.client import JevError
 from hollingsbot.jev.decoding import pick
+from hollingsbot.jev.images import IMAGE_REPLY_BUDGET
 from hollingsbot.jev.text import context_words
 from hollingsbot.jev.writer import (
     BLANK,
@@ -149,6 +150,9 @@ class PieceWriter(JevWriter):
         stop_reason = "max_words"
 
         while len(pieces) < cfg.max_words:
+            if any(line.images for line in chat) and usage.cost >= IMAGE_REPLY_BUDGET:
+                stop_reason = "image_budget"
+                break
             pages, suggested = await self._pages_for(chat, reply.text, own, self._banned(used), usage, latest)
             if not pages:
                 stop_reason = "no_options"

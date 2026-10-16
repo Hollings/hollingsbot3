@@ -56,6 +56,7 @@ from typing import TYPE_CHECKING, Any
 
 from hollingsbot.jev.client import DecisionsClient, JevError, Usage
 from hollingsbot.jev.decoding import allowed, finalists, pick, repetition_factor
+from hollingsbot.jev.images import IMAGE_REPLY_BUDGET
 from hollingsbot.jev.suggest import Suggestion
 from hollingsbot.jev.text import PUNCTUATION, context_words, join_words, words_in
 from hollingsbot.jev.vocab import load_vocab
@@ -140,6 +141,7 @@ FILLER_WORDS = frozenset(
 class ChatLine:
     speaker: str
     text: str
+    images: tuple[str, ...] = ()  # prepared image data URLs, at most one per reply
 
 
 @dataclass(frozen=True)
@@ -337,6 +339,9 @@ class JevWriter:
         merges = 0  # times the last word has been finished off (reset for each new word)
 
         while len(words) < cfg.max_words:
+            if any(line.images for line in chat) and usage.cost >= IMAGE_REPLY_BUDGET:
+                stop_reason = "image_budget"
+                break
             send, sense = 0.0, 1.0
             suggested: dict[str, float] = {}
             page, other, source = 0, 0.0, ""
@@ -672,8 +677,19 @@ def _latest_content_words(chat: Sequence[ChatLine]) -> list[str]:
     return [w for w in dict.fromkeys(words_in(chat[-1].text)) if w not in FILLER_WORDS] if chat else []
 
 
-def _chat_json(chat: Sequence[ChatLine]) -> list[dict[str, str]]:
-    return [{"from": line.speaker, "text": line.text} for line in chat]
+def _chat_json(chat: Sequence[ChatLine]) -> list[dict[str, Any]]:
+    return [
+        {
+            "from": line.speaker,
+            "text": line.text,
+            **(
+                {"images": [{"type": "image_url", "image_url": {"url": url}} for url in line.images]}
+                if line.images
+                else {}
+            ),
+        }
+        for line in chat
+    ]
 
 
 def _probabilities(answer: dict[str, Any]) -> dict[str, float]:

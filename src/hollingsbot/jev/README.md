@@ -13,6 +13,51 @@ terminal with `python scripts/jev_try.py "Jev, what's your favorite food?"`
 (add `--trace` to see every step's scores, `--samples` for the prompt set the
 numbers below come from).
 
+## Jev 1.14 and images (2026-10-16)
+
+The client pins `typesafe/jev-1.14` on OpenRouter: $0.042 per million input
+tokens, free output, the same token price as 1.13. Discord replies include one
+image from the newest usable image-bearing turn in the selected chat history.
+Images are rotated upright, converted to baseline JPEG and fitted on a 512×512
+canvas. Other images remain `[image]` markers. `JEV_IMAGES=0` disables pixels.
+Word and piece selection both receive the image; the optional LLM suggester
+still sees only text. Images do not teach Jev new vocabulary.
+
+A live probe of a solid-red 512×512 JPEG added 766 tokens ($0.000032172) per
+request; a batch of 250 questions did not multiply the image charge. For 40
+single-request words that is about $0.0013 extra; the three-request tournament
+would add about $0.0039. These are sample-based estimates: image content, text,
+question count and page turns affect the total. Image replies stop between
+words/pieces once their measured total cost reaches $0.01 (`image_budget`);
+the current word's requests can overshoot it. The existing shared daily budget
+still applies. Image bytes are not copied into the reply ledger.
+
+OpenRouter handles the image opt-in on its Decisions endpoint; no TypeSafe
+header or separate API key is needed. Image input is experimental and forces
+long-context mode, which TypeSafe describes as slower and less accurate.
+
+Sources: [model/pricing](https://openrouter.ai/typesafe/jev-1.14),
+[Decisions image format](https://openrouter.ai/docs/guides/community/multimodal-decisions),
+[TypeSafe image limits](https://docs.typesafe.ai/images).
+
+### Text or bounding box
+
+When an image is available, one Choice first decides whether the final chat
+post calls for text or a marked region. Descriptions, identification, OCR and
+ambiguous requests keep the normal word/piece writer. A clear localization
+request (for example, "draw a box around the cat") needs at least 0.7 route
+probability to take the box path. Chats without images skip this call.
+
+The box path makes one further request containing both a Box and a presence
+Noul. A valid box with confidence >= 0.5 and presence probability >= 0.8 is
+drawn on the exact prepared 512×512 image and attached as `jev-box.png` under
+Jev's name. Otherwise Jev says it couldn't confidently locate the target.
+Only one region is returned. These thresholds are conservative defaults, not
+calibrated accuracy guarantees. Box is experimental and can still be wrong.
+Both requests count toward the same reply ledger and daily budget; a text
+route's cost also carries into the writer's image reply cutoff. Box replies
+skip word selection, so they need two model calls total.
+
 ## Spawning Jev elsewhere (`!spawn jev [N]`)
 
 `!spawn jev 10` (or `!spawn 10 jev`; N defaults to 10, at most 20 like a temp

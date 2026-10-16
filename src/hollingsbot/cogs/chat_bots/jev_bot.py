@@ -37,6 +37,7 @@ Config (env):
     JEV_CAMEO_CHANNELS        comma-separated channel IDs (Wendy's) where each human message has a
                               JEV_CAMEO_CHANCE (default 0.01) chance of one drop-in reply from Jev
     JEV_CONTEXT_MESSAGES      chat messages Jev sees, the latest included (default 5)
+    JEV_IMAGES                0 to disable image input (default 1: newest image, resized to 512px)
     JEV_DAILY_BUDGET_USD      stop replying for the rest of the UTC day past this spend (default 2.00)
     JEV_SUGGEST_MODEL         "on" or an OpenRouter model slug: an LLM proposes next words and Jev
                               chooses (default off: Jev alone picks from its own vocabulary)
@@ -68,6 +69,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import dataclasses
+import io
 import logging
 import os
 import random
@@ -82,11 +84,13 @@ import discord
 from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.chat_bots.temp_bot.names import departure_message
 from hollingsbot.jev import ChatLine, DecisionsClient, JevError, JevWriter, Reply, WriterConfig
+from hollingsbot.jev.images import prepare_image
 from hollingsbot.jev.ledger import JevLedger
 from hollingsbot.jev.lexicon import Lexicon
 from hollingsbot.jev.pieces import make_writer
 from hollingsbot.jev.spawns import JevSpawns
 from hollingsbot.jev.suggest import DEFAULT_SUGGEST_MODEL, NextWordSuggester
+from hollingsbot.jev.vision import image_response
 from hollingsbot.jev.writer import NO_REPEAT_MODES, STOP_MODES, UNITS
 from hollingsbot.prompt_db import get_channel_clear_time, get_temp_bots_for_channel
 from hollingsbot.settings import parse_id_set
@@ -167,6 +171,7 @@ class JevBotSettings:
     # with this probability (JEV_CAMEO_CHANNELS / JEV_CAMEO_CHANCE).
     cameo_channels: frozenset[int] = frozenset()
     cameo_chance: float = 0.01
+    images: bool = True
 
     def copy_named(self, name: str) -> JevBotSettings:
         """A spawn-only copy: the same brain under another name, with no channels (or copies) of its own."""
@@ -216,6 +221,7 @@ class JevBotSettings:
             copies=_env_copies(name),
             cameo_channels=frozenset(parse_id_set(os.getenv("JEV_CAMEO_CHANNELS"))),
             cameo_chance=min(1.0, max(0.0, _env_float("JEV_CAMEO_CHANCE", 0.01))),
+            images=_env_flag("JEV_IMAGES", True),
         )
 
     def reachable_learned(self, learned: int) -> int:
@@ -234,16 +240,28 @@ def _is_human(message: discord.Message) -> bool:
     return not message.author.bot and message.webhook_id is None
 
 
-def chat_lines(history: list[ConversationTurn], count: int) -> list[ChatLine]:
+def chat_lines(history: list[ConversationTurn], count: int, *, include_images: bool = True) -> list[ChatLine]:
     """The last ``count`` turns as (speaker, text), the way Jev reads the chat."""
     lines = []
-    for turn in history[-count:]:
+    recent = history[-count:]
+    # One image total, taken from the newest turn containing a usable image.
+    selected: dict[int, tuple[str, ...]] = {}
+    if include_images:
+        for i in reversed(range(len(recent))):
+            for image in recent[i].images:
+                prepared = prepare_image(image.data_url)
+                if prepared:
+                    selected[i] = (prepared,)
+                    break
+            if selected:
+                break
+    for i, turn in enumerate(recent):
         text = _NAME_PREFIX.sub("", turn.content or "", count=1).strip()
         if turn.images:
             text = f"{text} [image]".strip()
         if len(text) > _MAX_LINE_CHARS:
             text = text[: _MAX_LINE_CHARS - 1] + "\u2026"
-        lines.append(ChatLine(turn.author_name or "someone", text or "[no text]"))
+        lines.append(ChatLine(turn.author_name or "someone", text or "[no text]", selected.get(i, ())))
     return lines
 
 
@@ -301,7 +319,10 @@ class JevBot:
             return None
         if await self._over_budget(message):
             return None
-        return await self._answer(message, chat_lines(history, self.settings.context_messages))
+        chat = await asyncio.to_thread(
+            chat_lines, history, self.settings.context_messages, include_images=self.settings.images
+        )
+        return await self._answer(message, chat)
 
     async def _answer(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
         """Reply to ``chat`` in ``message``'s channel, replacing a reply already under way there.
@@ -402,7 +423,10 @@ class JevBot:
             return
         if await self._over_budget(message):
             return
-        answer = asyncio.ensure_future(self._answer(message, chat_lines(history, self.settings.context_messages)))
+        chat = await asyncio.to_thread(
+            chat_lines, history, self.settings.context_messages, include_images=self.settings.images
+        )
+        answer = asyncio.ensure_future(self._answer(message, chat))
         try:
             await asyncio.wait({answer})
         except asyncio.CancelledError:
@@ -538,13 +562,20 @@ class JevBot:
         webhook = await self._webhook_for(channel)
         name = self.settings.name
         draft = Reply()
+        annotation: bytes | None = None
 
         try:
             cleared_at = await asyncio.to_thread(get_channel_clear_time, channel.id)
             since = datetime.fromtimestamp(cleared_at, timezone.utc) if cleared_at is not None else None
             learned = await asyncio.to_thread(self.lexicon.ranked, self.settings.learned_limit, since=since)
             async with channel.typing():
-                reply = await self._get_writer().write(chat, draft=draft, learned=learned)
+                writer = self._get_writer()
+                visual = await image_response(writer.client, chat, draft) if any(line.images for line in chat) else None
+                if visual is None:
+                    reply = await writer.write(chat, draft=draft, learned=learned)
+                else:
+                    reply = draft
+                    _, annotation = visual
                 # Don't talk over someone mid-message (if they send, this task is cancelled).
                 await self.typing_tracker.wait_until_quiet(channel.id, self.bot.user.id)
         except asyncio.CancelledError:
@@ -575,7 +606,7 @@ class JevBot:
         )
         sent: discord.Message | None = None
         try:
-            sent = await self._post(channel, webhook, reply.text)
+            sent = await self._post(channel, webhook, reply.text, image=annotation)
         except discord.HTTPException:
             _LOG.exception("JevBot could not post its reply in channel %s", channel.id)
         finally:
@@ -592,14 +623,20 @@ class JevBot:
         }
 
     async def _post(
-        self, channel: discord.abc.Messageable, webhook: discord.Webhook | None, text: str
+        self,
+        channel: discord.abc.Messageable,
+        webhook: discord.Webhook | None,
+        text: str,
+        *,
+        image: bytes | None = None,
     ) -> discord.Message | None:
         """Post ``text`` as Jev (its webhook, or the bot itself without one); nothing if empty."""
         if not text:
             return None
+        kwargs = {"file": discord.File(io.BytesIO(image), filename="jev-box.png")} if image is not None else {}
         if webhook is not None:
-            return await webhook.send(text, username=self.settings.name, wait=True)
-        return await channel.send(text)
+            return await webhook.send(text, username=self.settings.name, wait=True, **kwargs)
+        return await channel.send(text, **kwargs)
 
     async def _log_interrupted(self, channel_id: int, chat: list[ChatLine], draft: Reply) -> None:
         try:

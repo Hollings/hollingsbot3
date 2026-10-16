@@ -152,6 +152,38 @@ async def test_learns_every_word_a_human_says_and_writes_with_them(jev):
     assert "quokkas" in jev._writer.learned[0]
 
 
+@pytest.mark.parametrize("use_webhook", [True, False])
+async def test_visual_reply_posts_attachment_and_logs_cost_without_word_selection(
+    jev, monkeypatch, temp_db, use_webhook
+):
+    webhook, sent = make_webhook()
+    channel = make_channel(webhook)
+    channel.send = AsyncMock(return_value=sent)
+    message = make_message(channel, "box the cat")
+    writer = FakeWriter(["must not write"])
+    writer.client = MagicMock()
+    jev._writer = writer
+    monkeypatch.setattr(jev, "_webhook_for", AsyncMock(return_value=webhook if use_webhook else None))
+
+    async def visual(client, chat, draft):
+        assert client is writer.client
+        draft.text = "Here's the region you asked for."
+        draft.stop_reason = "box"
+        draft.usage.record({"cost": 0.0001}, 0.1)
+        return draft.text, b"annotated-png"
+
+    monkeypatch.setattr(jev_bot_mod, "image_response", visual)
+    result = await jev._write_and_send(message, [ChatLine("H", "box the cat", ("prepared-image",))])
+    assert not writer.chats
+    assert result["message_id"] == sent.id
+    post = webhook.send if use_webhook else channel.send
+    kwargs = post.await_args.kwargs
+    assert kwargs["file"].filename == "jev-box.png"
+    assert kwargs["file"].fp.read() == b"annotated-png"
+    with contextlib.closing(sqlite3.connect(temp_db)) as conn:
+        assert conn.execute("SELECT stop_reason, cost FROM jev_replies").fetchone() == ("box", 0.0001)
+
+
 async def test_clear_hides_older_learned_words_in_that_channel(jev):
     old = datetime.now(timezone.utc) - timedelta(days=1)
     jev.lexicon.learn("headed orders", speaker="Hollings", channel_id=CHANNEL, now=old)

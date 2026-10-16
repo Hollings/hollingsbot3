@@ -96,7 +96,8 @@ class JevLedger:
                     u.cost,
                     u.seconds,
                     reply.model,
-                    json.dumps([asdict(line) for line in chat]),
+                    # Keep the text trace without duplicating image bytes into the DB.
+                    json.dumps([{"speaker": line.speaker, "text": line.text} for line in chat]),
                     json.dumps([asdict(step) for step in reply.steps]),
                 ),
             )
