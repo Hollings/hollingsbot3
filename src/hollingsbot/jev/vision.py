@@ -24,6 +24,12 @@ def _probability(value: object) -> float:
     return float(value) if math.isfinite(value) and 0 <= value <= 1 else 0.0
 
 
+def _percentage(value: object) -> str:
+    if isinstance(value, bool) or not isinstance(value, int | float) or not math.isfinite(value) or not 0 <= value <= 1:
+        return "unavailable"
+    return f"{value:.0%}"
+
+
 def _edges(answer: dict) -> tuple[float, float, float, float] | None:
     box = answer.get("box")
     if not isinstance(box, dict):
@@ -62,7 +68,7 @@ async def image_response(
     """None means continue word selection; a tuple is a completed visual reply.
 
     Route only image-bearing chats. Require a clear localization intent, then
-    check presence alongside Box because Box always returns coordinates.
+    report presence alongside Box because Box always returns coordinates.
     Both calls share the writer's usage accounting and cancellation lifecycle.
     """
     image = next((line.images[0] for line in reversed(chat) if line.images), None)
@@ -111,14 +117,12 @@ async def image_response(
     )
     target = answers.get("target", {})
     edges = _edges(target)
-    if (
-        edges is None
-        or _probability(target.get("confidence")) < 0.5
-        or _probability(answers.get("present", {}).get("noul")) < 0.8
-    ):
-        draft.text = "I couldn't confidently locate that in the image."
-        draft.stop_reason = "box_not_found"
+    if edges is None:
+        draft.text = "Jev returned invalid box coordinates, so I couldn't draw the box."
+        draft.stop_reason = "box_invalid"
         return draft.text, None
-    draft.text = "Here's the region you asked for."
+    confidence = _percentage(target.get("confidence"))
+    presence = _percentage(answers.get("present", {}).get("noul"))
+    draft.text = f"Box confidence: {confidence}. Target presence: {presence}."
     draft.stop_reason = "box"
     return draft.text, annotate(image, edges)

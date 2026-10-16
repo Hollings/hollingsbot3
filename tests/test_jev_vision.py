@@ -55,6 +55,7 @@ async def test_box_and_presence_share_request_and_render_on_exact_canvas():
     chat = [ChatLine("H", "box the object", (image_url(),))]
     text, png = await image_response(client, chat, draft)
     assert text == draft.text
+    assert text == "Box confidence: 90%. Target presence: 99%."
     assert draft.stop_reason == "box"
     assert draft.model == client.model
     assert draft.usage.calls == 2
@@ -74,19 +75,36 @@ async def test_box_and_presence_share_request_and_render_on_exact_canvas():
 @pytest.mark.parametrize(
     "overrides",
     [
-        {"present": 0.1},
-        {"confidence": 0.1},
         {"box": {"left": 0.8, "right": 0.2, "top": 0, "bottom": 1}},
         {"box": {"left": -0.1, "right": 0.9, "top": 0, "bottom": 1}},
         {"box": {"left": float("nan"), "right": 1, "top": 0, "bottom": 1}},
         {"box": {}},
     ],
 )
-async def test_absent_uncertain_or_invalid_target_never_draws_a_box(overrides):
+async def test_invalid_coordinates_never_draw_a_box(overrides):
     draft = Reply()
     text, png = await image_response(Client(**overrides), [ChatLine("H", "find cat", (image_url(),))], draft)
-    assert png is None and "couldn't confidently locate" in text
-    assert draft.stop_reason == "box_not_found"
+    assert png is None and "invalid box coordinates" in text
+    assert draft.stop_reason == "box_invalid"
+
+
+@pytest.mark.parametrize(
+    "confidence,presence,expected",
+    [
+        (0.1, 0.99, "Box confidence: 10%. Target presence: 99%."),
+        (0.9, 0.05, "Box confidence: 90%. Target presence: 5%."),
+        (0.0, 0.0, "Box confidence: 0%. Target presence: 0%."),
+        (None, float("nan"), "Box confidence: unavailable. Target presence: unavailable."),
+    ],
+)
+async def test_low_confidence_and_presence_still_draw_box_with_scores(confidence, presence, expected):
+    draft = Reply()
+    text, png = await image_response(
+        Client(confidence=confidence, present=presence), [ChatLine("H", "find cat", (image_url(),))], draft
+    )
+    assert png is not None
+    assert text == expected
+    assert draft.stop_reason == "box"
 
 
 async def test_api_failure_propagates_with_usage_kept():

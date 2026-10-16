@@ -49,11 +49,13 @@ request (for example, "draw a box around the cat") needs at least 0.7 route
 probability to take the box path. Chats without images skip this call.
 
 The box path makes one further request containing both a Box and a presence
-Noul. A valid box with confidence >= 0.5 and presence probability >= 0.8 is
-drawn on the exact prepared 512×512 image and attached as `jev-box.png` under
-Jev's name. Otherwise Jev says it couldn't confidently locate the target.
-Only one region is returned. These thresholds are conservative defaults, not
-calibrated accuracy guarantees. Box is experimental and can still be wrong.
+Noul. Every valid box is drawn on the exact prepared 512×512 image and attached
+as `jev-box.png` under Jev's name, including low-confidence boxes. Its caption
+reports Jev's box confidence and target-presence probability as separate
+percentages; absent or invalid scores read "unavailable". Only invalid
+coordinates suppress the drawing. Only one region is returned. These scores
+are model estimates, not accuracy guarantees. Box is experimental and can
+return a region even when the target isn't present.
 Both requests count toward the same reply ledger and daily budget; a text
 route's cost also carries into the writer's image reply cutoff. Box replies
 skip word selection, so they need two model calls total.
