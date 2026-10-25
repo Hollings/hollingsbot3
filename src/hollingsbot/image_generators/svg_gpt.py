@@ -201,7 +201,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         self.temperature = float(os.getenv("SVG_GPT_TEMPERATURE", "0.2"))
         # Thinking and SVG markup share this budget. Detailed illustrations need
         # substantially more room than the old 5,000-token sketch budget.
-        self.max_output_tokens = int(os.getenv("SVG_GPT_MAX_TOKENS", "32000"))
+        self.max_output_tokens = int(os.getenv("SVG_GPT_MAX_TOKENS", "128000"))
         self.request_timeout = int(os.getenv("SVG_GPT_TIMEOUT", "300"))
 
     async def generate(self, prompt: str, *, seed: int | None = None) -> bytes:  # type: ignore[override]
@@ -249,7 +249,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             "Canvas: 1024x1024 square."
         )
 
-        # --- request helper (with retry) --------------------------------------------------------
+        # --- model request ---------------------------------------------------------------------
         async def _call_model(max_tokens: int) -> object:
             if self.model.startswith("claude-"):
                 client = get_client("anthropic", AsyncAnthropic)
@@ -331,20 +331,8 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         text = _gather_text(rsp)
         if not _is_complete(rsp, text):
-            try:
-                # Opus 5.5 supports up to 128K output tokens. Retry from scratch
-                # with ample room rather than splicing together unfinished XML.
-                bigger = min(max(self.max_output_tokens * 4, 32000), 128000)
-                logger.info("Retrying incomplete SVG generation with max_tokens=%d.", bigger)
-                coro = _call_model(bigger)
-                rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)
-                text = _gather_text(rsp)
-            except Exception as e:
-                logger.warning("Retry failed: %s", e)
-                return _placeholder_png("SVG generation could not finish. Please try again.")
-            if not _is_complete(rsp, text):
-                logger.warning("SVG remained incomplete after retry; refusing to render partial markup.")
-                return _placeholder_png("SVG generation could not finish. Please try again.")
+            logger.warning("SVG incomplete; refusing to render partial markup or regenerate the entire illustration.")
+            return _placeholder_png("SVG generation could not finish. Please try again.")
 
         api_ms = int((time.time() - t0) * 1000)
 

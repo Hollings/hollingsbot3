@@ -110,8 +110,7 @@ class TestPlaceholderPng:
         assert img.size == (1024, 1024)
 
 
-@pytest.mark.parametrize("truncated", [False, True])
-async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncated):
+async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic):
     original_handle = fake_anthropic._handle
 
     def respond(request):
@@ -120,7 +119,7 @@ async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncat
             {"type": "thinking", "thinking": "private reasoning", "signature": "test"},
             {"type": "text", "text": "<svg><circle/></svg>"},
         ]
-        payload["stop_reason"] = "max_tokens" if truncated and len(fake_anthropic.requests) == 1 else "end_turn"
+        payload["stop_reason"] = "end_turn"
         return httpx2.Response(200, json=payload)
 
     monkeypatch.setattr(fake_anthropic, "_handle", respond)
@@ -129,7 +128,7 @@ async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncat
     monkeypatch.setattr(svg_gpt, "_render_svg", lambda svg: rendered.append(svg) or b"png")
     try:
         assert await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a circle") == b"png"
-        assert len(fake_anthropic.requests) == (2 if truncated else 1)
+        assert len(fake_anthropic.requests) == 1
         request = fake_anthropic.requests[0]
         assert request["model"] == "claude-opus-5-5"
         assert request["output_config"] == {"effort": "medium"}
@@ -138,8 +137,6 @@ async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncat
         assert "private reasoning" not in rendered[0]
         assert "<circle/>" in rendered[0]
         assert 'width="1024"' in rendered[0]
-        if truncated:
-            assert fake_anthropic.requests[1]["max_tokens"] > request["max_tokens"]
     finally:
         await fake_anthropic.client().close()
 
@@ -164,5 +161,5 @@ async def test_never_renders_incomplete_svg(monkeypatch, reason):
     monkeypatch.setattr(svg_gpt, "_placeholder_png", lambda _message: b"incomplete")
     monkeypatch.delenv("SVG_GPT_MAX_TOKENS", raising=False)
     assert await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a detailed scene") == b"incomplete"
-    assert [call.kwargs["max_tokens"] for call in create.call_args_list] == [32000, 128000]
+    assert [call.kwargs["max_tokens"] for call in create.call_args_list] == [128000]
     render.assert_not_called()
