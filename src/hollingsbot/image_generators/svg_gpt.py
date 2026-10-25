@@ -222,15 +222,18 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         sys = (
             "You are an expert vector illustrator creating a finished, carefully art-directed illustration. "
             "Interpret the description faithfully and develop its distinctive visual details. "
-            "Plan the composition, silhouettes, palette, lighting, and focal hierarchy before drawing. "
-            "Unless the user requests a minimal style, make the artwork richly developed: use custom paths, "
-            "layered forms, nuanced curves, overlapping elements, highlights, shadows, and material-specific details. "
+            "Aim for approximately 3,500 total output tokens, including planning and SVG markup. "
+            "This is a soft target: finish the illustration and close every element even if you need a little more room. "
+            "Plan briefly, choose a clear composition and palette, then spend most of the budget on the artwork. "
+            "Use a few expressive custom paths, layered forms, selective highlights and shadows, "
+            "and the distinctive details that make the subject recognizable. "
             "For scenes, establish foreground, middle ground, and background with coherent perspective and depth. "
-            "For individual subjects, give their contours, anatomy or construction, and surface details careful attention. "
+            "For individual subjects, prioritize strong contours and the most important anatomical or construction details. "
             "Use gradients, strokes, and reusable definitions where they improve the image. "
+            "Reuse repeated motifs with defs/use, keep path coordinates concise, and omit comments and redundant markup. "
             "Every detail should serve the requested subject; do not substitute unrelated decorative clutter for craft. "
             "Do not stop at a rough arrangement of a few geometric primitives. "
-            "Use as much SVG markup as needed within your output budget, and reserve room to finish all elements. "
+            "Favor visual impact per element over exhaustive surface detail or large numbers of tiny decorative shapes. "
             "Check proportions, alignment, visual balance, and SVG validity before completing the illustration. "
             "Output ONLY valid, standalone SVG markup. "
             "Do NOT wrap in code fences or any prose. "
@@ -243,7 +246,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         user = (
             "Create a complete, polished vector illustration of the following description. "
-            "Develop the composition and subject-specific details fully rather than returning a sketch or placeholder. "
+            "Use deliberate composition and selective subject-specific detail, keeping the SVG compact and complete. "
             "Your response MUST be only the <svg>…</svg> markup, nothing else.\n\n"
             f"Description: {prompt}\n"
             "Canvas: 1024x1024 square."
@@ -313,12 +316,16 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             stop_reason = getattr(response, "stop_reason", None)
             status = getattr(response, "status", None)
             reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            usage = getattr(response, "usage", None)
             logger.info(
-                "SVG model response stop_reason=%s status=%s incomplete_reason=%s text_len=%d",
+                "SVG model response stop_reason=%s status=%s incomplete_reason=%s text_len=%d "
+                "input_tokens=%s output_tokens=%s",
                 stop_reason,
                 status,
                 reason,
                 len(output),
+                getattr(usage, "input_tokens", None),
+                getattr(usage, "output_tokens", None),
             )
             # A closed root alone is insufficient: the provider may have cut
             # off a response containing an earlier SVG fragment.
