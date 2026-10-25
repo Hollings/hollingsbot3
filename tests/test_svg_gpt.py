@@ -3,9 +3,14 @@
 from __future__ import annotations
 
 import io
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import httpx2
+import pytest
 from PIL import Image
 
+from hollingsbot.image_generators import svg_gpt
 from hollingsbot.image_generators.svg_gpt import (
     _enforce_canvas,
     _extract_svg,
@@ -103,3 +108,45 @@ class TestPlaceholderPng:
         img = Image.open(io.BytesIO(data))
         assert img.format == "PNG"
         assert img.size == (1024, 1024)
+
+
+@pytest.mark.parametrize("truncated", [False, True])
+async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncated):
+    original_handle = fake_anthropic._handle
+
+    def respond(request):
+        payload = original_handle(request).json()
+        payload["content"] = [
+            {"type": "thinking", "thinking": "private reasoning", "signature": "test"},
+            {"type": "text", "text": "<svg><circle/></svg>"},
+        ]
+        payload["stop_reason"] = "max_tokens" if truncated else "end_turn"
+        return httpx2.Response(200, json=payload)
+
+    monkeypatch.setattr(fake_anthropic, "_handle", respond)
+    monkeypatch.setattr(svg_gpt, "get_client", lambda _name, _factory: fake_anthropic.client())
+    rendered = []
+    monkeypatch.setattr(svg_gpt, "_render_svg", lambda svg: rendered.append(svg) or b"png")
+    try:
+        assert await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a circle") == b"png"
+        assert len(fake_anthropic.requests) == (2 if truncated else 1)
+        request = fake_anthropic.requests[0]
+        assert request["model"] == "claude-opus-5-5"
+        assert request["output_config"] == {"effort": "medium"}
+        assert "a circle" in request["messages"][0]["content"]
+        assert "temperature" not in request
+        assert "private reasoning" not in rendered[0]
+        assert "<circle/>" in rendered[0]
+        assert 'width="1024"' in rendered[0]
+        if truncated:
+            assert fake_anthropic.requests[1]["max_tokens"] > request["max_tokens"]
+    finally:
+        await fake_anthropic.client().close()
+
+
+async def test_gpt_svg_keeps_responses_api(monkeypatch):
+    create = AsyncMock(return_value=SimpleNamespace(output_text="<svg><rect/></svg>", status="completed"))
+    monkeypatch.setattr(svg_gpt, "_client", lambda: SimpleNamespace(responses=SimpleNamespace(create=create)))
+    monkeypatch.setattr(svg_gpt, "_render_svg", lambda _svg: b"png")
+    assert await svg_gpt.SvgGPTImageGenerator("gpt-5").generate("a square") == b"png"
+    assert create.call_args.kwargs["model"] == "gpt-5"

@@ -7,6 +7,7 @@ import os
 import re
 import time
 
+from anthropic import AsyncAnthropic
 from openai import AsyncOpenAI
 from PIL import Image, ImageDraw, ImageFont
 
@@ -191,7 +192,7 @@ def _render_svg(svg: str) -> bytes:
 class SvgGPTImageGenerator(ImageGeneratorAPI):
     """
     Generates an SVG with the model, normalizes it to a 1024x1024 canvas, and returns PNG bytes.
-    Uses the OpenAI Responses API (not Chat Completions). Avoids unsupported parameters.
+    Uses Anthropic Messages for Claude models and OpenAI Responses for GPT models.
     """
 
     def __init__(self, model: str):
@@ -217,25 +218,47 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         )
 
         sys = (
-            "You produce ONLY valid, standalone SVG markup. "
+            "You are an expert vector illustrator creating a finished, carefully art-directed illustration. "
+            "Interpret the description faithfully and develop its distinctive visual details. "
+            "Plan the composition, silhouettes, palette, lighting, and focal hierarchy before drawing. "
+            "Unless the user requests a minimal style, make the artwork richly developed: use custom paths, "
+            "layered forms, nuanced curves, overlapping elements, highlights, shadows, and material-specific details. "
+            "For scenes, establish foreground, middle ground, and background with coherent perspective and depth. "
+            "For individual subjects, give their contours, anatomy or construction, and surface details careful attention. "
+            "Use gradients, strokes, and reusable definitions where they improve the image. "
+            "Every detail should serve the requested subject; do not substitute unrelated decorative clutter for craft. "
+            "Do not stop at a rough arrangement of a few geometric primitives. "
+            "Use as much SVG markup as needed within your output budget, and reserve room to finish all elements. "
+            "Check proportions, alignment, visual balance, and SVG validity before completing the illustration. "
+            "Output ONLY valid, standalone SVG markup. "
             "Do NOT wrap in code fences or any prose. "
             "Use a 1024x1024 canvas. "
-            "Output must be concise (< 1000 characters). "
             "Absolutely DO NOT embed base64 data URIs or external images; no <image href='data:'>. "
             "Avoid <foreignObject>. No scripts. "
-            "Prefer simple shapes and paths. Provide a single <svg> root element. "
+            "Provide a single <svg> root element with the SVG namespace and viewBox='0 0 1024 1024'. "
             "End your output with </svg> and do not output anything after it."
         )
 
         user = (
-            "Create an illustration as SVG for the following description. "
+            "Create a complete, polished vector illustration of the following description. "
+            "Develop the composition and subject-specific details fully rather than returning a sketch or placeholder. "
             "Your response MUST be only the <svg>…</svg> markup, nothing else.\n\n"
             f"Description: {prompt}\n"
             "Canvas: 1024x1024 square."
         )
 
         # --- request helper (with retry) --------------------------------------------------------
-        async def _call_openai(max_tokens: int) -> object:
+        async def _call_model(max_tokens: int) -> object:
+            if self.model.startswith("claude-"):
+                client = get_client("anthropic", AsyncAnthropic)
+                return await client.messages.create(
+                    model=self.model,
+                    system=sys,
+                    messages=[{"role": "user", "content": user}],
+                    max_tokens=max_tokens,
+                    output_config={"effort": "medium"},
+                    timeout=self.request_timeout,
+                )
             return await _client().responses.create(
                 model=self.model,
                 instructions=sys,
@@ -247,25 +270,28 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         t0 = time.time()
         try:
-            coro = _call_openai(self.max_output_tokens)
+            coro = _call_model(self.max_output_tokens)
             rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)  # outer guard
         except asyncio.TimeoutError:
             api_ms = int((time.time() - t0) * 1000)
             logger.warning(
-                "OpenAI request timed out after %ss (latency_ms=%d)",
+                "SVG model request timed out after %ss (latency_ms=%d)",
                 self.request_timeout,
                 api_ms,
             )
             return _placeholder_png(f"SVG generation timed out after {self.request_timeout}s.")
         except Exception as e:
             api_ms = int((time.time() - t0) * 1000)
-            logger.exception("OpenAI request failed (latency_ms=%d): %s", api_ms, e)
+            logger.exception("SVG model request failed (latency_ms=%d): %s", api_ms, e)
             return _placeholder_png("SVG generation failed.")
 
         api_ms = int((time.time() - t0) * 1000)
 
-        # Extract plain text from Responses API
+        # Extract text from Anthropic Messages or OpenAI Responses.
         def _gather_text(r: object) -> str:
+            content = getattr(r, "content", None)
+            if content is not None:
+                return "\n".join(block.text for block in content if getattr(block, "type", None) == "text")
             # preferred (SDK helper)
             t = getattr(r, "output_text", None)
             if t:
@@ -284,6 +310,8 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         text: str = _gather_text(rsp) or ""
         status = getattr(rsp, "status", "")
         incomplete_reason = getattr(getattr(rsp, "incomplete_details", None), "reason", None)
+        if getattr(rsp, "stop_reason", None) == "max_tokens":
+            incomplete_reason = "max_output_tokens"
 
         logger.debug(
             "Responses status=%s incomplete_reason=%s text_len=%d preview=%r",
@@ -293,12 +321,12 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             text[:120],
         )
 
-        # If incomplete due to token cap (or empty text), retry once with a bigger cap & stop-seq.
+        # If incomplete due to token cap (or empty text), retry once with a bigger cap.
         if (status != "completed" and incomplete_reason == "max_output_tokens") or not text.strip():
             try:
-                logger.info("Retrying with higher max_output_tokens and low reasoning.")
+                logger.info("Retrying SVG generation with a higher token limit.")
                 bigger = max(self.max_output_tokens + 2000, 5000)
-                coro = _call_openai(bigger)
+                coro = _call_model(bigger)
                 rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)
                 text = _gather_text(rsp) or text
             except Exception as e:
