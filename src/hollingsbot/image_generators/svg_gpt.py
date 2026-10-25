@@ -223,13 +223,13 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         sys = (
             "You are an expert vector illustrator creating a finished, carefully art-directed illustration. "
             "Interpret the description faithfully and develop its distinctive visual details. "
-            "Aim for approximately 3,500 total output tokens, including planning and SVG markup. "
+            "Aim for approximately 8,000 total output tokens, including planning and SVG markup. "
             "This is a soft target: finish the illustration and close every element even if you need a little more room. "
-            "Plan briefly, choose a clear composition and palette, then spend most of the budget on the artwork. "
-            "Use a few expressive custom paths, layered forms, selective highlights and shadows, "
-            "and the distinctive details that make the subject recognizable. "
+            "Plan the composition, palette, lighting, and focal hierarchy, then spend most of the budget on the artwork. "
+            "Develop expressive custom paths, layered forms, nuanced highlights and shadows, material textures, "
+            "and the distinctive details that bring the subject to life. "
             "For scenes, establish foreground, middle ground, and background with coherent perspective and depth. "
-            "For individual subjects, prioritize strong contours and the most important anatomical or construction details. "
+            "For individual subjects, develop strong contours, anatomy or construction, and convincing surface details. "
             "Use gradients, strokes, and reusable definitions where they improve the image. "
             "Reuse repeated motifs with defs/use, keep path coordinates concise, and omit comments and redundant markup. "
             "Every detail should serve the requested subject; do not substitute unrelated decorative clutter for craft. "
@@ -247,7 +247,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         user = (
             "Create a complete, polished vector illustration of the following description. "
-            "Use deliberate composition and selective subject-specific detail, keeping the SVG compact and complete. "
+            "Develop the composition and subject-specific details into a finished illustration, keeping the SVG complete. "
             "Your response MUST be only the <svg>…</svg> markup, nothing else.\n\n"
             f"Description: {prompt}\n"
             "Canvas: 1024x1024 square."
