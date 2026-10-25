@@ -12,6 +12,7 @@ from openai import AsyncOpenAI
 from PIL import Image, ImageDraw, ImageFont
 
 from hollingsbot.text_generators.client_cache import get_client
+from hollingsbot.text_generators.openrouter import _get_openrouter_client
 
 logger = logging.getLogger(__name__)
 
@@ -192,7 +193,7 @@ def _render_svg(svg: str) -> bytes:
 class SvgGPTImageGenerator(ImageGeneratorAPI):
     """
     Generates an SVG with the model, normalizes it to a 1024x1024 canvas, and returns PNG bytes.
-    Uses Anthropic Messages for Claude models and OpenAI Responses for GPT models.
+    Uses OpenRouter for DeepSeek, Anthropic Messages for Claude, and OpenAI Responses for GPT.
     """
 
     def __init__(self, model: str):
@@ -254,6 +255,14 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         # --- model request ---------------------------------------------------------------------
         async def _call_model(max_tokens: int) -> object:
+            if self.model.startswith("deepseek/"):
+                return await _get_openrouter_client().chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                    max_tokens=max_tokens,
+                    extra_body={"reasoning": {"effort": "medium"}},
+                    timeout=self.request_timeout,
+                )
             if self.model.startswith("claude-"):
                 client = get_client("anthropic", AsyncAnthropic)
                 return await client.messages.create(
@@ -294,6 +303,9 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         # Extract text from Anthropic Messages or OpenAI Responses.
         def _gather_text(r: object) -> str:
+            choices = getattr(r, "choices", None)
+            if choices is not None:
+                return (choices[0].message.content or "") if choices else ""
             content = getattr(r, "content", None)
             if content is not None:
                 return "\n".join(block.text for block in content if getattr(block, "type", None) == "text")
@@ -314,23 +326,27 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
 
         def _is_complete(response: object, output: str) -> bool:
             stop_reason = getattr(response, "stop_reason", None)
+            choices = getattr(response, "choices", None)
+            if choices:
+                stop_reason = choices[0].finish_reason
             status = getattr(response, "status", None)
             reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
             usage = getattr(response, "usage", None)
             logger.info(
                 "SVG model response stop_reason=%s status=%s incomplete_reason=%s text_len=%d "
-                "input_tokens=%s output_tokens=%s",
+                "input_tokens=%s output_tokens=%s cost_usd=%s",
                 stop_reason,
                 status,
                 reason,
                 len(output),
-                getattr(usage, "input_tokens", None),
-                getattr(usage, "output_tokens", None),
+                getattr(usage, "input_tokens", getattr(usage, "prompt_tokens", None)),
+                getattr(usage, "output_tokens", getattr(usage, "completion_tokens", None)),
+                getattr(usage, "cost", None),
             )
             # A closed root alone is insufficient: the provider may have cut
             # off a response containing an earlier SVG fragment.
             return (
-                stop_reason not in ("max_tokens", "refusal", "pause_turn")
+                stop_reason not in ("max_tokens", "length", "content_filter", "error", "refusal", "pause_turn")
                 and status not in ("incomplete", "failed", "cancelled")
                 and reason is None
                 and _SVG_BLOCK_RE.search(output) is not None
