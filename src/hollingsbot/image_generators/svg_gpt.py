@@ -199,8 +199,10 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         self.model = model
         # Tunables via env for easy ops
         self.temperature = float(os.getenv("SVG_GPT_TEMPERATURE", "0.2"))
-        self.max_output_tokens = int(os.getenv("SVG_GPT_MAX_TOKENS", "5000"))
-        self.request_timeout = int(os.getenv("SVG_GPT_TIMEOUT", "30"))
+        # Thinking and SVG markup share this budget. Detailed illustrations need
+        # substantially more room than the old 5,000-token sketch budget.
+        self.max_output_tokens = int(os.getenv("SVG_GPT_MAX_TOKENS", "32000"))
+        self.request_timeout = int(os.getenv("SVG_GPT_TIMEOUT", "300"))
 
     async def generate(self, prompt: str, *, seed: int | None = None) -> bytes:  # type: ignore[override]
         """
@@ -307,30 +309,44 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
                             parts.append(tt)
             return "\n".join(parts)
 
-        text: str = _gather_text(rsp) or ""
-        status = getattr(rsp, "status", "")
-        incomplete_reason = getattr(getattr(rsp, "incomplete_details", None), "reason", None)
-        if getattr(rsp, "stop_reason", None) == "max_tokens":
-            incomplete_reason = "max_output_tokens"
+        def _is_complete(response: object, output: str) -> bool:
+            stop_reason = getattr(response, "stop_reason", None)
+            status = getattr(response, "status", None)
+            reason = getattr(getattr(response, "incomplete_details", None), "reason", None)
+            logger.info(
+                "SVG model response stop_reason=%s status=%s incomplete_reason=%s text_len=%d",
+                stop_reason,
+                status,
+                reason,
+                len(output),
+            )
+            # A closed root alone is insufficient: the provider may have cut
+            # off a response containing an earlier SVG fragment.
+            return (
+                stop_reason not in ("max_tokens", "refusal", "pause_turn")
+                and status not in ("incomplete", "failed", "cancelled")
+                and reason is None
+                and _SVG_BLOCK_RE.search(output) is not None
+            )
 
-        logger.debug(
-            "Responses status=%s incomplete_reason=%s text_len=%d preview=%r",
-            status,
-            incomplete_reason,
-            len(text),
-            text[:120],
-        )
-
-        # If incomplete due to token cap (or empty text), retry once with a bigger cap.
-        if (status != "completed" and incomplete_reason == "max_output_tokens") or not text.strip():
+        text = _gather_text(rsp)
+        if not _is_complete(rsp, text):
             try:
-                logger.info("Retrying SVG generation with a higher token limit.")
-                bigger = max(self.max_output_tokens + 2000, 5000)
+                # Opus 5.5 supports up to 128K output tokens. Retry from scratch
+                # with ample room rather than splicing together unfinished XML.
+                bigger = min(max(self.max_output_tokens * 4, 32000), 128000)
+                logger.info("Retrying incomplete SVG generation with max_tokens=%d.", bigger)
                 coro = _call_model(bigger)
                 rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)
-                text = _gather_text(rsp) or text
+                text = _gather_text(rsp)
             except Exception as e:
                 logger.warning("Retry failed: %s", e)
+                return _placeholder_png("SVG generation could not finish. Please try again.")
+            if not _is_complete(rsp, text):
+                logger.warning("SVG remained incomplete after retry; refusing to render partial markup.")
+                return _placeholder_png("SVG generation could not finish. Please try again.")
+
+        api_ms = int((time.time() - t0) * 1000)
 
         # Extract and normalize SVG (with salvage & sanitization)
         try:

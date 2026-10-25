@@ -120,7 +120,7 @@ async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic, truncat
             {"type": "thinking", "thinking": "private reasoning", "signature": "test"},
             {"type": "text", "text": "<svg><circle/></svg>"},
         ]
-        payload["stop_reason"] = "max_tokens" if truncated else "end_turn"
+        payload["stop_reason"] = "max_tokens" if truncated and len(fake_anthropic.requests) == 1 else "end_turn"
         return httpx2.Response(200, json=payload)
 
     monkeypatch.setattr(fake_anthropic, "_handle", respond)
@@ -150,3 +150,19 @@ async def test_gpt_svg_keeps_responses_api(monkeypatch):
     monkeypatch.setattr(svg_gpt, "_render_svg", lambda _svg: b"png")
     assert await svg_gpt.SvgGPTImageGenerator("gpt-5").generate("a square") == b"png"
     assert create.call_args.kwargs["model"] == "gpt-5"
+
+
+@pytest.mark.parametrize("reason", ["max_tokens", "end_turn"])
+async def test_never_renders_incomplete_svg(monkeypatch, reason):
+    # Cover both provider-reported truncation and an unfinished SVG even when
+    # the provider claims the response ended normally.
+    response = SimpleNamespace(content=[SimpleNamespace(type="text", text="<svg><path d='M0 0")], stop_reason=reason)
+    create = AsyncMock(return_value=response)
+    monkeypatch.setattr(svg_gpt, "get_client", lambda *_args: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    render = AsyncMock()
+    monkeypatch.setattr(svg_gpt, "_render_svg", render)
+    monkeypatch.setattr(svg_gpt, "_placeholder_png", lambda _message: b"incomplete")
+    monkeypatch.delenv("SVG_GPT_MAX_TOKENS", raising=False)
+    assert await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a detailed scene") == b"incomplete"
+    assert [call.kwargs["max_tokens"] for call in create.call_args_list] == [32000, 128000]
+    render.assert_not_called()
