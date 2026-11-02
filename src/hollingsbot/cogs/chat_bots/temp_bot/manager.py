@@ -53,6 +53,10 @@ AVATAR_TIMEOUT_SECONDS = 20
 MAX_CANCELLATIONS_BEFORE_FORCE = 2  # After this many cancellations, force the response through
 MIN_GENERATION_TIME_BEFORE_CANCEL = 2.0  # Don't cancel if generation started less than this many seconds ago
 
+# Chat model for temp bot replies; override with TEMP_BOT_PROVIDER / TEMP_BOT_MODEL.
+DEFAULT_TEMP_BOT_PROVIDER = "anthropic"
+DEFAULT_TEMP_BOT_MODEL = "claude-haiku-4-5"
+
 _DEBUG_LOGS_PATH = Path("generated/debug_logs.json")
 _DEBUG_LOGS_MAX_SIZE = 100
 
@@ -781,8 +785,8 @@ class TempBotManager:
 
         Returns (text, llm_debug, conversation).
         """
-        provider = "openai"
-        model = "gpt-5.6-luna"
+        provider = os.getenv("TEMP_BOT_PROVIDER", DEFAULT_TEMP_BOT_PROVIDER)
+        model = os.getenv("TEMP_BOT_MODEL", DEFAULT_TEMP_BOT_MODEL)
 
         # Debug logging
         _LOG.info(f"Temp bot calling Celery with {len(conversation)} turns")
@@ -820,7 +824,7 @@ class TempBotManager:
         return text, llm_debug, stored_conversation
 
     async def _generate_response(self, conversation: list[dict[str, Any]]) -> str:
-        """Generate LLM response via Celery using GPT-5.6 Luna.
+        """Generate LLM response via Celery using the configured temp bot model.
 
         Thin wrapper around :meth:`_generate_response_with_job` for callers that
         don't need cancellation support — discards the debug payload.
