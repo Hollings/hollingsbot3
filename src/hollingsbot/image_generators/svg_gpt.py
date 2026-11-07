@@ -1,18 +1,17 @@
 from __future__ import annotations
 
 import asyncio
-import io
 import logging
 import os
 import re
 import time
 
-from anthropic import AsyncAnthropic
-from openai import AsyncOpenAI
-from PIL import Image, ImageDraw, ImageFont
+from anthropic import APIConnectionError as AnthropicConnectionError, AsyncAnthropic
+from openai import APIConnectionError as OpenAIConnectionError, AsyncOpenAI
 
 from hollingsbot.text_generators.client_cache import get_client
 from hollingsbot.text_generators.openrouter import _get_openrouter_client
+from hollingsbot.utils.celery_utils import RemoteOutcomeUnknown
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +23,11 @@ try:
 except Exception as e:  # pragma: no cover - optional dependency
     _HAS_CAIRO = False
     logger.warning(
-        "CairoSVG unavailable; PNG rasterization will fall back to a placeholder. %s",
+        "CairoSVG unavailable; SVG rasterization is disabled. %s",
         e,
     )
 
-from .base import ImageGeneratorAPI
+from .base import ImageGenerationError, ImageGeneratorAPI
 
 
 def _client() -> AsyncOpenAI:
@@ -36,13 +35,7 @@ def _client() -> AsyncOpenAI:
 
     def build() -> AsyncOpenAI:
         http_timeout = float(os.getenv("OPENAI_HTTP_TIMEOUT", "30"))
-        max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "2"))
-        logger.debug(
-            "Initializing AsyncOpenAI client (timeout=%ss, max_retries=%s)",
-            http_timeout,
-            max_retries,
-        )
-        return AsyncOpenAI(timeout=http_timeout, max_retries=max_retries)
+        return AsyncOpenAI(timeout=http_timeout, max_retries=0)
 
     return get_client("svg-openai", build)
 
@@ -163,30 +156,12 @@ def _enforce_canvas(svg: str, size: int = 1024) -> str:
     return out
 
 
-def _placeholder_png(message: str) -> bytes:
-    """Create a simple PNG with an error message (used when rasterization fails)."""
-    w, h = 1024, 1024
-    img = Image.new("RGB", (w, h), "white")
-    d = ImageDraw.Draw(img)
-    message = f"{message}\n\n(This is a placeholder image.)"
-    try:
-        font = ImageFont.truetype("DejaVuSans.ttf", size=28)
-    except Exception:
-        font = ImageFont.load_default()
-    d.multiline_text((40, 40), message, fill="black", font=font, spacing=8)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
-    return buf.read()
-
-
 def _render_svg(svg: str) -> bytes:
-    """Render SVG to PNG bytes, or create a placeholder PNG if Cairo is missing."""
+    """Render SVG to PNG bytes or fail if rasterization is unavailable."""
     if _HAS_CAIRO:
         logger.debug("Rendering SVG with CairoSVG (len=%d)", len(svg))
         return cairosvg.svg2png(bytestring=svg.encode("utf-8"))
-    logger.warning("CairoSVG not installed; returning placeholder PNG")
-    return _placeholder_png("SVG rasterization not available on this system.")
+    raise ImageGenerationError("SVG rasterization is not available.")
 
 
 # --- Main implementation ------------------------------------------------------------------------
@@ -208,7 +183,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
     async def generate(self, prompt: str, *, seed: int | None = None) -> bytes:  # type: ignore[override]
         """
         Ask the model to produce SVG markup for the given prompt and rasterize it to PNG.
-        If the model request times out, returns a placeholder PNG instead of throwing.
+        A failed generation never returns billable image bytes.
         """
         prompt_preview = " ".join(prompt.split())
         if len(prompt_preview) > 200:
@@ -256,15 +231,19 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         # --- model request ---------------------------------------------------------------------
         async def _call_model(max_tokens: int) -> object:
             if self.model.startswith("deepseek/"):
-                return await _get_openrouter_client().chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
-                    max_tokens=max_tokens,
-                    extra_body={"reasoning": {"effort": "medium"}},
-                    timeout=self.request_timeout,
+                return (
+                    await _get_openrouter_client()
+                    .with_options(max_retries=0)
+                    .chat.completions.create(
+                        model=self.model,
+                        messages=[{"role": "system", "content": sys}, {"role": "user", "content": user}],
+                        max_tokens=max_tokens,
+                        extra_body={"reasoning": {"effort": "medium"}},
+                        timeout=self.request_timeout,
+                    )
                 )
             if self.model.startswith("claude-"):
-                client = get_client("anthropic", AsyncAnthropic)
+                client = get_client("svg-anthropic", lambda: AsyncAnthropic(max_retries=0))
                 return await client.messages.create(
                     model=self.model,
                     system=sys,
@@ -286,18 +265,20 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         try:
             coro = _call_model(self.max_output_tokens)
             rsp = await asyncio.wait_for(coro, timeout=self.request_timeout + 5)  # outer guard
-        except asyncio.TimeoutError:
+        except (asyncio.TimeoutError, AnthropicConnectionError, OpenAIConnectionError) as exc:
             api_ms = int((time.time() - t0) * 1000)
             logger.warning(
                 "SVG model request timed out after %ss (latency_ms=%d)",
                 self.request_timeout,
                 api_ms,
             )
-            return _placeholder_png(f"SVG generation timed out after {self.request_timeout}s.")
+            raise RemoteOutcomeUnknown("Could not confirm the SVG provider outcome.") from exc
         except Exception as e:
             api_ms = int((time.time() - t0) * 1000)
             logger.exception("SVG model request failed (latency_ms=%d): %s", api_ms, e)
-            return _placeholder_png("SVG generation failed.")
+            if (getattr(e, "status_code", 0) or 0) >= 500:
+                raise RemoteOutcomeUnknown("Could not confirm the SVG provider outcome.") from e
+            raise ImageGenerationError("SVG generation failed.") from e
 
         api_ms = int((time.time() - t0) * 1000)
 
@@ -355,7 +336,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
         text = _gather_text(rsp)
         if not _is_complete(rsp, text):
             logger.warning("SVG incomplete; refusing to render partial markup or regenerate the entire illustration.")
-            return _placeholder_png("SVG generation could not finish. Please try again.")
+            raise ImageGenerationError("The model did not return a complete SVG.")
 
         api_ms = int((time.time() - t0) * 1000)
 
@@ -366,9 +347,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
             svg = _enforce_canvas(svg, 1024)
         except Exception as e:
             logger.exception("Failed to extract/normalize SVG from model output: %s", e)
-            # As a last resort, synthesize a minimal SVG to avoid hard failure.
-            svg = _extract_svg("", prompt=prompt)
-            svg = _enforce_canvas(svg, 1024)
+            raise ImageGenerationError("SVG normalization failed.") from e
 
         # Render; on failure, simplify then retry once.
         t1 = time.time()
@@ -381,7 +360,7 @@ class SvgGPTImageGenerator(ImageGeneratorAPI):
                 png = _render_svg(simpler)
             except Exception as e2:
                 logger.exception("Failed to render even after simplification: %s", e2)
-                return _placeholder_png("SVG rasterization failed.")
+                raise ImageGenerationError("SVG rasterization failed.") from e2
 
         render_ms = int((time.time() - t1) * 1000)
         logger.info(

@@ -112,6 +112,9 @@ class LlamaBot:
         except Exception:
             _LOG.exception("Failed to generate response")
             return None
+        finally:
+            if self._active_generations.get(message.channel.id) is job:
+                self._active_generations.pop(message.channel.id, None)
 
     async def _should_respond(self, message: discord.Message) -> bool:
         """Check if bot should respond."""
@@ -170,10 +173,6 @@ class LlamaBot:
         except Exception as exc:
             _LOG.exception("Generation failed: %s", exc)
             return None
-        finally:
-            if self._active_generations.get(channel.id) is job:
-                self._active_generations.pop(channel.id, None)
-
         if not text.strip():
             return None
 
@@ -195,7 +194,11 @@ class LlamaBot:
         await self._wait_for_typing_to_clear(channel.id)
 
         # Send to Discord
-        sent_messages = await self._send_to_discord(channel, full_text)
+        try:
+            sent_messages = await self._send_to_discord(channel, full_text)
+        except chat_utils.PartialDeliveryError as exc:
+            _LOG.warning("Response partially delivered in channel %s", channel.id, exc_info=True)
+            sent_messages, full_text = exc.messages, exc.text
         if not sent_messages:
             return None
 
@@ -275,12 +278,20 @@ class LlamaBot:
             except Exception:
                 _LOG.exception("Failed to create webhook")
 
-        # Split long responses instead of silently truncating mid-sentence
-        for chunk in chat_utils.chunk_message(text):
-            if webhook:
-                msg = await webhook.send(chunk, username=bot_name, wait=True)
-            else:
-                msg = await channel.send(chunk)
-            sent.append(msg)
+        delivered_text: list[str] = []
+        try:
+            # Split long responses instead of silently truncating mid-sentence
+            for chunk in chat_utils.chunk_message(text):
+                if webhook:
+                    msg = await webhook.send(chunk, username=bot_name, wait=True)
+                else:
+                    msg = await channel.send(chunk)
+                sent.append(msg)
+                delivered_text.append(chunk)
+
+        except Exception as exc:
+            if sent:
+                raise chat_utils.PartialDeliveryError(sent, "\n".join(delivered_text)) from exc
+            raise
 
         return sent

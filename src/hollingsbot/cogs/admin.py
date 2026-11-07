@@ -3,8 +3,11 @@
 import asyncio
 import json
 import logging
+import math
 import os
 import shutil
+import socket
+from contextlib import suppress
 from pathlib import Path
 
 import discord
@@ -16,6 +19,9 @@ from hollingsbot.settings import get_admin_user_ids
 from hollingsbot.utils.file_utils import atomic_write_json
 
 _LOG = logging.getLogger(__name__)
+_RESET_COOLDOWN_SECONDS = 300
+_RESET_COMMAND_TIMEOUT = 60
+_RESET_PEERS = ("redis", "celery_text", "celery_image")
 
 # Constants for compose file discovery
 _COMPOSE_FILE_NAMES = (
@@ -41,31 +47,44 @@ class Admin(commands.Cog):
 
         # Load admin user IDs
         self._admin_ids = get_admin_user_ids()
+        self._reset_lock = asyncio.Lock()
         _LOG.info(f"Admin cog initialized with {len(self._admin_ids)} admin(s)")
 
     @commands.command(name="reset")
     async def reset(self, ctx: commands.Context) -> None:
         """Restart the project Docker containers (or just the bot if needed)."""
-        await ctx.send("Restarting containers… I may go offline briefly.")
-        # Run restart asynchronously to return control to discord.py
-        asyncio.create_task(self._restart_containers(ctx))
+        if self._reset_lock.locked():
+            await ctx.send("A reset is already in progress.")
+            return
+        async with self._reset_lock:
+            remaining = await asyncio.to_thread(prompt_db.reserve_reset, _RESET_COOLDOWN_SECONDS)
+            if remaining:
+                await ctx.send(f"Reset is on cooldown. Try again in {math.ceil(remaining)} seconds.")
+                return
+            await ctx.send("Restarting containers… I may go offline briefly.")
+            await self._restart_containers(ctx)
 
     async def _restart_containers(self, ctx: commands.Context) -> None:
         """
         Attempt to restart Docker containers; fallback to bot process restart.
 
-        Tries in order:
-        1. Custom override command (RESET_COMMAND env var)
-        2. Modern Docker CLI (docker compose)
-        3. Legacy Docker Compose (docker-compose)
-        4. Bot process restart only
+        A configured override takes precedence. Otherwise, restart known peers
+        of this container's project or use Compose from a host checkout, then
+        use the normal bot restart path if needed.
         """
         # Try custom override command first
         if await self._try_override_command():
             _LOG.info("Container restart succeeded via override command")
             return
 
-        # Try Docker Compose restart
+        # Inside Docker, Compose would guess the project name from /app. Use
+        # our own container's labels and leave the bot itself to its supervisor.
+        if Path("/.dockerenv").exists():
+            peers_restarted = await self._restart_docker_peers()
+            await self._request_bot_restart(ctx, peers_restarted=peers_restarted)
+            return
+
+        # Try Docker Compose restart when running outside a container.
         compose_file = self._find_compose_file()
         if await self._try_docker_compose_restart(compose_file):
             _LOG.info("Container restart succeeded via Docker Compose")
@@ -73,7 +92,43 @@ class Admin(commands.Cog):
 
         # Fallback to bot process restart
         _LOG.warning("Docker not accessible; falling back to bot process restart")
-        await self._fallback_to_bot_restart(ctx)
+        await self._request_bot_restart(ctx)
+
+    async def _restart_docker_peers(self) -> bool:
+        docker = shutil.which("docker")
+        if not docker:
+            return False
+        raw = await self._capture_subprocess(
+            [docker, "inspect", "--format", "{{json .Config.Labels}}", socket.gethostname()]
+        )
+        try:
+            labels = json.loads(raw or "null")
+        except ValueError:
+            return False
+        if not isinstance(labels, dict) or labels.get("com.docker.compose.service") != "bot":
+            return False
+        project = labels.get("com.docker.compose.project")
+        if not isinstance(project, str) or not project:
+            return False
+        complete = True
+        for service in _RESET_PEERS:
+            containers = await self._capture_subprocess(
+                [
+                    docker,
+                    "ps",
+                    "--all",
+                    "--quiet",
+                    "--filter",
+                    f"label=com.docker.compose.project={project}",
+                    "--filter",
+                    f"label=com.docker.compose.service={service}",
+                    "--filter",
+                    "label=com.docker.compose.oneoff=False",
+                ]
+            )
+            if not containers or not await self._run_subprocess([docker, "restart", *containers.split()]):
+                complete = False
+        return complete
 
     async def _try_override_command(self) -> bool:
         """
@@ -86,7 +141,7 @@ class Admin(commands.Cog):
         if not override:
             return False
 
-        _LOG.info(f"Attempting restart via override command: {override}")
+        _LOG.info("Attempting restart via configured RESET_COMMAND")
         success = await self._run_shell_command(override)
 
         if not success:
@@ -154,26 +209,15 @@ class Admin(commands.Cog):
 
         return await self._run_subprocess(cmd, cwd)
 
-    async def _fallback_to_bot_restart(self, ctx: commands.Context) -> None:
-        """
-        Restart only the bot process as a last resort.
-
-        If running under Docker Compose with a restart policy, the container
-        will automatically restart.
-
-        Args:
-            ctx: Discord command context for sending notification
-        """
-        await ctx.send("Docker not accessible; restarting bot process only.")
-        _LOG.info("Initiating bot process restart")
-
-        try:
-            await self.bot.close()
-        except Exception as e:
-            _LOG.error(f"Error closing bot gracefully: {e}")
-        finally:
-            _LOG.info("Exiting bot process")
-            os._exit(0)
+    async def _request_bot_restart(self, ctx: commands.Context, *, peers_restarted: bool = False) -> None:
+        restart = getattr(self.bot, "request_restart", None)
+        if not callable(restart):
+            await ctx.send("The bot is not running under a supported restart entry point.")
+            return
+        if not peers_restarted:
+            with suppress(discord.HTTPException):
+                await ctx.send("Couldn't restart every project container. Restarting the bot now.")
+        await restart()
 
     async def _run_shell_command(self, command: str) -> bool:
         """
@@ -188,18 +232,10 @@ class Admin(commands.Cog):
         try:
             proc = await asyncio.create_subprocess_shell(
                 command,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            _stdout, stderr = await proc.communicate()
-            exit_code = proc.returncode or 0
-
-            if exit_code != 0:
-                _LOG.warning(
-                    f"Shell command failed with exit code {exit_code}. stderr: {stderr.decode(errors='ignore')[:200]}"
-                )
-
-            return exit_code == 0
+            return await self._wait_for_process(proc) is not None
 
         except Exception as e:
             _LOG.error(f"Failed to execute shell command: {e}")
@@ -210,37 +246,37 @@ class Admin(commands.Cog):
         cmd: list[str],
         cwd: Path | None = None,
     ) -> bool:
-        """
-        Execute a subprocess command asynchronously.
+        return await self._capture_subprocess(cmd, cwd) is not None
 
-        Args:
-            cmd: Command and arguments as a list
-            cwd: Working directory for the command, or None for current directory
-
-        Returns:
-            True if command succeeded (exit code 0), False otherwise
-        """
+    async def _capture_subprocess(self, cmd: list[str], cwd: Path | None = None) -> str | None:
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 cwd=str(cwd) if cwd else None,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
-            _stdout, stderr = await proc.communicate()
-            exit_code = proc.returncode or 0
-
-            if exit_code != 0:
-                _LOG.warning(
-                    f"Command {cmd[0]} failed with exit code {exit_code}. "
-                    f"stderr: {stderr.decode(errors='ignore')[:200]}"
-                )
-
-            return exit_code == 0
-
+            return await self._wait_for_process(proc)
         except Exception as e:
             _LOG.error(f"Failed to execute subprocess {cmd}: {e}")
-            return False
+            return None
+
+    @staticmethod
+    async def _wait_for_process(proc: asyncio.subprocess.Process) -> str | None:
+        try:
+            stdout, _ = await asyncio.wait_for(proc.communicate(), _RESET_COMMAND_TIMEOUT)
+        except (TimeoutError, asyncio.CancelledError) as error:
+            with suppress(ProcessLookupError):
+                proc.kill()
+            await proc.wait()
+            if isinstance(error, asyncio.CancelledError):
+                raise
+            _LOG.warning("Reset subprocess timed out")
+            return None
+        if proc.returncode != 0:
+            _LOG.warning("Reset subprocess exited with status %s", proc.returncode)
+            return None
+        return (stdout or b"").decode(errors="replace").strip()
 
     def _find_compose_file(self) -> Path | None:
         """

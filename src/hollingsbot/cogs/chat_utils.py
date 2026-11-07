@@ -22,6 +22,16 @@ from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
 
+
+class PartialDeliveryError(RuntimeError):
+    """A response is already visible; preserve it instead of trying another bot."""
+
+    def __init__(self, messages: list[discord.Message], text: str):
+        super().__init__("Only part of the response reached Discord")
+        self.messages = messages
+        self.text = text
+
+
 # Constants
 _TEXT_ATTACHMENT_EXTENSIONS = {
     ".txt",

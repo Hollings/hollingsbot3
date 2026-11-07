@@ -295,7 +295,8 @@ async def test_api_error_posts_what_it_had_cut_off_and_reacts(jev):
     message = make_message(channel)
     jev._writer = FakeWriter(["well", "the", "capital"], fail_after=2)
 
-    assert await jev.receive_message(message, [turn(message)]) is None
+    result = await jev.receive_message(message, [turn(message)])
+    assert result["text"] == "well the" + CUT_OFF_MARK
     webhook.send.assert_awaited_once_with("well the" + CUT_OFF_MARK, username="Jev", wait=True)
     message.add_reaction.assert_awaited_once_with(jev_bot_mod.ERROR_REACTION)
 
@@ -745,6 +746,29 @@ async def test_spawning_again_resets_the_count_without_a_new_reply(jev):
     assert "7 replies left" in ctx.send.await_args.args[0]
     assert jev.spawned == {AWAY: 7} and jev.spawns.active() == {AWAY: 7}
     assert jev._writer.chats == []
+
+
+async def test_old_delivery_cannot_spend_a_reply_from_restarted_visit(jev):
+    webhook, _ = make_webhook()
+    channel = away_channel(webhook)
+    jev._writer = FakeWriter(["hi"])
+    await jev.spawn(make_ctx(channel), 1)
+    entered, release = asyncio.Event(), asyncio.Event()
+    settle = jev._settle_reply
+
+    async def slow_settlement(*args):
+        entered.set()
+        await release.wait()
+        await settle(*args)
+
+    jev._settle_reply = slow_settlement
+    message = make_message(channel)
+    old = asyncio.create_task(jev.receive_message(message, [turn(message)]))
+    await asyncio.wait_for(entered.wait(), 1)
+    await jev.spawn(make_ctx(channel), 7)
+    release.set()
+    assert await asyncio.wait_for(old, 1) is not None
+    assert jev.spawned == {AWAY: 7} and jev.spawns.active() == {AWAY: 7}
 
 
 async def test_despawn_ends_the_visit_at_once(jev):

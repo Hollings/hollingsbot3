@@ -1,9 +1,10 @@
 # prompt_db.py
 import os
 import sqlite3
+import time
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 DEFAULT_DB = Path("/data/hollingsbot.db")
@@ -39,6 +40,19 @@ def _connect() -> Iterator[sqlite3.Connection]:
         conn.close()
 
 
+def reserve_reset(cooldown_seconds: float, *, now: float | None = None) -> float:
+    """Reserve the public restart window, or return seconds until it is available."""
+    with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.execute("CREATE TABLE IF NOT EXISTS bot_reset (id INTEGER PRIMARY KEY, available_at REAL NOT NULL)")
+        now = time.time() if now is None else now
+        row = conn.execute("SELECT available_at FROM bot_reset WHERE id = 1").fetchone()
+        if row is not None and row[0] > now:
+            return row[0] - now
+        conn.execute("INSERT OR REPLACE INTO bot_reset (id, available_at) VALUES (1, ?)", (now + cooldown_seconds,))
+        return 0
+
+
 def init_db() -> None:
     """Create required tables if they don't exist (once per DB path per process)."""
     db_key = str(DB_PATH)
@@ -60,6 +74,33 @@ def init_db() -> None:
             """
         )
         conn.execute("CREATE TABLE IF NOT EXISTS prs (number INTEGER PRIMARY KEY, status TEXT)")
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS image_requests (
+                message_id INTEGER NOT NULL,
+                variant INTEGER NOT NULL,
+                prompt_id INTEGER NOT NULL UNIQUE,
+                PRIMARY KEY (message_id, variant)
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS image_attempts (
+                id INTEGER PRIMARY KEY,
+                task_id TEXT UNIQUE,
+                prompt_id INTEGER NOT NULL,
+                api TEXT NOT NULL,
+                model TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                finished_at TEXT,
+                status TEXT NOT NULL
+            )"""
+        )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS image_settlements (
+                prompt_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                cost REAL NOT NULL
+            )"""
+        )
         # Per-user model preference (scoped to guild)
         conn.execute(
             """
@@ -107,7 +148,8 @@ def init_db() -> None:
                 is_active INTEGER DEFAULT 1,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 deactivated_at TEXT,
-                conversation_summary TEXT
+                conversation_summary TEXT,
+                cleanup_pending INTEGER NOT NULL DEFAULT 0
             )
             """
         )
@@ -119,6 +161,7 @@ def init_db() -> None:
             ("deactivated_at", "TEXT", None),
             ("avatar_bytes", "BLOB", None),
             ("conversation_summary", "TEXT", None),
+            ("cleanup_pending", "INTEGER", "0"),
         ]:
             try:
                 if default is not None:
@@ -309,6 +352,7 @@ def bulk_add_prompts(
     status: str = "queued",
     daily_limit: int | None = None,
     window_start: str | None = None,
+    request_message_id: int | None = None,
 ) -> list[int]:
     """Insert multiple prompts, enforcing an optional per-day limit.
 
@@ -327,6 +371,9 @@ def bulk_add_prompts(
         ISO8601 timestamp representing the inclusive lower bound of the current
         window (typically today's UTC midnight). Required when ``daily_limit``
         is provided.
+    request_message_id:
+        Discord message ID. When given, atomically claim the whole request;
+        a replay returns an empty list without creating more prompts.
 
     Returns
     -------
@@ -371,17 +418,32 @@ def bulk_add_prompts(
                     window_start=window_start,
                 )
         else:
-            conn.execute("BEGIN")
+            conn.execute("BEGIN IMMEDIATE" if request_message_id is not None else "BEGIN")
+
+        if request_message_id is not None:
+            if conn.execute("SELECT 1 FROM image_requests WHERE message_id = ?", (request_message_id,)).fetchone():
+                return []
 
         row_ids: list[int] = []
-        for prompt_text in prompts:
+        for variant, prompt_text in enumerate(prompts):
             cur = conn.execute(
                 "INSERT INTO prompts (text, submitter, api, model, time, status) VALUES (?, ?, ?, ?, ?, ?)",
                 (prompt_text, submitter, api, model, datetime.utcnow().isoformat(), status),
             )
             row_ids.append(int(cur.lastrowid))
+            if request_message_id is not None:
+                conn.execute(
+                    "INSERT INTO image_requests (message_id, variant, prompt_id) VALUES (?, ?, ?)",
+                    (request_message_id, variant, cur.lastrowid),
+                )
         conn.commit()
         return row_ids
+
+
+def image_request_exists(message_id: int) -> bool:
+    init_db()
+    with _connect() as conn:
+        return conn.execute("SELECT 1 FROM image_requests WHERE message_id = ?", (message_id,)).fetchone() is not None
 
 
 def update_status(prompt_id: int, status: str) -> None:
@@ -389,6 +451,80 @@ def update_status(prompt_id: int, status: str) -> None:
     with _connect() as conn:
         conn.execute("UPDATE prompts SET status = ? WHERE id = ?", (status, prompt_id))
         conn.commit()
+
+
+_IMAGE_STATUS_PREDECESSORS = {
+    "generating": ("queued",),
+    "generated": ("generating",),
+    "delivering": ("generated",),
+    "failed": ("generating", "generated", "delivering"),
+    "outcome_unknown": ("generating", "delivering"),
+}
+
+
+def transition_image_prompt(prompt_id: int, status: str) -> bool:
+    """Advance a bot-owned image variant without overwriting terminal states."""
+    previous = _IMAGE_STATUS_PREDECESSORS[status]
+    init_db()
+    with _connect() as conn:
+        return bool(
+            conn.executemany(
+                "UPDATE prompts SET status = ? WHERE id = ? AND status = ?",
+                ((status, prompt_id, prior) for prior in previous),
+            ).rowcount
+        )
+
+
+def begin_image_attempt(prompt_id: int, api: str, model: str, task_id: str | None = None) -> int | None:
+    """Record which model this individual worker attempt actually calls."""
+    init_db()
+    with _connect() as conn:
+        cur = conn.execute(
+            """INSERT INTO image_attempts (task_id, prompt_id, api, model, started_at, status)
+                VALUES (?, ?, ?, ?, ?, 'started') ON CONFLICT(task_id) DO NOTHING""",
+            (task_id, prompt_id, api, model, datetime.utcnow().isoformat()),
+        )
+        return int(cur.lastrowid) if cur.rowcount else None
+
+
+def finish_image_attempt(attempt_id: int, status: str) -> None:
+    init_db()
+    with _connect() as conn:
+        conn.execute(
+            "UPDATE image_attempts SET status = ?, finished_at = ? WHERE id = ? AND status = 'started'",
+            (status, datetime.utcnow().isoformat(), attempt_id),
+        )
+
+
+def abandon_image_prompts(prompt_ids: Iterable[int]) -> None:
+    """Stop unfinished variants, preserving completed debits and uncertain sends."""
+    init_db()
+    with _connect() as conn:
+        conn.executemany(
+            """UPDATE prompts SET status = CASE
+                WHEN status IN ('generating', 'delivering') THEN 'outcome_unknown'
+                ELSE 'cancelled' END
+                WHERE id = ? AND status IN ('queued', 'generating', 'generated', 'delivering')""",
+            ((prompt_id,) for prompt_id in prompt_ids),
+        )
+
+
+def recover_stale_image_jobs(max_age: timedelta = timedelta(hours=2)) -> None:
+    """Close records abandoned by a crash without replaying remote side effects."""
+    init_db()
+    cutoff = (datetime.utcnow() - max_age).isoformat()
+    with _connect() as conn:
+        conn.execute(
+            """UPDATE prompts SET status = 'outcome_unknown'
+                WHERE time < ? AND status IN ('queued', 'generating', 'generated', 'delivering')
+                AND id IN (SELECT prompt_id FROM image_requests)""",
+            (cutoff,),
+        )
+        conn.execute(
+            """UPDATE image_attempts SET status = 'outcome_unknown', finished_at = ?
+                WHERE started_at < ? AND status = 'started'""",
+            (datetime.utcnow().isoformat(), cutoff),
+        )
 
 
 def log_starboard_post(
@@ -459,11 +595,14 @@ def log_starboard_post(
 # (`from hollingsbot.prompt_db import create_temp_bot, ...`) keep working.
 from hollingsbot import temp_bot_db as _temp_bot_db
 
+begin_temp_bot_cleanup = _temp_bot_db.begin_temp_bot_cleanup
 create_temp_bot = _temp_bot_db.create_temp_bot
 deactivate_temp_bot = _temp_bot_db.deactivate_temp_bot
 decrement_temp_bot_replies = _temp_bot_db.decrement_temp_bot_replies
 delete_temp_bot = _temp_bot_db.delete_temp_bot
+finish_temp_bot_cleanup = _temp_bot_db.finish_temp_bot_cleanup
 get_depleted_temp_bots = _temp_bot_db.get_depleted_temp_bots
+get_pending_temp_bot_cleanup = _temp_bot_db.get_pending_temp_bot_cleanup
 get_historical_temp_bots = _temp_bot_db.get_historical_temp_bots
 get_messages_since_bot_left = _temp_bot_db.get_messages_since_bot_left
 get_temp_bot_by_name = _temp_bot_db.get_temp_bot_by_name
@@ -670,17 +809,29 @@ def resolve_user_by_display_name(display_name: str, channel_id: int | None = Non
 # bot restarts and backfills from Discord. The summary cache reads the same table.
 
 
-def set_channel_clear_point(channel_id: int, message_id: int) -> None:
-    """Forget the channel's chat up to and including ``message_id``."""
+def advance_channel_clear_point(conn: sqlite3.Connection, channel_id: int, message_id: int) -> int:
+    """Advance a clear watermark within the caller's transaction, never restoring old chat."""
+    conn.execute(
+        """
+        INSERT INTO channel_clear_points (channel_id, clear_after_message_id, cleared_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(channel_id) DO UPDATE SET
+            clear_after_message_id = excluded.clear_after_message_id,
+            cleared_at = excluded.cleared_at
+        WHERE excluded.clear_after_message_id > channel_clear_points.clear_after_message_id
+        """,
+        (channel_id, message_id, datetime.now().timestamp()),
+    )
+    return conn.execute(
+        "SELECT clear_after_message_id FROM channel_clear_points WHERE channel_id = ?", (channel_id,)
+    ).fetchone()[0]
+
+
+def set_channel_clear_point(channel_id: int, message_id: int) -> int:
+    """Forget the channel's chat up to ``message_id`` and return the effective cutoff."""
     init_db()
     with _connect() as conn:
-        conn.execute(
-            """
-            INSERT OR REPLACE INTO channel_clear_points (channel_id, clear_after_message_id, cleared_at)
-            VALUES (?, ?, ?)
-            """,
-            (channel_id, message_id, datetime.now().timestamp()),
-        )
+        return advance_channel_clear_point(conn, channel_id, message_id)
 
 
 def get_channel_clear_point(channel_id: int) -> int | None:

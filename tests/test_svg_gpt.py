@@ -2,19 +2,17 @@
 
 from __future__ import annotations
 
-import io
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import httpx2
 import pytest
-from PIL import Image
 
 from hollingsbot.image_generators import svg_gpt
+from hollingsbot.image_generators.base import ImageGenerationError
 from hollingsbot.image_generators.svg_gpt import (
     _enforce_canvas,
     _extract_svg,
-    _placeholder_png,
     _simplify_svg,
     _strip_disallowed,
 )
@@ -102,12 +100,10 @@ class TestEnforceCanvas:
         assert "xmlns" in out
 
 
-class TestPlaceholderPng:
-    def test_returns_valid_png(self):
-        data = _placeholder_png("oops")
-        img = Image.open(io.BytesIO(data))
-        assert img.format == "PNG"
-        assert img.size == (1024, 1024)
+def test_missing_renderer_fails_instead_of_returning_billable_bytes(monkeypatch):
+    monkeypatch.setattr(svg_gpt, "_HAS_CAIRO", False)
+    with pytest.raises(ImageGenerationError, match="rasterization"):
+        svg_gpt._render_svg("<svg/>")
 
 
 async def test_claude_svg_uses_messages_api(monkeypatch, fake_anthropic):
@@ -158,9 +154,9 @@ async def test_never_renders_incomplete_svg(monkeypatch, reason):
     monkeypatch.setattr(svg_gpt, "get_client", lambda *_args: SimpleNamespace(messages=SimpleNamespace(create=create)))
     render = AsyncMock()
     monkeypatch.setattr(svg_gpt, "_render_svg", render)
-    monkeypatch.setattr(svg_gpt, "_placeholder_png", lambda _message: b"incomplete")
     monkeypatch.delenv("SVG_GPT_MAX_TOKENS", raising=False)
-    assert await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a detailed scene") == b"incomplete"
+    with pytest.raises(ImageGenerationError, match="complete SVG"):
+        await svg_gpt.SvgGPTImageGenerator("claude-opus-5-5").generate("a detailed scene")
     assert [call.kwargs["max_tokens"] for call in create.call_args_list] == [128000]
     render.assert_not_called()
 
@@ -173,15 +169,18 @@ async def test_deepseek_svg_uses_openrouter_and_checks_finish_reason(monkeypatch
     )
     create = AsyncMock(return_value=response)
     client = SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=create)))
+    client.with_options = lambda **_kwargs: client
     monkeypatch.setattr(svg_gpt, "_get_openrouter_client", lambda: client)
     rendered = []
     monkeypatch.setattr(svg_gpt, "_render_svg", lambda text: rendered.append(text) or b"png")
-    monkeypatch.setattr(svg_gpt, "_placeholder_png", lambda _message: b"incomplete")
     model = "deepseek/deepseek-v4.1-flash-1017"
-    result = await svg_gpt.SvgGPTImageGenerator(model).generate("a circle")
+    if finish_reason == "stop":
+        assert await svg_gpt.SvgGPTImageGenerator(model).generate("a circle") == b"png"
+    else:
+        with pytest.raises(ImageGenerationError, match="complete SVG"):
+            await svg_gpt.SvgGPTImageGenerator(model).generate("a circle")
     assert create.call_count == 1
     assert create.call_args.kwargs["model"] == model
     assert create.call_args.kwargs["max_tokens"] == 128000
     assert create.call_args.kwargs["messages"][0]["role"] == "system"
-    assert result == (b"png" if finish_reason == "stop" else b"incomplete")
     assert bool(rendered) == (finish_reason == "stop")

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Literal
 
-from hollingsbot.prompt_db import DB_PATH
+from hollingsbot.prompt_db import DB_PATH, advance_channel_clear_point
 
 # Cutoff timestamp for summarization - messages before this won't be summarized
 # This prevents huge summarization jobs when migrating old data
@@ -182,14 +182,16 @@ class SummaryCache:
     # ==================== Message Groups ====================
 
     def save_message_group(self, group: MessageGroup) -> int:
-        """Save a message group and return its ID."""
+        """Save a current group, or return 0 if a clear invalidated it."""
         with self._get_connection() as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO message_groups
                 (channel_id, level, start_message_id, end_message_id,
                  summary_text, message_count, start_timestamp, end_timestamp, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
+                WHERE ? > COALESCE((SELECT clear_after_message_id
+                    FROM channel_clear_points WHERE channel_id = ?), 0)
                 """,
                 (
                     group.channel_id,
@@ -201,9 +203,11 @@ class SummaryCache:
                     group.start_timestamp,
                     group.end_timestamp,
                     group.created_at,
+                    group.start_message_id,
+                    group.channel_id,
                 ),
             )
-            return cursor.lastrowid
+            return cursor.lastrowid if cursor.rowcount else 0
 
     def group_exists(self, channel_id: int, level: int, start_message_id: int) -> bool:
         """Check if a group already exists."""
@@ -342,14 +346,7 @@ class SummaryCache:
             message_id: The message ID to clear up to (inclusive).
         """
         with self._get_connection() as conn:
-            conn.execute(
-                """
-                INSERT OR REPLACE INTO channel_clear_points
-                (channel_id, clear_after_message_id, cleared_at)
-                VALUES (?, ?, ?)
-                """,
-                (channel_id, message_id, int(time.time())),
-            )
+            advance_channel_clear_point(conn, channel_id, message_id)
 
     def get_clear_point(self, channel_id: int) -> int | None:
         """Get the clear point message ID for a channel.
@@ -383,7 +380,8 @@ class SummaryCache:
         Returns:
             List of message groups, each containing exactly GROUP_SIZE CachedMessages.
         """
-        all_messages = self.get_all_messages_ordered(channel_id)
+        clear_point = self.get_clear_point(channel_id) or 0
+        all_messages = [m for m in self.get_all_messages_ordered(channel_id) if m.message_id > clear_point]
 
         if len(all_messages) <= GROUP_SIZE:
             return []  # Not enough messages to summarize
@@ -393,7 +391,7 @@ class SummaryCache:
         available = all_messages[:-GROUP_SIZE]
 
         # Build set of already-covered message ranges
-        existing_groups = self.get_groups_by_level(channel_id, 1)
+        existing_groups = [g for g in self.get_groups_by_level(channel_id, 1) if g.start_message_id > clear_point]
         covered_ranges = {(g.start_message_id, g.end_message_id) for g in existing_groups}
 
         return self._find_uncovered_chunks(available, covered_ranges)
@@ -404,7 +402,12 @@ class SummaryCache:
         Returns:
             List of level-1 group lists, each containing exactly GROUP_SIZE MessageGroups.
         """
-        level_1_groups = self.get_summarized_groups(channel_id, 1)
+        clear_point = self.get_clear_point(channel_id) or 0
+        level_1_groups = [
+            g
+            for g in self.get_summarized_groups(channel_id, 1)
+            if g.start_message_id > clear_point and g.summary_text.strip()
+        ]
 
         if len(level_1_groups) < GROUP_SIZE:
             return []

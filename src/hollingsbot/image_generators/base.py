@@ -3,7 +3,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import Final
 
-__all__: Final = ["ImageGeneratorAPI"]
+__all__: Final = ["ImageGenerationError", "ImageGeneratorAPI"]
+
+
+class ImageGenerationError(RuntimeError):
+    """The generator finished without producing a usable image."""
 
 
 class ImageGeneratorAPI(ABC):

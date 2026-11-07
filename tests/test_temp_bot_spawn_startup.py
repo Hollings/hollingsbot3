@@ -107,6 +107,9 @@ def test_avatar_is_available_when_bot_is_recalled(tmp_path, monkeypatch):
 async def test_first_reply_waits_for_avatar_while_text_generates(monkeypatch):
     bot_manager = object.__new__(manager.TempBotManager)
     bot_manager.bot = MagicMock()
+    bot_manager._opening_tasks = {}
+    bot_manager._generating_webhooks = set()
+    bot_manager._cleanup_temp_bot = AsyncMock()
     webhook = MagicMock()
     webhook.send = AsyncMock()
     bot_manager.bot.fetch_webhook = AsyncMock(return_value=webhook)
@@ -127,16 +130,23 @@ async def test_first_reply_waits_for_avatar_while_text_generates(monkeypatch):
         await avatar_done.wait()
 
     bot_manager._generate_response = make_reply
-    monkeypatch.setattr(manager, "decrement_temp_bot_replies", lambda _id: (2, False))
+    monkeypatch.setattr(manager, "decrement_temp_bot_replies", lambda _id: (0, True))
+    monkeypatch.setattr(manager, "get_channel_clear_point", lambda _id: None)
+    monkeypatch.setattr(manager, "get_depleted_temp_bots", lambda: [{"webhook_id": 123}])
+    monkeypatch.setattr(manager, "get_pending_temp_bot_cleanup", list)
     avatar_task = asyncio.create_task(make_avatar())
     response_task = asyncio.create_task(
         bot_manager._send_initial_response(MagicMock(), 123, "Captain Fern", "a captain", 456, avatar_task=avatar_task)
     )
 
     await asyncio.wait_for(text_started.wait(), 1)
+    await bot_manager.cleanup_task()
+    bot_manager._cleanup_temp_bot.assert_not_awaited()
     allow_text.set()
     await asyncio.sleep(0)
     webhook.send.assert_not_awaited()
     avatar_done.set()
     await response_task
     webhook.send.assert_awaited_once_with("Hello!", username="Captain Fern", wait=True)
+    bot_manager._cleanup_temp_bot.assert_awaited_once_with(123, "Captain Fern", send_depletion_message=True)
+    assert not bot_manager._opening_tasks

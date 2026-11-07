@@ -19,11 +19,14 @@ from hollingsbot.cogs import chat_utils
 from hollingsbot.cogs.conversation import ConversationTurn, ModelTurn
 from hollingsbot.image_generators import generate_avatar
 from hollingsbot.prompt_db import (
+    begin_temp_bot_cleanup,
     create_temp_bot,
     decrement_temp_bot_replies,
-    delete_temp_bot,
+    finish_temp_bot_cleanup,
+    get_channel_clear_point,
     get_depleted_temp_bots,
     get_messages_since_bot_left,
+    get_pending_temp_bot_cleanup,
     get_temp_bot_by_name,
     get_temp_bot_by_webhook_id,
     get_temp_bot_previous_messages,
@@ -123,6 +126,9 @@ class TempBotManager:
 
         # Track webhook_ids with active generations (to prevent cleanup during generation)
         self._generating_webhooks: set[int] = set()
+        self._opening_tasks: dict[int, tuple[int, asyncio.Task]] = {}
+        self._cleaning_webhooks: set[int] = set()
+        self._spawn_locks: dict[int, asyncio.Lock] = {}
 
         # Track cancellation counts per channel (reset on successful post)
         self._cancellation_counts: dict[int, int] = {}
@@ -141,6 +147,7 @@ class TempBotManager:
     async def aclose(self) -> None:
         self.cleanup_task.cancel()
         pending = [job.task for job in self._active_generations.values() if job.task is not None]
+        pending.extend(task for _, task in self._opening_tasks.values())
         cleanup = self.cleanup_task.get_task()
         if cleanup is not None:
             pending.append(cleanup)
@@ -190,7 +197,9 @@ class TempBotManager:
         _LOG.info(f"TempBotManager received message from {message.author}: {message.content[:50]}...")
 
         channel_id = message.channel.id
-        temp_bots = get_temp_bots_for_channel(channel_id)
+        temp_bots = [
+            bot for bot in get_temp_bots_for_channel(channel_id) if bot["webhook_id"] not in self._opening_tasks
+        ]
 
         if not temp_bots:
             # No temp bots in this channel
@@ -592,6 +601,9 @@ class TempBotManager:
                 # Strip !despawn from the response
                 response_text = _DESPAWN_RE.sub("", response_text).strip()
                 _LOG.info(f"Temp bot '{bot_name}' requested self-despawn")
+                if not response_text:
+                    await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
+                    return None
 
             # Wait for human to finish typing (if applicable)
             await self._wait_for_typing_to_clear(channel_id)
@@ -602,8 +614,15 @@ class TempBotManager:
             chunks = _chunk_message(response_text)
             sent_message = await webhook.send(chunks[0], username=bot_name, wait=True)
             message_sent = True
+            delivered = [chunks[0]]
             for extra_chunk in chunks[1:]:
-                await webhook.send(extra_chunk, username=bot_name, wait=True)
+                try:
+                    await webhook.send(extra_chunk, username=bot_name, wait=True)
+                except discord.HTTPException:
+                    _LOG.warning("Temp bot '%s' delivered only part of its reply", bot_name, exc_info=True)
+                    break
+                delivered.append(extra_chunk)
+            response_text = "\n".join(delivered)
             _LOG.info(f"Temp bot '{bot_name}' sent message successfully")
 
             # Reset cancellation count on successful post
@@ -674,13 +693,22 @@ class TempBotManager:
             # forever, so deactivate the bot instead.
             _LOG.warning("Webhook %s for temp bot '%s' is gone (%s); deactivating", webhook_id, bot_name, exc)
             with suppress(Exception):
-                delete_temp_bot(webhook_id)
+                begin_temp_bot_cleanup(webhook_id)
+                if isinstance(exc, discord.NotFound):
+                    finish_temp_bot_cleanup(webhook_id)
             return None
         except Exception:
             _LOG.exception(f"Failed to generate response for temp bot '{bot_name}'")
             if not message_sent:
                 increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
-            return None
+                return None
+            # Delivery is terminal for routing, even if logging or cleanup failed.
+            return {
+                "message_id": sent_message.id,
+                "text": "\n".join(delivered),
+                "webhook_id": webhook_id,
+                "bot_name": bot_name,
+            }
         finally:
             # Remove from generating set (allows cleanup to proceed)
             self._generating_webhooks.discard(webhook_id)
@@ -746,6 +774,14 @@ class TempBotManager:
             self._cancellation_counts[channel_id],
         )
         return True
+
+    async def _cancel_openings(self, channel_id: int) -> None:
+        """Drop spawn/recall replies built before an explicit channel clear."""
+        pending = [task for cid, task in self._opening_tasks.values() if cid == channel_id and not task.done()]
+        if pending:
+            for task in pending:
+                task.cancel()
+            await asyncio.wait(pending, timeout=0.1)
 
     async def _wait_for_typing_to_clear(self, channel_id: int) -> None:
         """Wait for human typing to stop before sending response.
@@ -840,7 +876,11 @@ class TempBotManager:
         bot_name: str,
         send_depletion_message: bool = False,
         is_recall: bool = False,
-    ) -> None:
+        *,
+        retry: bool = False,
+        summarize: bool = True,
+        require_depleted: bool = False,
+    ) -> bool:
         """Clean up a depleted temp bot.
 
         Args:
@@ -856,60 +896,67 @@ class TempBotManager:
         channel_id = bot_info.get("channel_id") if bot_info else None
         spawn_prompt = bot_info.get("spawn_prompt", "") if bot_info else ""
 
-        # Mark inactive FIRST, before any await that could be cancelled.
-        # If a new message arrives mid-cleanup, _cancel_generation will try to
-        # increment_temp_bot_replies as a refund - but that query has
-        # `WHERE is_active = 1`, so the refund becomes a no-op once we're inactive.
-        # Without this, the bot can be revived mid-cleanup and respond forever.
-        delete_temp_bot(webhook_id)
-
+        if webhook_id in self._cleaning_webhooks:
+            return False
+        # Persist removal intent before Discord I/O. A refund must not revive
+        # the bot, and a failed or cancelled delete must stay visible to reaper.
+        started = begin_temp_bot_cleanup(webhook_id, require_depleted=require_depleted)
+        if not (started or retry):
+            return False
+        self._cleaning_webhooks.add(webhook_id)
         try:
-            webhook = await self.bot.fetch_webhook(webhook_id)
+            try:
+                webhook = await self.bot.fetch_webhook(webhook_id)
+                if started and send_depletion_message:
+                    try:
+                        await webhook.send(departure_message(bot_name), username=bot_name)
+                    except discord.HTTPException:
+                        _LOG.warning("Failed to send departure message for %s", bot_name)
+                await webhook.delete(reason="Temporary bot deactivated")
+            except discord.NotFound:
+                pass  # Discord already removed the webhook.
+            except discord.HTTPException:
+                _LOG.warning("Could not remove temp bot webhook %s; will retry", webhook_id, exc_info=True)
+                return False
 
-            # Send departure message if requested
-            if send_depletion_message:
-                try:
-                    await webhook.send(
-                        departure_message(bot_name),
-                        username=bot_name,
-                    )
-                except Exception:
-                    _LOG.warning(f"Failed to send departure message for {bot_name}")
-
-            await webhook.delete(reason="Temp bot depleted all replies")
-            _LOG.info(f"Auto-despawned temp bot '{bot_name}'")
-        except (discord.NotFound, discord.Forbidden):
-            _LOG.warning(f"Failed to delete webhook {webhook_id}, removing from DB anyway")
-
-        # Generate and save conversation summary
-        if channel_id:
-            _LOG.info(f"Generating conversation summary for '{bot_name}'...")
-            summary = await generate_conversation_summary(channel_id, bot_name, spawn_prompt)
-            if summary:
-                await save_conversation_summary(webhook_id, summary, append=is_recall)
+            finish_temp_bot_cleanup(webhook_id)
+            _LOG.info("Removed temp bot webhook %s", webhook_id)
+            if summarize and channel_id:
+                summary = await generate_conversation_summary(channel_id, bot_name, spawn_prompt)
+                if summary:
+                    await save_conversation_summary(webhook_id, summary, append=is_recall)
+            return True
+        finally:
+            self._cleaning_webhooks.discard(webhook_id)
 
     @tasks.loop(seconds=CLEANUP_INTERVAL_SECONDS)
     async def cleanup_task(self) -> None:
         """Periodically clean up depleted temp bots."""
         try:
-            depleted_bots = get_depleted_temp_bots()
-            if not depleted_bots:
-                return
-
-            _LOG.info(f"Found {len(depleted_bots)} depleted temp bot(s), cleaning up...")
-
-            for bot_info in depleted_bots:
+            pending = {bot["webhook_id"]: bot for bot in get_pending_temp_bot_cleanup()}
+            candidates = {bot["webhook_id"]: bot for bot in get_depleted_temp_bots()} | pending
+            for bot_info in candidates.values():
                 webhook_id = bot_info["webhook_id"]
                 bot_name = bot_info.get("name", "Unknown")
 
                 # Skip bots that are actively generating a response
-                if webhook_id in self._generating_webhooks:
+                if webhook_id in self._generating_webhooks or webhook_id in self._opening_tasks:
                     _LOG.info(f"Skipping cleanup for '{bot_name}' - generation in progress")
                     continue
 
                 # Check if this was a recalled bot (has existing summary)
                 is_recall = bool(bot_info.get("conversation_summary"))
-                await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True, is_recall=is_recall)
+                try:
+                    await self._cleanup_temp_bot(
+                        webhook_id,
+                        bot_name,
+                        send_depletion_message=True,
+                        is_recall=is_recall,
+                        retry=webhook_id in pending,
+                        require_depleted=True,
+                    )
+                except Exception:
+                    _LOG.exception("Temp bot webhook %s cleanup failed; continuing with other candidates", webhook_id)
 
         except Exception:
             _LOG.exception("Error in temp bot cleanup task")
@@ -933,6 +980,40 @@ class TempBotManager:
             _LOG.info("Avatar set for '%s' (%d bytes)", bot_name, len(avatar_bytes))
         except Exception:
             _LOG.exception("Failed to set avatar for '%s'", bot_name)
+
+    async def _register_temp_webhook(
+        self,
+        ctx: commands.Context,
+        bot_name: str,
+        avatar_bytes: bytes,
+        prompt: str,
+        replies: int,
+        *,
+        reason: str,
+    ) -> discord.Webhook | None:
+        """Reserve a channel slot through webhook creation and DB registration."""
+        channel = ctx.channel
+        async with self._spawn_locks.setdefault(channel.id, asyncio.Lock()):
+            if len(get_temp_bots_for_channel(channel.id)) >= MAX_TEMP_BOTS_PER_CHANNEL:
+                await ctx.send(f"This channel already has {MAX_TEMP_BOTS_PER_CHANNEL} temp bots active.")
+                return None
+            webhook = await channel.create_webhook(name=f"TempBot-{bot_name}", avatar=avatar_bytes, reason=reason)
+            try:
+                create_temp_bot(
+                    channel_id=channel.id,
+                    webhook_id=webhook.id,
+                    name=bot_name,
+                    avatar_url=None,
+                    spawn_prompt=prompt,
+                    replies_remaining=replies,
+                    spawn_message_id=ctx.message.id,
+                    avatar_bytes=avatar_bytes,
+                )
+            except Exception:
+                with suppress(discord.HTTPException):
+                    await webhook.delete(reason="Temp bot registration failed")
+                raise
+            return webhook
 
     async def handle_spawn_command(
         self,
@@ -1036,24 +1117,16 @@ class TempBotManager:
                     # Give the webhook a local avatar immediately. The generated
                     # portrait replaces it before the first reply when available.
                     avatar_bytes = fallback_avatar(bot_name)
-                    webhook = await ctx.channel.create_webhook(
-                        name=f"TempBot-{bot_name}",
-                        avatar=avatar_bytes,
+                    webhook = await self._register_temp_webhook(
+                        ctx,
+                        bot_name,
+                        avatar_bytes,
+                        initial_prompt,
+                        reply_count,
                         reason=f"Temporary LLM bot spawned by {ctx.author}",
                     )
-
-                    # Store the fallback so recalls have a picture even when
-                    # Replicate is unavailable. A successful portrait replaces it.
-                    create_temp_bot(
-                        channel_id=ctx.channel.id,
-                        webhook_id=webhook.id,
-                        name=bot_name,
-                        avatar_url=None,
-                        spawn_prompt=initial_prompt,
-                        replies_remaining=reply_count,
-                        spawn_message_id=spawn_message_id,
-                        avatar_bytes=avatar_bytes,
-                    )
+                    if webhook is None:
+                        return
 
                     _LOG.info(
                         f"Spawned temp bot '{bot_name}' (webhook_id={webhook.id}) "
@@ -1112,12 +1185,31 @@ class TempBotManager:
             recall_context: Optional dict with recall info (previous_messages, messages_missed, conversation_summary)
         """
         message_sent = False
+        reserved = False
+        task = asyncio.current_task()
+        assert task is not None
+        self._opening_tasks[webhook_id] = (channel.id, task)
         try:
+            cutoff = get_channel_clear_point(channel.id)
+            if cutoff is not None:
+                if spawn_message_id is not None and spawn_message_id <= cutoff:
+                    return  # A clear superseded this command during webhook setup.
+                initial_context = [
+                    turn for turn in initial_context or [] if turn.message_id is not None and turn.message_id > cutoff
+                ]
+                if recall_context is not None:
+                    # The caller took its snapshot before creating the webhook.
+                    recall_context = {
+                        "previous_messages": get_temp_bot_previous_messages(channel.id, bot_name, limit=5),
+                        "messages_missed": get_messages_since_bot_left(channel.id, bot_name),
+                        "conversation_summary": None,
+                    }
             # Decrement reply count first (atomic operation)
             remaining, should_cleanup = decrement_temp_bot_replies(webhook_id)
             if remaining < 0:
                 _LOG.warning(f"Temp bot '{bot_name}' depleted before initial response")
                 return
+            reserved = True
 
             # Use initial_context if provided, otherwise empty
             context_history = initial_context or []
@@ -1155,6 +1247,9 @@ class TempBotManager:
                 # Strip !despawn from the response
                 response_text = _DESPAWN_RE.sub("", response_text).strip()
                 _LOG.info(f"Temp bot '{bot_name}' requested self-despawn in initial response")
+                if not response_text:
+                    await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
+                    return
 
             # Send via webhook (coordinator will add to history automatically via on_message)
             webhook = await self.bot.fetch_webhook(webhook_id)
@@ -1162,7 +1257,11 @@ class TempBotManager:
             await webhook.send(chunks[0], username=bot_name, wait=True)
             message_sent = True
             for extra_chunk in chunks[1:]:
-                await webhook.send(extra_chunk, username=bot_name, wait=True)
+                try:
+                    await webhook.send(extra_chunk, username=bot_name, wait=True)
+                except discord.HTTPException:
+                    _LOG.warning("Temp bot '%s' delivered only part of its opening reply", bot_name, exc_info=True)
+                    break
 
             _LOG.info(f"Temp bot '{bot_name}' sent initial response ({remaining} replies remaining)")
 
@@ -1182,17 +1281,23 @@ class TempBotManager:
                 # Bot depleted (determined atomically at decrement time)
                 await self._cleanup_temp_bot(webhook_id, bot_name, send_depletion_message=True)
 
+        except asyncio.CancelledError:
+            if reserved and not message_sent:
+                increment_temp_bot_replies(webhook_id)
+            raise
         except (discord.NotFound, discord.Forbidden) as exc:
             # Webhook already deleted - deactivate instead of refunding, or the
             # bot would sit broken (and billing generations) forever.
             _LOG.warning("Webhook %s for temp bot '%s' is gone (%s); deactivating", webhook_id, bot_name, exc)
             with suppress(Exception):
-                delete_temp_bot(webhook_id)
+                begin_temp_bot_cleanup(webhook_id)
+                if isinstance(exc, discord.NotFound):
+                    finish_temp_bot_cleanup(webhook_id)
             with suppress(Exception):
                 await channel.send(f"**{bot_name}** spawned but its webhook disappeared, so it was removed.")
         except Exception:
             _LOG.exception(f"Failed to send initial response for temp bot '{bot_name}'")
-            if not message_sent:
+            if reserved and not message_sent:
                 with suppress(Exception):
                     increment_temp_bot_replies(webhook_id)  # Refund - nothing was sent
                 with suppress(Exception):
@@ -1200,6 +1305,8 @@ class TempBotManager:
                         f"**{bot_name}** couldn't send its first message. It's still around - "
                         f"say something to give it another shot, or remove it with `!despawn {bot_name}`."
                     )
+        finally:
+            self._opening_tasks.pop(webhook_id, None)
 
     async def handle_despawn_command(self, ctx: commands.Context, name: str | None = None) -> None:
         """Manually remove temporary bots.
@@ -1233,30 +1340,28 @@ class TempBotManager:
             temp_bots = matched
 
         despawned = []
-        failed = []
+        pending = []
 
         for bot in temp_bots:
             webhook_id = bot["webhook_id"]
             bot_name = bot["name"]
 
-            try:
-                webhook = await self.bot.fetch_webhook(webhook_id)
-                await webhook.delete(reason=f"Manual despawn by {ctx.author}")
-                delete_temp_bot(webhook_id)
+            opening = self._opening_tasks.get(webhook_id)
+            if opening is not None:
+                opening[1].cancel()
+            active = self._active_generations.get(ctx.channel.id)
+            if active is not None and active.webhook_id == webhook_id and active.task is not None:
+                active.task.cancel()
+            if await self._cleanup_temp_bot(webhook_id, bot_name, summarize=False):
                 despawned.append(bot_name)
-                _LOG.info(f"Despawned temp bot '{bot_name}' (webhook_id={webhook_id}) from channel {ctx.channel.id}")
-            except discord.NotFound:
-                delete_temp_bot(webhook_id)
-                despawned.append(bot_name)
-            except (discord.Forbidden, discord.HTTPException):
-                _LOG.exception(f"Failed to despawn {bot_name}")
-                failed.append(bot_name)
+            else:
+                pending.append(bot_name)
 
         # Send result
         if despawned:
             await ctx.send(f"Despawned: {', '.join(f'**{name}**' for name in despawned)}")
-        if failed:
-            await ctx.send(f"Failed to despawn: {', '.join(f'**{name}**' for name in failed)}")
+        if pending:
+            await ctx.send(f"Deactivated; webhook removal pending: {', '.join(f'**{name}**' for name in pending)}")
 
     async def handle_recall_command(
         self,
@@ -1288,6 +1393,12 @@ class TempBotManager:
         spawn_prompt = bot_data["spawn_prompt"]
         avatar_bytes = bot_data.get("avatar_bytes") or fallback_avatar(bot_name)
         conversation_summary = bot_data.get("conversation_summary")
+        if conversation_summary and (
+            get_channel_clear_point(ctx.channel.id)
+            or (bot_data.get("channel_id") and get_channel_clear_point(bot_data["channel_id"]))
+        ):
+            # Legacy summary text carries no message IDs to prove it is post-clear.
+            conversation_summary = None
 
         # Temp bots should only see messages from their spawn point forward
         spawn_message_id = ctx.message.id
@@ -1309,23 +1420,16 @@ class TempBotManager:
 
         try:
             # Create webhook with stored avatar if available
-            webhook = await ctx.channel.create_webhook(
-                name=f"TempBot-{bot_name}",
-                avatar=avatar_bytes,
+            webhook = await self._register_temp_webhook(
+                ctx,
+                bot_name,
+                avatar_bytes,
+                spawn_prompt,
+                reply_count,
                 reason=f"Temp bot recalled by {ctx.author}",
             )
-
-            # Register in database
-            create_temp_bot(
-                channel_id=ctx.channel.id,
-                webhook_id=webhook.id,
-                name=bot_name,
-                avatar_url=None,
-                spawn_prompt=spawn_prompt,
-                replies_remaining=reply_count,
-                spawn_message_id=spawn_message_id,
-                avatar_bytes=avatar_bytes,
-            )
+            if webhook is None:
+                return
 
             _LOG.info(
                 f"Recalled temp bot '{bot_name}' (webhook_id={webhook.id}) "

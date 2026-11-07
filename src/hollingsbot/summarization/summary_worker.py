@@ -63,6 +63,11 @@ class SummaryWorker:
             level: The summary level (1 for messages, 2 for level-1 groups).
             items: Either a list of CachedMessage (level 1) or MessageGroup (level 2+).
         """
+        # A clear may have occurred since the scheduler fetched this batch.
+        clear_point = await asyncio.to_thread(self.cache.get_clear_point, channel_id) or 0
+        start_id = items[0].message_id if level == 1 else items[0].start_message_id
+        if start_id <= clear_point:
+            return
         if level == 1:
             messages = items
             summary_text = await self.summarizer.summarize_messages(messages)
@@ -94,7 +99,9 @@ class SummaryWorker:
             start_timestamp=start_timestamp,
             end_timestamp=end_timestamp,
         )
-        await asyncio.to_thread(self.cache.save_message_group, group)
+        saved = await asyncio.to_thread(self.cache.save_message_group, group)
+        if not saved:
+            return  # The database rejects stale results atomically with insertion.
 
         _LOG.info(
             "Generated level-%d summary for channel %d: messages %d-%d (%d total)",

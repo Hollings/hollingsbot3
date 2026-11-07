@@ -6,14 +6,16 @@ from unittest.mock import Mock
 
 import pytest
 
-from hollingsbot import tasks
+from hollingsbot import prompt_db, tasks
 from hollingsbot.text_generators import client_cache
+from hollingsbot.utils.celery_utils import RemoteOutcomeUnknown
 
 
 @pytest.fixture
 def worker(monkeypatch, tmp_path):
     status = Mock()
-    monkeypatch.setattr(tasks, "update_status", status)
+    monkeypatch.setattr(tasks, "begin_image_attempt", Mock(return_value=7))
+    monkeypatch.setattr(tasks, "finish_image_attempt", status)
     monkeypatch.setattr(tasks, "OUTPUT_DIR", tmp_path)
     monkeypatch.setattr(tasks, "log_llm_api_call", Mock())
     return status
@@ -39,11 +41,11 @@ def test_image_cleanup_runs_on_generation_loop(worker, monkeypatch, outcome):
     if outcome == b"image":
         path = tasks.generate_image.run(1, "fake", "model", "hi")
         assert Path(path).read_bytes() == b"image"
-        assert worker.call_args.args == (1, "completed")
+        assert worker.call_args.args == (7, "generated")
     else:
-        with pytest.raises(RuntimeError):
+        with pytest.raises((RuntimeError, RemoteOutcomeUnknown)):
             tasks.generate_image.run(1, "fake", "model", "hi", timeout=0.01)
-        assert worker.call_args.args[1].startswith("failed:")
+        assert worker.call_args.args[1] == ("outcome_unknown" if outcome == "timeout" else "failed")
     assert len(loops) == 2 and loops[0] is loops[1]
 
 
@@ -65,7 +67,35 @@ def test_image_failures_always_update_status(worker, monkeypatch, failure):
     monkeypatch.setattr(tasks, "get_image_generator", factory)
     with pytest.raises((ValueError, RuntimeError, OSError)):
         tasks.generate_image.run(1, "fake", "model", "hi")
-    assert worker.call_args.args[1].startswith("failed:")
+    assert worker.call_args.args == (7, "failed")
+
+
+def test_replayed_worker_task_does_not_call_provider_and_records_actual_model(monkeypatch, tmp_path):
+    monkeypatch.setattr(prompt_db, "DB_PATH", tmp_path / "prompts.db")
+    monkeypatch.setattr(tasks, "OUTPUT_DIR", tmp_path)
+    provider = Mock()
+
+    class Generator:
+        async def generate(self, prompt):
+            provider(prompt)
+            return b"image"
+
+        async def aclose(self):
+            pass
+
+    monkeypatch.setattr(tasks, "get_image_generator", lambda *_args, **_kwargs: Generator())
+    prompt_id = prompt_db.bulk_add_prompts(["hi"], "1", "fake", "primary", request_message_id=1)[0]
+    tasks.generate_image.push_request(id="original-task")
+    try:
+        tasks.generate_image.run(prompt_id, "fake", "fallback", "hi")
+        with pytest.raises(RemoteOutcomeUnknown, match="already ran"):
+            tasks.generate_image.run(prompt_id, "fake", "fallback", "hi")
+    finally:
+        tasks.generate_image.pop_request()
+    provider.assert_called_once_with("hi")
+    with prompt_db._connect() as conn:
+        assert conn.execute("SELECT model, status FROM image_attempts").fetchall() == [("fallback", "generated")]
+        assert conn.execute("SELECT status FROM prompts").fetchone() == ("queued",)
 
 
 @pytest.mark.parametrize("chat", [False, True])

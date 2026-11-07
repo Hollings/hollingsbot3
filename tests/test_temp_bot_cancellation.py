@@ -15,6 +15,7 @@ def manager():
     bot.bot = SimpleNamespace(fetch_webhook=AsyncMock())
     bot._active_generations = {}
     bot._generating_webhooks = {99}
+    bot._opening_tasks = {}
     bot._cancellation_counts = {}
     bot.debug_log_store = Mock()
     bot._wait_for_typing_to_clear = AsyncMock()

@@ -225,7 +225,7 @@ class CostTracker:
         )
         return (False, error_msg)
 
-    def deduct_cost(self, user_id: int, cost: float) -> None:
+    def deduct_cost(self, user_id: int, cost: float, *, prompt_id: int | None = None) -> None:
         """Deduct cost from user's free budget and/or credits.
 
         This should only be called after a successful generation.
@@ -233,6 +233,7 @@ class CostTracker:
         Args:
             user_id: Discord user ID
             cost: Cost to deduct in dollars
+            prompt_id: Delivered variant ID; when supplied, settle only once.
 
         Raises:
             ValueError: If cost is negative or not a valid number
@@ -247,6 +248,20 @@ class CostTracker:
             conn.execute("BEGIN IMMEDIATE")
 
             try:
+                if prompt_id is not None:
+                    inserted = conn.execute(
+                        "INSERT OR IGNORE INTO image_settlements (prompt_id, user_id, cost) VALUES (?, ?, ?)",
+                        (prompt_id, user_id, cost),
+                    )
+                    if not inserted.rowcount:
+                        return
+                    updated = conn.execute(
+                        "UPDATE prompts SET status = 'delivered' WHERE id = ? AND status = 'delivering'",
+                        (prompt_id,),
+                    )
+                    if not updated.rowcount:
+                        raise RuntimeError("Image variant was not awaiting delivery settlement.")
+
                 # Update hourly budget and get current balance
                 current_budget = self._update_hourly_budget(user_id, conn)
 

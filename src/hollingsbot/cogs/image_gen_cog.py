@@ -24,10 +24,11 @@ import os
 import random
 import re
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from weakref import WeakValueDictionary
 
 import discord
 import emoji
@@ -40,7 +41,7 @@ from hollingsbot.prompt_db import bulk_add_prompts, init_db
 from hollingsbot.settings import parse_id_set
 from hollingsbot.tasks import generate_image  # celery task
 from hollingsbot.text_generators import get_text_generator
-from hollingsbot.utils.celery_utils import run_task
+from hollingsbot.utils.celery_utils import RemoteOutcomeUnknown, run_task
 from hollingsbot.utils.image_utils import compress_image_to_fit
 from hollingsbot.utils.outpaint_utils import create_outpaint_images
 
@@ -170,6 +171,12 @@ class GeneratorSpec:
     fallback: GeneratorSpec | None = None  # Tried if this generator raises (refusal, timeout, API error)
 
 
+@dataclass
+class _ImageRequestProgress:
+    prompt_ids: list[int] = field(default_factory=list)
+    working_reactions: set[str] = field(default_factory=lambda: {THINKING})
+
+
 _SPEC_KNOWN_KEYS = frozenset({"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"})
 
 
@@ -288,7 +295,7 @@ class ImageGenCog(commands.Cog):
 
         self._run_task = task_runner or self._default_celery_runner
         self._pending: set[asyncio.Task[None]] = set()
-        self._user_generation_locks: dict[int, asyncio.Lock] = {}
+        self._user_generation_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
     def _reload_config(self) -> None:
         if self._cfg_path is None:
@@ -819,13 +826,17 @@ class ImageGenCog(commands.Cog):
         """
         path = Path(item)
         if path.exists():
-            data = path.read_bytes()
-            try:
-                path.unlink(missing_ok=True)
-            except Exception:
-                _log.debug("Temp image %s could not be deleted", path)
-            return data
+            return path.read_bytes()
         return base64.b64decode(item)
+
+    @staticmethod
+    def _discard_generation_results(items: list[str]) -> None:
+        for item in items:
+            path = Path(item)
+            # Base64 results also go through this path; only unlink files.
+            with suppress(OSError):
+                if path.is_absolute() and path.is_file():
+                    path.unlink()
 
     async def _execute_generation_tasks(
         self,
@@ -870,19 +881,28 @@ class ImageGenCog(commands.Cog):
                 aspect_ratio=aspect_ratio,
                 model_options=active.model_options,
             )
-            if isinstance(result, list):
-                return [self._load_generation_result(x) for x in result]
-            return [self._load_generation_result(result)]
+            items = result if isinstance(result, list) else [result]
+            try:
+                images = [self._load_generation_result(item) for item in items]
+                if not images or not all(images):
+                    raise ValueError("Empty image artifacts")
+                return images
+            except Exception as exc:
+                raise RemoteOutcomeUnknown("The image job returned, but its files could not be retrieved.") from exc
+            finally:
+                self._discard_generation_results(items)
 
         async def _launch_single(prompt_id: int, prompt: str) -> tuple[str, list[bytes]] | Exception:
             # Walk the fallback chain: primary first, then each configured fallback
-            # in turn. Refusals, timeouts and API errors all surface as exceptions,
-            # so any failure hands the same job to the next generator.
+            # in turn. An unknown outcome is not a terminal provider failure;
+            # it must not launch another paid prediction.
             active: GeneratorSpec | None = spec
             last_exc: Exception | None = None
             while active is not None:
                 try:
                     return prompt, await _run_with_spec(prompt_id, prompt, active)
+                except (RemoteOutcomeUnknown, asyncio.TimeoutError, TimeoutError) as exc:
+                    return exc
                 except Exception as exc:
                     last_exc = exc
                     if active.fallback is not None:
@@ -976,6 +996,9 @@ class ImageGenCog(commands.Cog):
         seed: int,
         skip_caption: bool,
         reply_target: discord.Message,
+        *,
+        prompt_ids: list[int] | None = None,
+        price_per_variant: float | None = None,
     ) -> int:
         """
         Process generation results and send them to Discord.
@@ -999,14 +1022,21 @@ class ImageGenCog(commands.Cog):
         limit_bytes = int(guild_limit) if guild_limit else _DEFAULT_FILESIZE_LIMIT
         limit_bytes = max(1, limit_bytes)
 
-        for prompt_variant, result in zip(prompts, results, strict=False):
+        for index, (prompt_variant, result) in enumerate(zip(prompts, results, strict=False)):
+            prompt_id = prompt_ids[index] if prompt_ids is not None else None
+
+            def mark(status: str, prompt_id: int | None = prompt_id) -> bool:
+                return prompt_id is None or prompt_db.transition_image_prompt(prompt_id, status)
+
             if isinstance(result, Exception):
-                _log.exception("Generation failed for %r: %s", prompt_variant, result)
+                _log.error("Generation failed for %r: %s", prompt_variant, result, exc_info=result)
                 # Tell the user what happened - a bare X reaction after a long
                 # wait gives them nothing to act on.
-                if isinstance(result, TimeoutError):
-                    detail = "the image service took too long to respond. Try again in a minute."
+                if isinstance(result, RemoteOutcomeUnknown | asyncio.TimeoutError | TimeoutError):
+                    mark("outcome_unknown")
+                    detail = "the image service did not confirm the result. No credit was deducted for this result."
                 else:
+                    mark("failed")
                     detail = "the image service returned an error. Try rewording your prompt or try again."
                 await self._send_error_message(
                     message,
@@ -1016,6 +1046,8 @@ class ImageGenCog(commands.Cog):
                 continue
 
             prompt_text, images_bytes = result
+            files: list[discord.File] = []
+            sending = False
             try:
                 # Captioning + compression can run dozens of PIL encodes; keep
                 # that CPU work off the event loop.
@@ -1029,16 +1061,34 @@ class ImageGenCog(commands.Cog):
                     )
 
                 # Send files
+                if not mark("delivering"):
+                    continue  # Closed by recovery; never send from a terminal state.
+                sending = True
                 if skip_caption:  # Edit/outpaint mode
                     await reply_target.reply(files=files, mention_author=False)
                 else:  # Regular generation
                     await message.channel.send(files=files)
                 delivered += 1
+                # Settle immediately after acknowledgement, before awaiting
+                # the next variant. The debit and delivered state share a DB transaction.
+                if prompt_id is not None and price_per_variant is not None:
+                    try:
+                        self._cost_tracker.deduct_cost(message.author.id, price_per_variant, prompt_id=prompt_id)
+                    except Exception:
+                        _log.exception("Could not settle delivered image variant %s", prompt_id)
+                        # Discord has the image; do not report it as failed or resend it.
+                        with suppress(Exception):
+                            mark("outcome_unknown")
 
             except Exception as exc:
                 _log.exception("Post-processing failed: %s", exc)
+                definite_rejection = isinstance(exc, discord.HTTPException) and 400 <= exc.status < 500
+                mark("outcome_unknown" if sending and not definite_rejection else "failed")
                 error_msg = f"Image post-processing failed for **{prompt_variant[:200]}**:\n> {str(exc)[:500]}"
                 await self._send_error_message(message, error_msg, reply_to=reply_target if skip_caption else None)
+            finally:
+                for file in files:
+                    file.close()
 
         return delivered
 
@@ -1056,7 +1106,6 @@ class ImageGenCog(commands.Cog):
                 await self._generate_for_user(message, raw_prompt, spec)
             except Exception:
                 _log.exception("Image generation failed for message %s", message.id)
-                await self._react(message, THINKING, remove=True)
                 await self._react(message, FAILURE)
                 await self._send_error_message(message, "Image generation failed. Please try again.")
 
@@ -1065,6 +1114,27 @@ class ImageGenCog(commands.Cog):
         message: discord.Message,
         raw_prompt: str,
         spec: GeneratorSpec,
+    ) -> None:
+        if prompt_db.image_request_exists(message.id):
+            return
+        progress = _ImageRequestProgress()
+        try:
+            await self._run_image_request(message, raw_prompt, spec, progress)
+        finally:
+            if progress.prompt_ids:
+                try:
+                    prompt_db.abandon_image_prompts(progress.prompt_ids)
+                except Exception:
+                    _log.exception("Could not close unfinished image variants for %s", message.id)
+            for emoji in progress.working_reactions:
+                await self._react(message, emoji, remove=True)
+
+    async def _run_image_request(
+        self,
+        message: discord.Message,
+        raw_prompt: str,
+        spec: GeneratorSpec,
+        progress: _ImageRequestProgress,
     ) -> None:
         """
         Handle the complete image generation workflow.
@@ -1171,13 +1241,19 @@ class ImageGenCog(commands.Cog):
             await self._send_error_message(message, error_msg)
             return
 
-        # Record prompt for tracking (no rate limiting)
+        # Claim this Discord request and its variants together. A replay must
+        # not submit another paid job or send the same reply twice.
+        prompt_db.recover_stale_image_jobs()
         prompt_ids = bulk_add_prompts(
             prompts,
             str(message.author.id),
             spec.api,
             spec.model,
+            request_message_id=message.id,
         )
+        progress.prompt_ids = prompt_ids
+        if not prompt_ids:
+            return
 
         # For models that support aspect ratio (non-edit), get dynamic aspect ratio from Claude
         aspect_ratio_override: str | None = None
@@ -1194,6 +1270,9 @@ class ImageGenCog(commands.Cog):
 
         # Execute generation tasks (as a task so the thematic-emoji swap below
         # happens while generation runs, not before it)
+        for prompt_id in prompt_ids:
+            if not prompt_db.transition_image_prompt(prompt_id, "generating"):
+                raise RemoteOutcomeUnknown("This image request is no longer active.")
         generation_task = asyncio.create_task(
             self._execute_generation_tasks(
                 prompt_ids,
@@ -1214,8 +1293,10 @@ class ImageGenCog(commands.Cog):
             with suppress(Exception):
                 themed = await thematic_emoji_task
                 if themed and themed != working_emoji:
+                    progress.working_reactions.add(themed)
                     await self._react(message, themed)
                     await self._react(message, working_emoji, remove=True)
+                    progress.working_reactions.discard(working_emoji)
                     working_emoji = themed
 
             results = await generation_task
@@ -1226,6 +1307,9 @@ class ImageGenCog(commands.Cog):
             await asyncio.gather(generation_task, thematic_emoji_task, return_exceptions=True)
 
         # Process and send results
+        for prompt_id, result in zip(prompt_ids, results, strict=False):
+            if not isinstance(result, Exception):
+                prompt_db.transition_image_prompt(prompt_id, "generated")
         delivered = await self._process_and_send_results(
             message,
             results,
@@ -1234,44 +1318,23 @@ class ImageGenCog(commands.Cog):
             seed,
             do_edit or do_outpaint,
             reply_target,
+            prompt_ids=prompt_ids,
+            price_per_variant=per_image_cost,
         )
-
-        # Deduct cost only if generation was successful
-        if delivered:
-            try:
-                self._cost_tracker.deduct_cost(message.author.id, per_image_cost * delivered)
-            except Exception as exc:
-                _log.exception("Failed to deduct cost for user %s: %s", message.author.id, exc)
-                # Don't fail the generation - user already received their image
-
-        await self._react(message, working_emoji, remove=True)
         await self._react(message, SUCCESS if delivered == len(prompts) else FAILURE)
 
-    @commands.Cog.listener()
-    async def on_message(self, message: discord.Message) -> None:
+    def _in_image_scope(self, message: discord.Message) -> bool:
+        if message.guild is None:
+            return self._allow_dms
+        return not self._allowed_channel_ids or message.channel.id in self._allowed_channel_ids
+
+    def _image_request(self, message: discord.Message) -> tuple[str, GeneratorSpec] | None:
+        """Use the same command eligibility for image generation and chat routing."""
         if message.author.bot:
-            return
-
-        is_dm = message.guild is None
-        if is_dm:
-            if not self._allow_dms:
-                return
-        else:
-            # Check content early to allow a separate allowlist for edit: and zoom out
-            cleaned = (message.content or "").strip()
-            if self._allowed_channel_ids and message.channel.id not in self._allowed_channel_ids:
-                # Not in general image channels. Allow if this is an edit-mode prefix
-                # (edit:, edit low:, zoom out, ...) and the channel is in EDIT_CHANNEL_IDS.
-                split = self._split_prompt(cleaned)
-                is_edit_cmd = split is not None and split[1].mode in ("edit", "outpaint")
-                if not (is_edit_cmd and message.channel.id in self._edit_channel_ids):
-                    return
-        # For DMs or allowed guild messages, continue.
+            return None
         cleaned = (message.content or "").strip()
-
         if cleaned.lower() == "!models":
-            await message.channel.send(self._format_model_listing())
-            return
+            return None
 
         # Check if this is a bot command (starts with ! followed by a known command)
         # to prevent treating commands like !usage, !grant, !balance as image prompts
@@ -1282,9 +1345,29 @@ class ImageGenCog(commands.Cog):
             bot_commands = {cmd.name.lower() for cmd in self.bot.commands}
             bot_commands.update(alias.lower() for cmd in self.bot.commands for alias in cmd.aliases)
             if potential_command in bot_commands:
-                return  # Let the command system handle it
+                return None  # Let the command system handle it
 
         split = self._split_prompt(cleaned)
+        if self._in_image_scope(message):
+            return split
+        if (
+            message.guild is not None
+            and split is not None
+            and split[1].mode in ("edit", "outpaint")
+            and message.channel.id in self._edit_channel_ids
+        ):
+            return split
+        return None
+
+    @commands.Cog.listener()
+    async def on_message(self, message: discord.Message) -> None:
+        if message.author.bot:
+            return
+        if (message.content or "").strip().lower() == "!models" and self._in_image_scope(message):
+            await message.channel.send(self._format_model_listing())
+            return
+
+        split = self._image_request(message)
         if not split:
             return
 

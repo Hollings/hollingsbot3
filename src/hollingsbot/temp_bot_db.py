@@ -214,6 +214,35 @@ def get_depleted_temp_bots() -> list[dict]:
         return [_row_with_summary(row) for row in cur.fetchall()]
 
 
+def begin_temp_bot_cleanup(webhook_id: int, *, require_depleted: bool = False) -> bool:
+    """Deactivate and persist a pending webhook removal; true for the first transition only."""
+    init_db()
+    with _connect() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE temp_bots SET is_active = 0, deactivated_at = ?, cleanup_pending = 1
+            WHERE webhook_id = ? AND is_active = 1 AND (? = 0 OR replies_remaining <= 0)
+            """,
+            (datetime.utcnow().isoformat(), webhook_id, require_depleted),
+        )
+        return cursor.rowcount > 0
+
+
+def finish_temp_bot_cleanup(webhook_id: int) -> None:
+    """Retire a pending removal once Discord confirms the webhook is gone."""
+    with _connect() as conn:
+        conn.execute("UPDATE temp_bots SET cleanup_pending = 0 WHERE webhook_id = ?", (webhook_id,))
+
+
+def get_pending_temp_bot_cleanup() -> list[dict]:
+    init_db()
+    with _connect() as conn:
+        rows = conn.execute(
+            f"SELECT {_BASE_COLUMNS}, created_at, conversation_summary FROM temp_bots WHERE cleanup_pending = 1"
+        ).fetchall()
+        return [_row_with_summary(row) for row in rows]
+
+
 def get_historical_temp_bots(
     channel_id: int | None = None,
     limit: int = 50,
@@ -330,6 +359,8 @@ def get_temp_bot_previous_messages(channel_id: int, bot_name: str, limit: int = 
             SELECT author_name, content, timestamp
             FROM cached_messages
             WHERE channel_id = ? AND author_name = ?
+              AND message_id > COALESCE((SELECT clear_after_message_id
+                  FROM channel_clear_points WHERE channel_id = cached_messages.channel_id), 0)
             ORDER BY timestamp DESC
             LIMIT ?
             """,

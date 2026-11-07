@@ -178,6 +178,10 @@ def _make_manager_skeleton():
     manager = TempBotManager.__new__(TempBotManager)
     manager.bot = MagicMock()
     manager.bot.fetch_webhook = AsyncMock()
+    manager._opening_tasks = {}
+    manager._generating_webhooks = set()
+    manager._cleaning_webhooks = set()
+    manager._spawn_locks = {}
     return manager
 
 
@@ -191,7 +195,7 @@ async def test_cleanup_marks_inactive_before_any_await(temp_bot_db):
     in the method. If `delete_temp_bot` weren't called first, the bot would
     still be active when the cancellation propagates.
     """
-    from hollingsbot.temp_bot_db import get_temp_bot_by_webhook_id
+    from hollingsbot.temp_bot_db import get_pending_temp_bot_cleanup, get_temp_bot_by_webhook_id
 
     webhook_id = _make_bot(temp_bot_db, replies_remaining=0)
     manager = _make_manager_skeleton()
@@ -211,6 +215,14 @@ async def test_cleanup_marks_inactive_before_any_await(temp_bot_db):
     ):
         with pytest.raises(asyncio.CancelledError):
             await manager._cleanup_temp_bot(webhook_id, "Veiled Cipher", send_depletion_message=True)
+        assert [bot["webhook_id"] for bot in get_pending_temp_bot_cleanup()] == [webhook_id]
+        webhook = MagicMock(delete=AsyncMock(), send=AsyncMock())
+        manager.bot.fetch_webhook.side_effect = None
+        manager.bot.fetch_webhook.return_value = webhook
+        await manager.cleanup_task()
+        webhook.delete.assert_awaited_once()
+        webhook.send.assert_not_awaited()  # Don't replay a possibly delivered farewell.
+        assert not get_pending_temp_bot_cleanup()
 
     bot = get_temp_bot_by_webhook_id(webhook_id)
     assert bot is not None
@@ -276,3 +288,52 @@ async def test_cleanup_survives_refund_attempt_during_cleanup(temp_bot_db):
         cur = conn.execute("SELECT is_active FROM temp_bots WHERE webhook_id = ?", (webhook_id,))
         is_active = cur.fetchone()[0]
     assert is_active == 0
+
+
+async def test_failed_webhook_removal_does_not_starve_other_candidates(temp_bot_db):
+    from hollingsbot.temp_bot_db import get_pending_temp_bot_cleanup
+
+    first = _make_bot(temp_bot_db, webhook_id=100, replies_remaining=0)
+    second = _make_bot(temp_bot_db, webhook_id=101, replies_remaining=0)
+    manager = _make_manager_skeleton()
+    webhook = MagicMock(delete=AsyncMock(), send=AsyncMock())
+
+    async def fetch(webhook_id):
+        if webhook_id == first:
+            raise OSError("Discord unavailable for first candidate")
+        assert webhook_id == second
+        return webhook
+
+    manager.bot.fetch_webhook.side_effect = fetch
+    with patch("hollingsbot.cogs.chat_bots.temp_bot.manager.generate_conversation_summary", new=AsyncMock()):
+        await manager.cleanup_task()
+    webhook.delete.assert_awaited_once()
+    assert [bot["webhook_id"] for bot in get_pending_temp_bot_cleanup()] == [first]
+
+
+async def test_spawn_and_recall_share_last_available_slot(temp_bot_db):
+    from hollingsbot.temp_bot_db import get_temp_bots_for_channel
+
+    _make_bot(temp_bot_db, webhook_id=100)
+    _make_bot(temp_bot_db, webhook_id=101)
+    manager = _make_manager_skeleton()
+    entered, release = asyncio.Event(), asyncio.Event()
+    webhook = MagicMock(id=102)
+
+    async def create(**kwargs):
+        entered.set()
+        await release.wait()
+        return webhook
+
+    channel = MagicMock(id=111, create_webhook=AsyncMock(side_effect=create))
+    ctx = MagicMock(channel=channel, send=AsyncMock())
+    ctx.message.id = 999
+    spawn = asyncio.create_task(manager._register_temp_webhook(ctx, "new", b"avatar", "topic", 2, reason="spawn"))
+    await asyncio.wait_for(entered.wait(), 1)
+    recall = asyncio.create_task(manager._register_temp_webhook(ctx, "old", b"avatar", "topic", 2, reason="recall"))
+    await asyncio.sleep(0)
+    channel.create_webhook.assert_awaited_once()
+    release.set()
+    assert await spawn is webhook
+    assert await recall is None
+    assert len(get_temp_bots_for_channel(111)) == 3

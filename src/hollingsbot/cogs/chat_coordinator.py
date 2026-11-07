@@ -1,7 +1,6 @@
 """Chat coordinator - maintains history and broadcasts events to bots."""
 
 import asyncio
-import contextlib
 import logging
 import os
 import random
@@ -29,6 +28,7 @@ from hollingsbot.utils.discord_utils import get_display_name
 
 _LOG = logging.getLogger(__name__)
 _HISTORY_IMAGE_TIMEOUT = 3.0  # historical pixels are optional; don't hold new replies behind them
+_HISTORY_RETRY_DELAY = 15.0
 
 
 class _SummarizerLLM:
@@ -62,6 +62,7 @@ class ChatCoordinator(commands.Cog):
         self._history_locks: dict[int, asyncio.Lock] = {}
         self._warmed_channels: set[int] = set()
         self._warming_tasks: dict[int, asyncio.Task] = {}
+        self._history_retry_at: dict[int, float] = {}
 
         # Message processing locks (prevent concurrent on_message per channel)
         self._processing_locks: dict[int, asyncio.Lock] = {}
@@ -73,7 +74,7 @@ class ChatCoordinator(commands.Cog):
         self.bots: list[object] = []
 
         # Track active message processing per channel
-        self._active_message_tasks: dict[int, asyncio.Task] = {}
+        self._active_message_tasks: dict[int, set[asyncio.Task]] = {}
 
         # Strong references to fire-and-forget summarization tasks (asyncio
         # only keeps weak references; without this they can be GC'd mid-run)
@@ -105,7 +106,9 @@ class ChatCoordinator(commands.Cog):
 
     async def cog_unload(self) -> None:
         """Finish cancellation before a reload creates replacement workers."""
-        pending = [*self._active_message_tasks.values(), *self._warming_tasks.values(), *self._summary_tasks]
+        pending = [task for channel_tasks in self._active_message_tasks.values() for task in channel_tasks]
+        pending.extend(self._warming_tasks.values())
+        pending.extend(self._summary_tasks)
         for task in pending:
             task.cancel()
         await asyncio.gather(*pending, return_exceptions=True)
@@ -119,19 +122,20 @@ class ChatCoordinator(commands.Cog):
 
     # ==================== Generation Cancellation ====================
 
-    async def _cancel_all_generations(self, channel_id: int) -> None:
+    async def _cancel_all_generations(self, channel_id: int, *, include_openings: bool = False) -> None:
         """Cancel all active bot generations in a channel.
 
         This is called when a new message arrives to ensure we only respond
         to the latest message.
         """
-        # Cancel previous message processing task for this channel
-        old_task = self._active_message_tasks.get(channel_id)
-        if old_task and not old_task.done():
+        # Bot/webhook events can overlap human-triggered replies. Keep ownership
+        # of all live handlers rather than allowing the latest event to hide one.
+        pending = [task for task in self._active_message_tasks.get(channel_id, ()) if not task.done()]
+        if pending:
             _LOG.info(f"Cancelling previous message processing in channel {channel_id}")
-            old_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError, asyncio.TimeoutError):
-                await asyncio.wait_for(asyncio.shield(old_task), timeout=0.1)
+            for task in pending:
+                task.cancel()
+            await asyncio.wait(pending, timeout=0.1)
 
         # Ask each bot to cancel its generation for this channel
         for bot_instance in self.bots:
@@ -140,6 +144,9 @@ class ChatCoordinator(commands.Cog):
                     await bot_instance._cancel_generation(channel_id)
                 except Exception:
                     _LOG.exception(f"Error cancelling generation for {bot_instance.__class__.__name__}")
+            cancel_openings = getattr(bot_instance, "_cancel_openings", None) if include_openings else None
+            if cancel_openings is not None:
+                await cancel_openings(channel_id)
 
     # ==================== History Management ====================
 
@@ -164,11 +171,11 @@ class ChatCoordinator(commands.Cog):
         so a restart's backfill from Discord skips everything before it too.
         """
         async with self._processing_lock_for_channel(channel_id):
-            await self._cancel_all_generations(channel_id)
-            await asyncio.to_thread(set_channel_clear_point, channel_id, up_to_message_id)
+            await self._cancel_all_generations(channel_id, include_openings=True)
+            cutoff = await asyncio.to_thread(set_channel_clear_point, channel_id, up_to_message_id)
             async with self._lock_for_channel(channel_id):
                 history = self._history_for_channel(channel_id)
-                kept = [t for t in history if t.message_id is not None and t.message_id > up_to_message_id]
+                kept = [t for t in history if t.message_id is not None and t.message_id > cutoff]
                 history.clear()
                 history.extend(kept)
 
@@ -200,6 +207,8 @@ class ChatCoordinator(commands.Cog):
         channel_id = channel.id
         if channel_id in self._warmed_channels:
             return
+        if time.monotonic() < self._history_retry_at.get(channel_id, 0):
+            return
 
         task = self._warming_tasks.get(channel_id)
         if task is None:
@@ -216,6 +225,7 @@ class ChatCoordinator(commands.Cog):
 
         try:
             if not isinstance(channel, discord.TextChannel | discord.Thread | discord.DMChannel):
+                self._warmed_channels.add(channel_id)
                 return
 
             clear_point = await asyncio.to_thread(get_channel_clear_point, channel_id)
@@ -226,40 +236,44 @@ class ChatCoordinator(commands.Cog):
                 messages.append(msg)
             messages.reverse()
 
-            lock = self._lock_for_channel(channel_id)
-            async with lock:
-                # A clear may have completed while Discord history was loading.
-                clear_point = await asyncio.to_thread(get_channel_clear_point, channel_id)
+            backfill = {}
+            for msg in messages:
+                if msg.author.bot and msg.author.id != self.bot.user.id and not msg.webhook_id:
+                    continue
+                if self._is_command_message(msg):
+                    continue
+                turn = await self._build_history_turn(msg)
+                if turn:
+                    backfill[msg.id] = turn
+            async with self._lock_for_channel(channel_id):
+                # Clear may have completed while the fetch or attachment work ran.
+                cutoff = await asyncio.to_thread(get_channel_clear_point, channel_id) or 0
                 history = self._history_for_channel(channel_id)
-                existing_ids = {t.message_id for t in history if t.message_id is not None}
-                for msg in messages:
-                    if clear_point is not None and msg.id <= clear_point:
-                        continue
-                    if msg.id in existing_ids:
-                        continue
-
-                    # Skip other bots (except main bot and temp bots)
-                    if msg.author.bot and msg.author.id != self.bot.user.id:
-                        # Check if it's a temp bot webhook
-                        if not msg.webhook_id:
-                            continue
-
-                    # Skip bot commands and image generation prompts
-                    if chat_utils.should_ignore_message(msg.content):
-                        continue
-
-                    # Build lightweight turn for history warming
-                    turn = await self._build_history_turn(msg)
-                    if turn:
-                        history.append(turn)
-
+                # A retry can follow messages processed during the cooldown.
+                # Prefer their full live turns and merge the backlog in order.
+                backfill.update({turn.message_id: turn for turn in history if turn.message_id is not None})
+                history.clear()
+                history.extend(backfill[mid] for mid in sorted(backfill) if mid > cutoff)
+            self._warmed_channels.add(channel_id)
+            self._history_retry_at.pop(channel_id, None)
             _LOG.info("Warmed channel %s with %d messages", channel_id, len(messages))
         except Exception:
+            self._history_retry_at[channel_id] = time.monotonic() + _HISTORY_RETRY_DELAY
             _LOG.exception("Failed to warm channel %s", channel_id)
         finally:
-            # Mark warm only once the backfill is done (success or not)
-            self._warmed_channels.add(channel_id)
             self._warming_tasks.pop(channel_id, None)
+
+    def _is_command_message(self, message: discord.Message) -> bool:
+        from hollingsbot.cogs.gif_chain import GifReplyChainCog
+        from hollingsbot.cogs.image_gen_cog import ImageGenCog
+
+        if chat_utils.should_ignore_message(message.content):
+            return True
+        image_cog = self.bot.get_cog("ImageGenCog")
+        if isinstance(image_cog, ImageGenCog) and image_cog._image_request(message) is not None:
+            return True
+        gif_cog = self.bot.get_cog("GifReplyChainCog")
+        return isinstance(gif_cog, GifReplyChainCog) and gif_cog._validate_gif_request(message)
 
     async def _build_history_turn(self, message: discord.Message) -> ConversationTurn | None:
         """Build a lightweight turn for history warming (placeholders for attachments)."""
@@ -319,11 +333,7 @@ class ChatCoordinator(commands.Cog):
             return
 
         # Ignore bot commands and image generation prompts
-        if chat_utils.should_ignore_message(message.content):
-            return
-
-        # Ignore !spawn commands (they stay visible in Discord but not in bot history)
-        if message.content.startswith("!spawn "):
+        if self._is_command_message(message):
             return
 
         channel_id = message.channel.id
@@ -339,8 +349,11 @@ class ChatCoordinator(commands.Cog):
         except asyncio.CancelledError:
             _LOG.info("Message processing cancelled for channel %s", channel_id)
         finally:
-            if self._active_message_tasks.get(channel_id) is task:
-                self._active_message_tasks.pop(channel_id, None)
+            active = self._active_message_tasks.get(channel_id)
+            if active is not None:
+                active.discard(task)
+                if not active:
+                    self._active_message_tasks.pop(channel_id, None)
 
     async def _prepare_response(self, message: discord.Message) -> asyncio.Task | None:
         """Prepare history and register its response before the next event proceeds."""
@@ -387,7 +400,7 @@ class ChatCoordinator(commands.Cog):
         # Register while still holding the processing lock.
         if turn:
             task = asyncio.create_task(self._try_bot_responses(channel_id, message, snapshot))
-            self._active_message_tasks[channel_id] = task
+            self._active_message_tasks.setdefault(channel_id, set()).add(task)
             return task
         return None
 

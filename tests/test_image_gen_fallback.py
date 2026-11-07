@@ -290,10 +290,11 @@ class TestFallbackExecution:
         assert results == [("a cat", [b"fb.png"])]
         assert cog.calls == ["primary", "secondary"]
 
-    def test_timeout_also_triggers_fallback(self):
+    def test_timeout_does_not_start_another_paid_attempt(self):
         cog = _FakeCog({"primary": TimeoutError("slow"), "secondary": "fb.png"})
         results = _run(cog, self.PRIMARY)
-        assert results == [("a cat", [b"fb.png"])]
+        assert isinstance(results[0], TimeoutError)
+        assert cog.calls == ["primary"]
 
     def test_both_failing_returns_last_exception(self):
         cog = _FakeCog({"primary": RuntimeError("first"), "secondary": RuntimeError("second")})

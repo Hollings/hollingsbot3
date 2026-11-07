@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+from contextlib import closing
 
 from hollingsbot.prompt_db import DB_PATH
 from hollingsbot.text_generators import AnthropicTextGenerator
@@ -48,12 +49,14 @@ def _format_transcript(messages: list[tuple[str, str]], bot_name: str) -> str:
 
 def _fetch_conversation_messages(channel_id: int, bot_name: str) -> list[tuple[str, str]]:
     """Pull the cached message rows that bracket this bot's session."""
-    with sqlite3.connect(DB_PATH) as conn:
+    with closing(sqlite3.connect(DB_PATH)) as conn:
         cur = conn.execute(
             """
             SELECT MIN(timestamp), MAX(timestamp)
             FROM cached_messages
             WHERE channel_id = ? AND author_name = ?
+              AND message_id > COALESCE((SELECT clear_after_message_id
+                  FROM channel_clear_points WHERE channel_id = cached_messages.channel_id), 0)
             """,
             (channel_id, bot_name),
         )
@@ -67,6 +70,8 @@ def _fetch_conversation_messages(channel_id: int, bot_name: str) -> list[tuple[s
             SELECT author_name, content
             FROM cached_messages
             WHERE channel_id = ? AND timestamp >= ? AND timestamp <= ?
+              AND message_id > COALESCE((SELECT clear_after_message_id
+                  FROM channel_clear_points WHERE channel_id = cached_messages.channel_id), 0)
             ORDER BY timestamp ASC
             """,
             (channel_id, first_ts, last_ts),
@@ -129,7 +134,7 @@ async def save_conversation_summary(webhook_id: int, summary: str, append: bool 
         append: If True, append to existing summary (for recalled bots).
     """
     try:
-        with sqlite3.connect(DB_PATH) as conn:
+        with closing(sqlite3.connect(DB_PATH)) as conn:
             if append:
                 cur = conn.execute(
                     "SELECT conversation_summary FROM temp_bots WHERE webhook_id = ?",

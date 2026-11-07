@@ -1,17 +1,22 @@
 import asyncio
 import os
+import re
 import time
+from contextlib import suppress
 from inspect import signature
 from pathlib import Path
 
 import aiohttp
+import httpx
 from celery import Celery
+from celery.exceptions import SoftTimeLimitExceeded
 from celery.utils.log import get_task_logger
 
 from hollingsbot.image_generators import get_image_generator
-from hollingsbot.prompt_db import log_llm_api_call, update_status
+from hollingsbot.prompt_db import begin_image_attempt, finish_image_attempt, log_llm_api_call
 from hollingsbot.text_generators import get_text_generator
 from hollingsbot.text_generators.client_cache import close_clients
+from hollingsbot.utils.celery_utils import RemoteOutcomeUnknown
 
 logger = get_task_logger(__name__)
 
@@ -37,6 +42,9 @@ celery_app.conf.worker_max_tasks_per_child = int(os.getenv("CELERY_MAX_TASKS_PER
 celery_app.conf.broker_connection_retry_on_startup = True
 
 OUTPUT_DIR = Path(os.getenv("IMAGE_OUTPUT_DIR", "/app/generated"))
+_ARTIFACT_NAME = re.compile(r"\d+_\d+_\d+\.(?:png|gif)")
+_ARTIFACT_MAX_AGE = 2 * 60 * 60
+_last_artifact_sweep = 0.0
 
 
 def _ensure_output_dir() -> None:
@@ -48,18 +56,26 @@ def _ensure_output_dir() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _sweep_abandoned_outputs() -> None:
+    global _last_artifact_sweep
+    now = time.time()
+    if now - _last_artifact_sweep < 300:
+        return
+    _last_artifact_sweep = now
+    cutoff = now - _ARTIFACT_MAX_AGE
+    # Only touch files written by this worker, never other shared assets.
+    for entry in OUTPUT_DIR.iterdir():
+        if _ARTIFACT_NAME.fullmatch(entry.name):
+            with suppress(OSError):
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+
+
 @celery_app.task(
     name="tasks.generate_image",
     queue="image",
     bind=True,
-    # Only retry errors that plausibly resolve on their own. Retrying every
-    # Exception re-billed permanently-rejected prompts (content policy,
-    # invalid params) and kept flip-flopping their status rows.
-    autoretry_for=(ConnectionError, aiohttp.ClientError),
-    retry_backoff=True,
-    retry_backoff_max=60,
-    retry_jitter=True,
-    max_retries=2,
+    # Paid provider attempts must not be replayed on ambiguous transport errors.
 )
 def generate_image(
     self,
@@ -96,7 +112,9 @@ def generate_image(
         ("provided" if mask else "none"),
         output_format,
     )
-    update_status(prompt_id, "started")
+    attempt_id = begin_image_attempt(prompt_id, api, model, self.request.id)
+    if attempt_id is None:
+        raise RemoteOutcomeUnknown("This worker attempt already ran; it was not replayed.")
 
     async def _run() -> tuple[list[bytes], bool]:
         generator = get_image_generator(
@@ -118,34 +136,52 @@ def generate_image(
                 logger.warning("generate_image[%s] cleanup failed", prompt_id, exc_info=True)
             await close_clients()
 
+    paths: list[Path] = []
+    completed = False
     try:
         images_bytes, multiple = asyncio.run(_run())
         if not images_bytes or any(not isinstance(img, bytes) or not img for img in images_bytes):
             raise RuntimeError("Generator returned no image data.")
         ts = time.time_ns()
         _ensure_output_dir()
-        paths: list[str] = []
+        try:
+            _sweep_abandoned_outputs()
+        except OSError:
+            logger.warning("Could not sweep abandoned image files", exc_info=True)
         if output_format == "gif" and any(not img.startswith((b"GIF87a", b"GIF89a")) for img in images_bytes):
             raise RuntimeError("Generator did not return GIF data.")
         for idx, img in enumerate(images_bytes, start=1):
             ext = "gif" if img.startswith((b"GIF87a", b"GIF89a")) else "png"
             fp = OUTPUT_DIR / f"{prompt_id}_{ts}_{idx:02d}.{ext}"
+            paths.append(fp)
             fp.write_bytes(img)
-            paths.append(str(fp))
-        update_status(prompt_id, "completed")
-    except asyncio.TimeoutError as exc:
-        err = f"Generation exceeded {timeout}s timeout."
-        logger.error("generate_image[%s] TIMEOUT: %s", prompt_id, err)
-        update_status(prompt_id, f"failed: {err}")
-        raise RuntimeError(err) from exc
+        finish_image_attempt(attempt_id, "generated")
+        completed = True
+    except (
+        asyncio.TimeoutError,
+        SoftTimeLimitExceeded,
+        RemoteOutcomeUnknown,
+        ConnectionError,
+        aiohttp.ClientError,
+        httpx.TransportError,
+    ) as exc:
+        finish_image_attempt(attempt_id, "outcome_unknown")
+        if isinstance(exc, RemoteOutcomeUnknown):
+            raise
+        raise RemoteOutcomeUnknown("Could not confirm the image provider outcome.") from exc
     except Exception as exc:
         duration = time.monotonic() - start
         logger.exception("generate_image[%s] FAILED after %.2fs | %s", prompt_id, duration, exc)
-        update_status(prompt_id, f"failed: {exc}")
+        finish_image_attempt(attempt_id, "failed")
         raise
+    finally:
+        if not completed:
+            for path in paths:
+                with suppress(OSError):
+                    path.unlink(missing_ok=True)
     duration = time.monotonic() - start
     logger.info("generate_image[%s] FINISH in %.2fs | wrote %d files", prompt_id, duration, len(paths))
-    return paths if multiple else paths[0]
+    return [str(path) for path in paths] if multiple else str(paths[0])
 
 
 async def _generate_text(generator, prompt, **kwargs) -> str:

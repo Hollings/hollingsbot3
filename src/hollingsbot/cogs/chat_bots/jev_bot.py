@@ -280,6 +280,8 @@ class JevBot:
         self.lexicon = Lexicon()
         self.spawns = JevSpawns(bot=self.settings.name)
         self._spawned: dict[int, int] | None = None  # channel -> replies left; loaded on first use
+        self._visit_ids: dict[int, object] = {}
+        self._visit_locks: dict[int, asyncio.Lock] = {}
         self._writer: JevWriter | None = None
         self._webhooks: dict[int, discord.Webhook | None] = {}
         self._active: dict[int, asyncio.Task] = {}
@@ -330,18 +332,17 @@ class JevBot:
         Returns the posted reply (None if nothing was posted); a newer message cancels it.
         """
         channel = message.channel
+        visit = self._visit_ids.get(channel.id) if channel.id in self.spawned else None
         await self._cancel_generation(channel.id)
-        task = asyncio.create_task(self._write_and_send(message, chat))
+        if visit is not None and self._visit_ids.get(channel.id) is not visit:
+            return None
+        task = asyncio.create_task(self._write_and_send(message, chat, visit=visit))
         self._active[channel.id] = task
         try:
-            result = await task
+            return await task
         finally:
             if self._active.get(channel.id) is task:
                 self._active.pop(channel.id, None)
-        if result is not None:
-            # Shielded: a message arriving right after the post must not leave the count half-done.
-            await asyncio.shield(self._count_reply(channel))
-        return result
 
     async def _over_budget(self, message: discord.Message) -> bool:
         """Past today's budget: react instead of replying."""
@@ -380,6 +381,7 @@ class JevBot:
         """Channels Jev was spawned into -> replies it has left there (read from the DB once)."""
         if self._spawned is None:
             self._spawned = self.spawns.active()
+            self._visit_ids.update({channel_id: object() for channel_id in self._spawned})
             if self._spawned:
                 _LOG.info("Jev is still visiting %s (channel: replies left)", self._spawned)
         return self._spawned
@@ -396,24 +398,29 @@ class JevBot:
         if channel.id in self.whitelist_channels:
             await ctx.send(f"**{name}** already lives in this channel.")
             return
-        visiting = channel.id in self.spawned
-        await asyncio.to_thread(self.spawns.start, channel.id, replies, by=get_display_name(ctx.author))
-        self.spawned[channel.id] = replies
+        async with self._visit_locks.setdefault(channel.id, asyncio.Lock()):
+            visiting = channel.id in self.spawned
+            await asyncio.to_thread(self.spawns.start, channel.id, replies, by=get_display_name(ctx.author))
+            self.spawned[channel.id] = replies
+            visit = self._visit_ids[channel.id] = object()
         _LOG.info("Jev spawned in %s by %s for %d replies", channel.id, ctx.author, replies)
         if visiting:
             await ctx.send(f"**{name}** is already here; it has {replies} replies left now.")
             return
-        await self._join(ctx.message)
+        await self._join(ctx.message, visit)
 
     async def despawn(self, channel: discord.abc.Messageable) -> bool:
         """`!despawn jev`: end the visit now, dropping any reply under way; False if Jev isn't visiting."""
-        if channel.id not in self.spawned:
-            return False
-        await self._cancel_generation(channel.id)
-        await self._leave(channel, announce=False)
+        async with self._visit_locks.setdefault(channel.id, asyncio.Lock()):
+            if channel.id not in self.spawned:
+                return False
+            await self._cancel_generation(channel.id)
+            await asyncio.to_thread(self.spawns.end, channel.id)
+            self.spawned.pop(channel.id, None)
+            self._visit_ids.pop(channel.id, None)
         return True
 
-    async def _join(self, message: discord.Message) -> None:
+    async def _join(self, message: discord.Message, visit: object) -> None:
         """Jev's first reply after being spawned (by ``message``): to whatever was being said."""
         channel = message.channel
         history = await self.coordinator.recent_history(channel)
@@ -426,6 +433,8 @@ class JevBot:
         chat = await asyncio.to_thread(
             chat_lines, history, self.settings.context_messages, include_images=self.settings.images
         )
+        if self._visit_ids.get(channel.id) is not visit or channel.id in self._active:
+            return
         answer = asyncio.ensure_future(self._answer(message, chat))
         try:
             await asyncio.wait({answer})
@@ -440,24 +449,23 @@ class JevBot:
                 channel.id, result["message_id"], result["text"], result["webhook_id"], result["bot_name"]
             )
 
-    async def _count_reply(self, channel: discord.abc.Messageable) -> None:
+    async def _count_reply(self, channel: discord.abc.Messageable, visit: object) -> None:
         """A reply posted where Jev was spawned uses one up; after the last one, Jev leaves."""
-        if channel.id not in self.spawned:
-            return
-        left = await asyncio.to_thread(self.spawns.use_reply, channel.id)
-        if left:
-            self.spawned[channel.id] = left
-        else:
-            await self._leave(channel, announce=True)
-
-    async def _leave(self, channel: discord.abc.Messageable, *, announce: bool) -> None:
-        self.spawned.pop(channel.id, None)
-        await asyncio.to_thread(self.spawns.end, channel.id)
-        _LOG.info("Jev left %s", channel.id)
-        if announce:
+        async with self._visit_locks.setdefault(channel.id, asyncio.Lock()):
+            if self._visit_ids.get(channel.id) is not visit:
+                return
+            left = await asyncio.to_thread(self.spawns.use_reply, channel.id)
+            if left:
+                self.spawned[channel.id] = left
+                return
+            self.spawned.pop(channel.id, None)
+            self._visit_ids.pop(channel.id, None)
+        if left == 0:
+            _LOG.info("Jev left %s", channel.id)
             webhook = await self._webhook_for(channel)
             with contextlib.suppress(discord.HTTPException):
-                await self._post(channel, webhook, departure_message(self.settings.name))
+                if channel.id not in self._visit_ids:
+                    await self._post(channel, webhook, departure_message(self.settings.name))
 
     # ------------------------------------------------------------------ gating
 
@@ -556,11 +564,12 @@ class JevBot:
                 await self._writer.suggester.aclose()
             self._writer = None
 
-    async def _write_and_send(self, message: discord.Message, chat: list[ChatLine]) -> dict | None:
+    async def _write_and_send(
+        self, message: discord.Message, chat: list[ChatLine], *, visit: object | None = None
+    ) -> dict | None:
         """Write the whole reply behind a typing indicator, then post it once."""
         channel = message.channel
         webhook = await self._webhook_for(channel)
-        name = self.settings.name
         draft = Reply()
         annotation: bytes | None = None
 
@@ -586,14 +595,12 @@ class JevBot:
             raise
         except (JevError, discord.HTTPException):
             _LOG.exception("JevBot failed to write a reply in channel %s", channel.id)
-            await asyncio.to_thread(
-                self.ledger.record, draft, chat, channel_id=channel.id, message_id=None, stop_reason="error"
+            partial = await self._deliver_reply(
+                channel, webhook, draft, chat, visit, text=draft.text + CUT_OFF_MARK if draft.text else "", error=True
             )
             with contextlib.suppress(discord.HTTPException):
-                if draft.text:
-                    await self._post(channel, webhook, draft.text + CUT_OFF_MARK)
                 await message.add_reaction(ERROR_REACTION)
-            return None
+            return partial
 
         _LOG.info(
             "Jev wrote %r (%d words, %s, %d calls, $%.4f, %.1fs)",
@@ -604,23 +611,68 @@ class JevBot:
             reply.usage.cost,
             reply.usage.seconds,
         )
+        return await self._deliver_reply(channel, webhook, reply, chat, visit, text=reply.text, image=annotation)
+
+    async def _deliver_reply(
+        self,
+        channel: discord.abc.Messageable,
+        webhook: discord.Webhook | None,
+        reply: Reply,
+        chat: list[ChatLine],
+        visit: object | None,
+        *,
+        text: str,
+        image: bytes | None = None,
+        error: bool = False,
+    ) -> dict | None:
+        """Settle a confirmed Discord post even if the request is cancelled afterwards."""
         sent: discord.Message | None = None
         try:
-            sent = await self._post(channel, webhook, reply.text, image=annotation)
+            if visit is None or self._visit_ids.get(channel.id) is visit:
+                sent = await self._post(channel, webhook, text, image=image)
         except discord.HTTPException:
             _LOG.exception("JevBot could not post its reply in channel %s", channel.id)
         finally:
-            await asyncio.to_thread(
-                self.ledger.record, reply, chat, channel_id=channel.id, message_id=sent.id if sent else None
+            settlement = asyncio.create_task(
+                self._settle_reply(channel, reply, chat, sent.id if sent else None, visit, error)
             )
+            self._cleanups.add(settlement)
+            settlement.add_done_callback(self._cleanups.discard)
+            await asyncio.shield(settlement)
         if sent is None:
             return None
         return {
             "message_id": sent.id,
-            "text": reply.text,
+            "text": text,
             "webhook_id": webhook.id if webhook is not None else None,
-            "bot_name": name,
+            "bot_name": self.settings.name,
         }
+
+    async def _settle_reply(
+        self,
+        channel: discord.abc.Messageable,
+        reply: Reply,
+        chat: list[ChatLine],
+        message_id: int | None,
+        visit: object | None,
+        error: bool,
+    ) -> None:
+        try:
+            await asyncio.to_thread(
+                self.ledger.record,
+                reply,
+                chat,
+                channel_id=channel.id,
+                message_id=message_id,
+                stop_reason="error" if error else None,
+            )
+        except Exception:
+            _LOG.exception("JevBot failed to record reply usage")
+        if message_id is not None and visit is not None:
+            try:
+                await self._count_reply(channel, visit)
+            except Exception:
+                _LOG.exception("JevBot failed to settle a visit reply")
 
     async def _post(
         self,

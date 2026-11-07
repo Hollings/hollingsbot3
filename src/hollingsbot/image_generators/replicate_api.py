@@ -11,10 +11,14 @@ from tempfile import NamedTemporaryFile
 from typing import Any, BinaryIO
 
 import aiohttp
+import httpx
 import replicate
 from PIL import Image
+from replicate.exceptions import ModelError, ReplicateError
 
-from .base import ImageGeneratorAPI  # local import
+from hollingsbot.utils.celery_utils import RemoteOutcomeUnknown
+
+from .base import ImageGenerationError, ImageGeneratorAPI
 
 # Maximum dimension for gpt-image edit input images
 _MAX_GPT_IMAGE_DIMENSION = 1024
@@ -100,6 +104,18 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
         m = self.model.lower()
         return "openai/gpt-image" in m or "gpt-image-1" in m
 
+    async def _run_model(self, inputs: dict[str, Any]) -> Any:
+        try:
+            return await self._client.async_run(self.model, input=inputs)
+        except (httpx.TransportError, asyncio.TimeoutError) as exc:
+            raise RemoteOutcomeUnknown("Could not confirm the Replicate prediction outcome.") from exc
+        except ReplicateError as exc:
+            if exc.status is None or exc.status == 408 or exc.status >= 500:
+                raise RemoteOutcomeUnknown("Could not confirm the Replicate prediction outcome.") from exc
+            raise ImageGenerationError(f"Replicate rejected the request (HTTP {exc.status}).") from exc
+        except ModelError as exc:
+            raise ImageGenerationError("The Replicate prediction failed.") from exc
+
     @staticmethod
     def _apply_seedream_defaults(inputs: dict[str, Any], *, n_input_images: int = 0) -> None:
         """Fill in Seedream-4 defaults: max resolution, grouped generation of up to 4 images.
@@ -151,7 +167,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                         self.quality,
                         sorted(gpt_inputs.keys()),
                     )
-                    raw_output = await self._client.async_run(self.model, input=gpt_inputs)
+                    raw_output = await self._run_model(gpt_inputs)
                 finally:
                     self._cleanup_files(cleanup)
                 return await self._normalise_output(raw_output)
@@ -180,7 +196,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     if seed is not None and self._supports_seed():
                         inputs["seed"] = seed
                     self._log.info("Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys()))
-                    raw_output = await self._client.async_run(self.model, input=inputs)
+                    raw_output = await self._run_model(inputs)
                 finally:
                     self._cleanup_files(cleanup)
             else:
@@ -194,9 +210,11 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 if self.aspect_ratio and "aspect_ratio" not in inputs:
                     inputs["aspect_ratio"] = self.aspect_ratio
                 self._log.info("Replicate run (single) model=%s keys=%s", self.model, sorted(inputs.keys()))
-                raw_output = await self._client.async_run(self.model, input=inputs)
+                raw_output = await self._run_model(inputs)
 
             return await self._normalise_output(raw_output)
+        except RemoteOutcomeUnknown:
+            raise
         except Exception as exc:
             raise RuntimeError(f"Replicate generation failed: {exc}") from exc
 
@@ -265,7 +283,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return bytes(data)
 
         if self._FileOutput is not None and isinstance(data, self._FileOutput):
-            return await data.aread()
+            return await self._read_file_output(data)
 
         if isinstance(data, AsyncIterator) or hasattr(data, "__aiter__"):
             async for chunk in data:
@@ -300,7 +318,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             return out
 
         if self._FileOutput is not None and isinstance(data, self._FileOutput):
-            out.append(await data.aread())
+            out.append(await self._read_file_output(data))
             return out
 
         # Async iterator / stream
@@ -351,14 +369,12 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                     self.quality,
                     sorted(gpt_inputs.keys()),
                 )
-                raw_output = await self._client.async_run(self.model, input=gpt_inputs)
+                raw_output = await self._run_model(gpt_inputs)
             finally:
                 self._cleanup_files(cleanup)
 
             results = await self._collect_all(raw_output)
-            if not results:
-                await self._normalise_output(raw_output)
-            return results
+            return results or [await self._normalise_output(raw_output)]
 
         if image_input:
             prepared, cleanup = self._prepare_image_inputs(image_input)
@@ -383,7 +399,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
                 if seed is not None and self._supports_seed():
                     inputs["seed"] = seed
                 self._log.info("Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys()))
-                raw_output = await self._client.async_run(self.model, input=inputs)
+                raw_output = await self._run_model(inputs)
             finally:
                 self._cleanup_files(cleanup)
         else:
@@ -397,7 +413,7 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             if self.aspect_ratio and "aspect_ratio" not in inputs:
                 inputs["aspect_ratio"] = self.aspect_ratio
             self._log.info("Replicate run (many) model=%s keys=%s", self.model, sorted(inputs.keys()))
-            raw_output = await self._client.async_run(self.model, input=inputs)
+            raw_output = await self._run_model(inputs)
 
         results = await self._collect_all(raw_output)
         # Ensure at least one image (raise if empty to keep callers aware)
@@ -406,19 +422,29 @@ class ReplicateImageGenerator(ImageGeneratorAPI):
             await self._normalise_output(raw_output)
         return results
 
+    @staticmethod
+    async def _read_file_output(data: Any) -> bytes:
+        try:
+            return await data.aread()
+        except (httpx.HTTPError, aiohttp.ClientError, ConnectionError, asyncio.TimeoutError) as exc:
+            raise RemoteOutcomeUnknown("Could not retrieve the finished Replicate output.") from exc
+
     async def _download(self, url: str) -> bytes:
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
-        for delay in (0, 1.0):
-            if delay:
-                await asyncio.sleep(delay)
-            async with self._session.get(url) as rsp:
-                if rsp.status == 200:
-                    return await rsp.read()
-                if rsp.status >= 500:
-                    continue
-                raise RuntimeError(f"Download failed: HTTP {rsp.status}")
-        raise RuntimeError(f"Download failed after retries: {url}")
+        try:
+            for delay in (0, 1.0):
+                if delay:
+                    await asyncio.sleep(delay)
+                async with self._session.get(url) as rsp:
+                    if rsp.status == 200:
+                        return await rsp.read()
+                    if rsp.status >= 500:
+                        continue
+                    break
+        except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
+            raise RemoteOutcomeUnknown("Could not retrieve the finished Replicate output.") from exc
+        raise RemoteOutcomeUnknown("Could not retrieve the finished Replicate output.")
 
     # ---- helpers for editing ----
 

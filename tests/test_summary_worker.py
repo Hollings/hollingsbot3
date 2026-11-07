@@ -30,6 +30,7 @@ async def test_messages_arriving_during_generation_trigger_another_pass():
 
 async def test_empty_summary_is_not_saved_as_permanently_complete():
     cache = Mock()
+    cache.get_clear_point.return_value = None
     summarizer = Mock(summarize_messages=AsyncMock(return_value="  "))
     worker = SummaryWorker(cache, summarizer)
     message = CachedMessage(1, 1, 1, "A", "hello", 1)

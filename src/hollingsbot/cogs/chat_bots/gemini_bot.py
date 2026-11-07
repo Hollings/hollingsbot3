@@ -270,6 +270,9 @@ class GeminiBot:
         except Exception:
             _LOG.exception("Failed to generate response")
             return None
+        finally:
+            if self._active_generations.get(message.channel.id) is job:
+                self._active_generations.pop(message.channel.id, None)
 
     async def _should_respond(self, message: discord.Message) -> bool:
         """Check if bot should respond to this message."""
@@ -491,10 +494,6 @@ class GeminiBot:
                 emoji = "\N{ALARM CLOCK}" if isinstance(exc, TimeoutError) else "\N{WARNING SIGN}"
                 await message.add_reaction(emoji)
             return None
-        finally:
-            if self._active_generations.get(channel.id) is job:
-                self._active_generations.pop(channel.id, None)
-
         # Check if response is empty
         if not text.strip():
             _LOG.warning("LLM returned EMPTY response (likely conversation history issue) in channel %s", channel.id)
@@ -508,7 +507,11 @@ class GeminiBot:
         await self._wait_for_typing_to_clear(channel.id)
 
         # Send to Discord
-        sent_messages = await self._send_to_discord(channel, clean_text, svg_files)
+        try:
+            sent_messages = await self._send_to_discord(channel, clean_text, svg_files)
+        except chat_utils.PartialDeliveryError as exc:
+            _LOG.warning("Response partially delivered in channel %s", channel.id, exc_info=True)
+            sent_messages, clean_text = exc.messages, exc.text
         if not sent_messages:
             return None
 
@@ -655,23 +658,31 @@ class GeminiBot:
             except Exception:
                 _LOG.exception("Failed to create webhook from URL for channel %s", channel_id)
 
-        # Split long responses into multiple messages instead of dumping a
-        # .txt attachment nobody opens.
-        for chunk in chat_utils.chunk_message(text):
-            if webhook:
-                msg = await webhook.send(chunk, username=bot_name, wait=True)
-            else:
-                msg = await channel.send(chunk)
-            sent.append(msg)
-
-        # Send SVG files
-        if svg_files:
-            for svg_file in svg_files:
+        delivered_text: list[str] = []
+        try:
+            # Split long responses into multiple messages instead of dumping a
+            # .txt attachment nobody opens.
+            for chunk in chat_utils.chunk_message(text):
                 if webhook:
-                    msg = await webhook.send(file=svg_file, username=bot_name, wait=True)
+                    msg = await webhook.send(chunk, username=bot_name, wait=True)
                 else:
-                    msg = await channel.send(file=svg_file)
+                    msg = await channel.send(chunk)
                 sent.append(msg)
+                delivered_text.append(chunk)
+
+            # Send SVG files
+            if svg_files:
+                for svg_file in svg_files:
+                    if webhook:
+                        msg = await webhook.send(file=svg_file, username=bot_name, wait=True)
+                    else:
+                        msg = await channel.send(file=svg_file)
+                    sent.append(msg)
+
+        except Exception as exc:
+            if sent:
+                raise chat_utils.PartialDeliveryError(sent, "\n".join(delivered_text)) from exc
+            raise
 
         return sent
 

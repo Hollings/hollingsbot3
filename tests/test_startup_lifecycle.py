@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -57,3 +58,13 @@ async def test_scheduled_restart_exits_after_cleanup(entrypoint, monkeypatch):
     monkeypatch.setattr(entrypoint, "_exit_for_restart", lambda: events.append("exit"))
     await entrypoint.run_bot()
     assert events == ["close", "exit"]
+
+
+async def test_manual_and_scheduled_restart_share_one_close(entrypoint):
+    instance = SimpleNamespace(close=AsyncMock())
+    await asyncio.gather(
+        entrypoint.HollingsBot.request_restart(instance),
+        entrypoint.HollingsBot.request_restart(instance),
+    )
+    assert entrypoint._restart_requested
+    instance.close.assert_awaited_once()

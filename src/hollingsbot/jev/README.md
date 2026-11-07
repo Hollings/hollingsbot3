@@ -70,8 +70,10 @@ every message, until it has posted N replies. That includes every other bot and
 webhook (Wendy, temp bots), so Jev and Wendy talk to each other until Jev's
 count runs out; it never answers itself or the Dog account's command output,
 and it still learns words only from people. Then it leaves with a temp bot's
-goodbye line (`*[Jev drifts off into silence]*`). Only posted replies count: one
-cut off by someone talking, skipped over budget or failed uses none.
+goodbye line (`*[Jev drifts off into silence]*`). A confirmed Discord post uses
+one reply, including a partial answer posted after a provider error. An
+interrupted, skipped, or failed attempt that posts nothing uses no visit reply;
+it can still incur provider costs.
 
 In its own channels (`JEV_BOT_CHANNELS`) Jev has no count, so it answers only
 the bots that run out of replies themselves: temp bots (`!spawn 10 a pirate`

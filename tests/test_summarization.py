@@ -253,3 +253,66 @@ class TestHierarchicalContext:
         cache.set_clear_point(1, 3)
         ctx = cache.get_hierarchical_context(1, raw_message_count=10)
         assert all(m.message_id > 3 for m in ctx["raw_messages"])
+
+
+def test_clear_restarts_chunk_boundaries_without_cleared_messages(cache):
+    for mid in range(1, 16):
+        cache.cache_message(_msg(mid, ts=TS))
+    cache.save_message_group(_group(1, 5, "old"))
+    cache.set_clear_point(1, 3)
+    chunks = cache.get_messages_needing_level1_summary(1)
+    assert [[m.message_id for m in chunk] for chunk in chunks] == [list(range(4, 9))]
+
+
+def test_level2_never_summarizes_groups_crossing_clear_point(cache):
+    for i in range(7):
+        cache.save_message_group(_group(i * 5 + 1, i * 5 + 5, f"s{i}"))
+    cache.set_clear_point(1, 8)
+    chunks = cache.get_level1_groups_needing_level2(1)
+    assert len(chunks) == 1
+    assert [g.start_message_id for g in chunks[0]] == [11, 16, 21, 26, 31]
+
+
+async def test_clear_during_summary_generation_discards_stale_result(cache):
+    from unittest.mock import AsyncMock
+
+    from hollingsbot.summarization.summary_worker import SummaryWorker
+
+    async def generate(messages):
+        cache.set_clear_point(1, 3)
+        return "stale summary"
+
+    summarizer = AsyncMock()
+    summarizer.summarize_messages.side_effect = generate
+    worker = SummaryWorker(cache, summarizer)
+    await worker._generate_summary_for_group(1, 1, [_msg(mid, ts=TS) for mid in range(1, 6)])
+    assert cache.get_groups_by_level(1, 1) == []
+
+
+async def test_queued_summary_is_rechecked_before_calling_provider(cache):
+    from unittest.mock import AsyncMock
+
+    from hollingsbot.summarization.summary_worker import SummaryWorker
+
+    summarizer = AsyncMock()
+    worker = SummaryWorker(cache, summarizer)
+    cache.set_clear_point(1, 3)
+    await worker._generate_summary_for_group(1, 1, [_msg(mid, ts=TS) for mid in range(1, 6)])
+    summarizer.summarize_messages.assert_not_called()
+
+
+def test_temp_bot_archive_reads_respect_clear(cache, monkeypatch):
+    from hollingsbot import temp_bot_db
+    from hollingsbot.cogs.chat_bots.temp_bot import summary
+
+    monkeypatch.setattr(temp_bot_db, "DB_PATH", Path(cache.db_path))
+    monkeypatch.setattr(summary, "DB_PATH", Path(cache.db_path))
+    for mid in range(1, 6):
+        message = _msg(mid, ts=TS + mid)
+        message.author_name = "Visitor"
+        cache.cache_message(message)
+    cache.set_clear_point(1, 3)
+    recalled = temp_bot_db.get_temp_bot_previous_messages(1, "Visitor")
+    assert [m["timestamp"] for m in recalled] == [TS + 4, TS + 5]
+    transcript = summary._fetch_conversation_messages(1, "Visitor")
+    assert len(transcript) == 2

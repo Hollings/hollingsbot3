@@ -104,6 +104,70 @@ async def test_a_restart_backfill_skips_what_was_cleared(db, mock_bot):
     assert ids(coordinator) == [4, 5]
 
 
+async def test_second_clear_to_earlier_reply_never_restores_old_history(db, mock_bot):
+    first = ChatCoordinator(mock_bot)
+    await first.clear_history(CHANNEL, 4)
+    cleared_at = prompt_db.get_channel_clear_time(CHANNEL)
+    await first.clear_history(CHANNEL, 2)
+    assert prompt_db.get_channel_clear_point(CHANNEL) == 4
+    assert prompt_db.get_channel_clear_time(CHANNEL) == cleared_at
+
+    restarted = ChatCoordinator(mock_bot)
+    restarted._build_history_turn = AsyncMock(side_effect=lambda msg: said(msg.id))
+    channel = MagicMock(spec=discord.TextChannel, id=CHANNEL)
+
+    async def newest_first(limit):
+        for mid in (5, 4, 3, 2, 1):
+            yield MagicMock(id=mid, content="hello", webhook_id=None, author=MagicMock(bot=False))
+
+    channel.history = newest_first
+    await restarted._ensure_channel_warm(channel)
+    assert ids(restarted) == [5]
+
+
+async def test_failed_history_backfill_retries_and_preserves_later_live_turns(db, mock_bot, monkeypatch):
+    from hollingsbot.cogs import chat_coordinator as module
+
+    monkeypatch.setattr(module, "_HISTORY_RETRY_DELAY", 0)
+    coordinator = ChatCoordinator(mock_bot)
+    coordinator._build_history_turn = AsyncMock(side_effect=lambda msg: said(msg.id))
+    channel = MagicMock(spec=discord.TextChannel, id=CHANNEL)
+    calls = 0
+
+    async def history(limit):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise OSError("Discord unavailable")
+        for mid in (5, 4, 3):
+            yield MagicMock(id=mid, content="hello", webhook_id=None, author=MagicMock(bot=False))
+
+    channel.history = history
+    await coordinator._ensure_channel_warm(channel)
+    assert CHANNEL not in coordinator._warmed_channels
+    coordinator._history_for_channel(CHANNEL).append(said(5))
+    await coordinator._ensure_channel_warm(channel)
+    assert CHANNEL in coordinator._warmed_channels
+    assert ids(coordinator) == [3, 4, 5]
+
+
+async def test_chat_ignores_gif_request_only_where_image_handler_accepts_it(db, mock_bot):
+    from hollingsbot.cogs.image_gen_cog import ImageGenCog
+
+    images = ImageGenCog(mock_bot, config={"gif:": {"api": "replicate", "model": "test"}})
+    images._allowed_channel_ids = {CHANNEL}
+    mock_bot.get_cog.side_effect = lambda name: images if name == "ImageGenCog" else None
+    coordinator = ChatCoordinator(mock_bot)
+    coordinator._prepare_response = AsyncMock(return_value=None)
+    message = MagicMock(id=5, content="gif: a wave", attachments=[], author=MagicMock(bot=False))
+    message.channel.id = CHANNEL
+    await coordinator.on_message(message)
+    coordinator._prepare_response.assert_not_awaited()
+    message.channel.id = CHANNEL + 1
+    await coordinator.on_message(message)
+    coordinator._prepare_response.assert_awaited_once_with(message)
+
+
 async def test_clear_during_slow_backfill_does_not_restore_old_messages(db, mock_bot):
     coordinator = ChatCoordinator(mock_bot)
     coordinator._build_history_turn = AsyncMock(side_effect=lambda msg: said(msg.id))

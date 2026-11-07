@@ -54,12 +54,21 @@ def _dynamic_prefix(bot: commands.Bot, message: discord.Message):
     return commands.when_mentioned_or("!")(bot, message)
 
 
-bot = commands.Bot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True, help_command=None)
+class HollingsBot(commands.Bot):
+    async def request_restart(self) -> None:
+        """Close gracefully; the entry point exits through the supervisor path."""
+        global _restart_requested
+        if not _restart_requested:
+            _restart_requested = True
+            await self.close()
+
+
+bot = HollingsBot(command_prefix=_dynamic_prefix, intents=intents, case_insensitive=True, help_command=None)
 
 
 @bot.event
 async def on_ready():
-    print(f"Bot is ready. Logged in as {bot.user} (ID: {bot.user.id})")
+    print(f"Bot is ready. Logged in as {bot.user} (ID: {bot.user.id})", flush=True)
     print(f"Loaded cogs: {list(bot.cogs.keys())}")
     print(f"Commands: {[c.name for c in bot.commands]}")
     if not restart_task.is_running():
@@ -132,14 +141,12 @@ def _exit_for_restart() -> None:
 
 @tasks.loop(seconds=RESTART_INTERVAL)
 async def restart_task():
-    global _restart_requested
     # tasks.loop runs its first iteration immediately on start; the restart
     # should only happen once a full interval has elapsed.
     if restart_task.current_loop == 0:
         return
     logger.warning("Restart interval (%ss) reached; exiting for supervisor restart", RESTART_INTERVAL)
-    _restart_requested = True
-    await bot.close()
+    await bot.request_restart()
 
 
 @restart_task.before_loop

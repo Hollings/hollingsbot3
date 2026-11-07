@@ -13,6 +13,7 @@ from hollingsbot import prompt_db
 from hollingsbot.cogs import image_gen_cog as images
 from hollingsbot.cogs.admin import Admin
 from hollingsbot.cogs.credits_cog import CreditsCog
+from hollingsbot.image_generators.base import ImageGenerationError
 
 
 @pytest.fixture
@@ -78,23 +79,23 @@ async def test_partial_delivery_counts_only_successes(cog):
     msg.channel.send.assert_awaited_once()
 
 
-async def test_batch_charges_delivered_variants_without_downloading_edit_images(cog, monkeypatch):
+async def test_batch_charges_delivered_variants_without_downloading_edit_images(cog):
     cog._react = AsyncMock()
     cog._get_thematic_emoji = AsyncMock(return_value=images.THINKING)
     cog._collect_images_for_editing = AsyncMock()
-    cog._execute_generation_tasks = AsyncMock(return_value=[("cat", [b"img"]), RuntimeError("failed")])
-    cog._process_and_send_results = AsyncMock(return_value=1)
-    cog._cost_tracker = Mock()
-    cog._cost_tracker.can_afford.return_value = (True, "")
-    monkeypatch.setattr(images, "bulk_add_prompts", Mock(return_value=[1, 2]))
-    await cog._handle_generation(message(), "<cat,dog>", cog._prefix_map["!"])
-    cog._cost_tracker.can_afford.assert_called_once_with(1, 0.06)
-    cog._cost_tracker.deduct_cost.assert_called_once_with(1, 0.03)
+    cog._execute_generation_tasks = AsyncMock(return_value=[("cat", [b"img"]), ImageGenerationError("incomplete SVG")])
+    cog._prepare_discord_files = Mock(return_value=[Mock()])
+    cog._send_error_message = AsyncMock()
+    msg = message()
+    await cog._handle_generation(msg, "<cat,dog>", cog._prefix_map["!"])
+    assert cog._cost_tracker.get_history(1)[0]["total_cost"] == pytest.approx(0.03)
+    msg.channel.send.assert_awaited_once()
+    cog._send_error_message.assert_awaited_once()
     cog._collect_images_for_editing.assert_not_awaited()
 
 
 @pytest.mark.parametrize("reference", [None, b"attached still"])
-async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, monkeypatch, tmp_path, reference):
+async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, tmp_path, reference):
     cog._cfg_path = images._DEFAULT_CONFIG_PATH
     cog._reload_config()
     split = cog._split_prompt("gif: a lantern swings")
@@ -108,9 +109,6 @@ async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, monkeypat
     cog._get_aspect_ratio_for_prompt = AsyncMock(side_effect=AssertionError("GIF uses the configured square ratio"))
     cog._react = AsyncMock()
     cog._get_thematic_emoji = AsyncMock(return_value=images.THINKING)
-    cog._cost_tracker = Mock()
-    cog._cost_tracker.can_afford.return_value = (True, "")
-    monkeypatch.setattr(images, "bulk_add_prompts", Mock(return_value=[1]))
 
     data = BytesIO()
     Image.new("RGB", (8, 8), "red").save(
@@ -119,6 +117,12 @@ async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, monkeypat
     result = tmp_path / "animation.gif"
     result.write_bytes(data.getvalue())
     cog._run_task = AsyncMock(return_value=[str(result)])
+    sent = []
+
+    async def send(*, files):
+        sent.extend((file.filename, file.fp.read()) for file in files)
+
+    msg.channel.send.side_effect = send
     await cog._generate_for_user(msg, prompt, spec)
 
     call = cog._run_task.await_args
@@ -127,13 +131,10 @@ async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, monkeypat
     assert call.kwargs["image_input"] == ([reference] if reference else None)
     msg.channel.history.assert_not_called()
     msg.channel.send.assert_awaited_once()
-    file = msg.channel.send.await_args.kwargs["files"][0]
-    try:
-        assert file.filename.endswith(".gif")
-        assert file.fp.read() == data.getvalue()
-    finally:
-        file.close()
-    cog._cost_tracker.deduct_cost.assert_called_once_with(1, 0.10)
+    assert len(sent) == 1 and sent[0][0].endswith(".gif")
+    assert sent[0][1] == data.getvalue()
+    assert not result.exists()
+    assert cog._cost_tracker.get_history(1)[0]["total_cost"] == pytest.approx(0.10)
 
 
 async def test_same_user_is_serialized_but_other_users_can_generate(cog):
@@ -159,7 +160,7 @@ async def test_same_user_is_serialized_but_other_users_can_generate(cog):
     assert entered == ["first", "other", "second"]
 
 
-async def test_cancellation_during_emoji_lookup_stops_image_job(cog, monkeypatch):
+async def test_cancellation_during_emoji_lookup_stops_image_job(cog):
     started, stopped = asyncio.Event(), asyncio.Event()
 
     async def generate(*args):
@@ -178,7 +179,6 @@ async def test_cancellation_during_emoji_lookup_stops_image_job(cog, monkeypatch
     cog._execute_generation_tasks = generate
     cog._cost_tracker = Mock()
     cog._cost_tracker.can_afford.return_value = (True, "")
-    monkeypatch.setattr(images, "bulk_add_prompts", Mock(return_value=[1]))
     request = asyncio.create_task(cog._handle_generation(message(), "cat", cog._prefix_map["!"]))
     await started.wait()
     request.cancel()
@@ -186,3 +186,27 @@ async def test_cancellation_during_emoji_lookup_stops_image_job(cog, monkeypatch
         await request
     assert stopped.is_set()
     cog._cost_tracker.deduct_cost.assert_not_called()
+    assert cog._react.await_args.kwargs == {"remove": True}
+
+
+async def test_acknowledged_variant_is_settled_before_next_send_and_replay_is_ignored(cog):
+    cog._react = AsyncMock()
+    cog._get_thematic_emoji = AsyncMock(return_value=images.THINKING)
+    cog._execute_generation_tasks = AsyncMock(return_value=[("cat", [b"one"]), ("dog", [b"two"])])
+    cog._prepare_discord_files = Mock(return_value=[Mock()])
+    msg = message()
+    msg.channel.send.side_effect = [None, asyncio.CancelledError()]
+    spec = cog._prefix_map["!"]
+    with pytest.raises(asyncio.CancelledError):
+        await cog._handle_generation(msg, "<cat,dog>", spec)
+
+    with prompt_db._connect() as conn:
+        rows = conn.execute("SELECT id, status FROM prompts ORDER BY id").fetchall()
+    assert [status for _, status in rows] == ["delivered", "outcome_unknown"]
+    # A duplicate settlement and replay of the same Discord event do no work.
+    cog._cost_tracker.deduct_cost(1, 0.03, prompt_id=rows[0][0])
+    await cog._handle_generation(msg, "<cat,dog>", spec)
+    assert cog._cost_tracker.get_history(1)[0]["total_cost"] == pytest.approx(0.03)
+    assert cog._cost_tracker.get_history(1)[0]["generation_count"] == 1
+    cog._execute_generation_tasks.assert_awaited_once()
+    assert msg.channel.send.await_count == 2

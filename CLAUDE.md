@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+For changes involving retries, cancellation, persistence, quotas, deployment, or
+external sends, follow the review rules in [AGENTS.md](AGENTS.md) and the affected
+workflow in [docs/stateful-workflows.md](docs/stateful-workflows.md).
+
 ## Project Overview
 
 Discord bot (`hollingsbot3`) built with discord.py, running in Docker with Celery workers for async task processing. Provides LLM chat, image generation, starboard, and various utilities.
