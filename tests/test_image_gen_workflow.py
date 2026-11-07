@@ -2,10 +2,12 @@
 
 import asyncio
 import json
+from io import BytesIO
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import pytest
+from PIL import Image
 
 from hollingsbot import prompt_db
 from hollingsbot.cogs import image_gen_cog as images
@@ -89,6 +91,49 @@ async def test_batch_charges_delivered_variants_without_downloading_edit_images(
     cog._cost_tracker.can_afford.assert_called_once_with(1, 0.06)
     cog._cost_tracker.deduct_cost.assert_called_once_with(1, 0.03)
     cog._collect_images_for_editing.assert_not_awaited()
+
+
+@pytest.mark.parametrize("reference", [None, b"attached still"])
+async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, monkeypatch, tmp_path, reference):
+    cog._cfg_path = images._DEFAULT_CONFIG_PATH
+    cog._reload_config()
+    split = cog._split_prompt("gif: a lantern swings")
+    assert split is not None
+    prompt, spec = split
+    assert cog._split_prompt("gif") is None
+    msg = message()
+    msg.reference = None
+    msg.channel.history = Mock(side_effect=AssertionError("GIF prompts must not search unrelated history"))
+    cog._gather_attachment_images = AsyncMock(return_value=[reference] if reference else [])
+    cog._get_aspect_ratio_for_prompt = AsyncMock(side_effect=AssertionError("GIF uses the configured square ratio"))
+    cog._react = AsyncMock()
+    cog._get_thematic_emoji = AsyncMock(return_value=images.THINKING)
+    cog._cost_tracker = Mock()
+    cog._cost_tracker.can_afford.return_value = (True, "")
+    monkeypatch.setattr(images, "bulk_add_prompts", Mock(return_value=[1]))
+
+    data = BytesIO()
+    Image.new("RGB", (8, 8), "red").save(
+        data, format="GIF", save_all=True, append_images=[Image.new("RGB", (8, 8), "blue")], duration=200, loop=0
+    )
+    result = tmp_path / "animation.gif"
+    result.write_bytes(data.getvalue())
+    cog._run_task = AsyncMock(return_value=[str(result)])
+    await cog._generate_for_user(msg, prompt, spec)
+
+    call = cog._run_task.await_args
+    assert call.args[2] == "openai/gpt-image-2.6-flare"
+    assert call.kwargs["output_format"] == "gif"
+    assert call.kwargs["image_input"] == ([reference] if reference else None)
+    msg.channel.history.assert_not_called()
+    msg.channel.send.assert_awaited_once()
+    file = msg.channel.send.await_args.kwargs["files"][0]
+    try:
+        assert file.filename.endswith(".gif")
+        assert file.fp.read() == data.getvalue()
+    finally:
+        file.close()
+    cog._cost_tracker.deduct_cost.assert_called_once_with(1, 0.10)
 
 
 async def test_same_user_is_serialized_but_other_users_can_generate(cog):

@@ -79,7 +79,7 @@ class TestSpecFromDict:
 
         raw = json.loads(_DEFAULT_CONFIG_PATH.read_text("utf8"))
         spec = spec_from_dict(raw["edit:"])
-        assert spec.model.startswith("openai/gpt-image-2.5")
+        assert spec.model == "openai/gpt-image-2.6-sunburst"
         assert spec.mode == "edit"
         assert spec.fallback is not None
         assert spec.fallback.model == "google/nano-banana-2"
@@ -175,7 +175,7 @@ class TestShippedEditChain:
         while spec is not None:
             chain.append(spec.model)
             spec = spec.fallback
-        assert chain[0].startswith("openai/gpt-image-2.5")
+        assert chain[0] == "openai/gpt-image-2.6-sunburst"
         assert chain[1:] == ["google/nano-banana-2", "bytedance/seedream-4.5"]
         # The tail really is the edit low: spec, single-image options and all
         assert specs["edit:"].fallback.fallback == specs["edit low:"]

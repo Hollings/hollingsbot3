@@ -109,6 +109,7 @@ class General(commands.Cog):
             "- `! prompt` quick image.\n"
             "- `$ prompt` higher quality; `$$ prompt` premium.\n"
             "- `^ prompt` SVG generator.\n"
+            "- `gif: prompt` generate a looping GIF. Attach or reply to a still image to animate it.\n"
             "- `edit: ...` reply to a message with an image (or attach one) to edit; the bot replies to your prompt message.\n"
             "- `edit low: ...` / `edit high: ...` / `edit pro: ...` same, with other models (see `!models` for prices).\n"
             "- Tips: `{123}` sets seed; `<a, b, c>` expands to multiple prompts.\n"

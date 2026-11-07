@@ -21,7 +21,7 @@
   },
   "$$$": {
     "api": "replicate",
-    "model": "openai/gpt-image-2.5-flare",
+    "model": "openai/gpt-image-2.6-flare",
     "quality": "medium",
     "price_per_image": 0.08
   },
@@ -35,9 +35,19 @@
     "model": "deepseek/deepseek-v4.1-flash-1017",
     "price_per_image": 0.04
   },
+  "gif:": {
+    "api": "replicate",
+    "model": "openai/gpt-image-2.6-flare",
+    "quality": "low",
+    "aspect_ratio": "1:1",
+    "output_format": "gif",
+    "frame_count": 9,
+    "frame_duration_ms": 200,
+    "price_per_image": 0.10
+  },
   "edit:": {
     "api": "replicate",
-    "model": "openai/gpt-image-2.5-sunburst",
+    "model": "openai/gpt-image-2.6-sunburst",
     "mode": "edit",
     "quality": "medium",
     "price_per_image": 0.04,
@@ -57,7 +67,7 @@
   },
   "edit high:": {
     "api": "replicate",
-    "model": "openai/gpt-image-2.5-sunburst",
+    "model": "openai/gpt-image-2.6-sunburst",
     "mode": "edit",
     "quality": "high",
     "price_per_image": 0.05
@@ -70,7 +80,7 @@
   },
   "zoom out": {
     "api": "replicate",
-    "model": "openai/gpt-image-2.5-sunburst",
+    "model": "openai/gpt-image-2.6-sunburst",
     "mode": "edit",
     "quality": "low",
     "price_per_image": 0.02,

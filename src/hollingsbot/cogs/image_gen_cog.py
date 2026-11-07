@@ -112,6 +112,8 @@ def detect_image_extension(data: bytes) -> str:
         File extension without dot (e.g., 'png', 'jpg')
     """
     try:
+        if data.startswith((b"GIF87a", b"GIF89a")):
+            return "gif"
         if data.startswith(b"\x89PNG"):
             return "png"
         if data.startswith(b"\xff\xd8"):
@@ -718,7 +720,9 @@ class ImageGenCog(commands.Cog):
         suffix = raw_prompt[m_list.end() :]
         return [f"{prefix}{item}{suffix}".strip() for item in items]
 
-    async def _collect_images_for_editing(self, message: discord.Message) -> tuple[list[bytes], discord.Message | None]:
+    async def _collect_images_for_editing(
+        self, message: discord.Message, *, search_history: bool = True
+    ) -> tuple[list[bytes], discord.Message | None]:
         """
         Collect images from the message, its reply reference, and recent history.
 
@@ -751,7 +755,7 @@ class ImageGenCog(commands.Cog):
         # If no images yet, search recent history
         history_images: list[bytes] = []
         history_source: discord.Message | None = None
-        if not images and not reply_images:
+        if search_history and not images and not reply_images:
             try:
                 async for prev_msg in message.channel.history(limit=_HISTORY_SEARCH_LIMIT, before=message):
                     history_images = await self._gather_attachment_images(prev_msg)
@@ -861,7 +865,7 @@ class ImageGenCog(commands.Cog):
                 seed,
                 image_input=image_input,
                 mask=mask,
-                output_format="png" if use_png_format else None,
+                output_format=(active.model_options or {}).get("output_format") or ("png" if use_png_format else None),
                 quality=active.quality,
                 aspect_ratio=aspect_ratio,
                 model_options=active.model_options,
@@ -928,6 +932,13 @@ class ImageGenCog(commands.Cog):
         root, _orig_ext = ([*base_name.rsplit(".", 1), "png"])[:2]
 
         for idx, img_bytes in enumerate(images_bytes, start=1):
+            ext = detect_image_extension(img_bytes)
+            if ext == "gif":
+                # Still-image captioning and compression would discard the animation.
+                if len(img_bytes) <= limit_bytes:
+                    fname = f"{root}.gif" if len(images_bytes) == 1 else f"{root}_{idx}.gif"
+                    files.append(discord.File(BytesIO(img_bytes), filename=fname))
+                continue
             # Add caption unless skipped
             processed = img_bytes if skip_caption else add_caption(img_bytes, prompt)
 
@@ -1106,10 +1117,14 @@ class ImageGenCog(commands.Cog):
 
         # Collect images for edit/outpaint modes
         is_edit_mode = spec.mode == "edit"
+        is_gif = (spec.model_options or {}).get("output_format") == "gif"
         all_edit_images: list[bytes] = []
         history_source = None
         if is_edit_mode or is_outpaint:
             all_edit_images, history_source = await self._collect_images_for_editing(message)
+        elif is_gif:
+            images, _ = await self._collect_images_for_editing(message, search_history=False)
+            all_edit_images = images[:1]
 
         do_edit = bool(all_edit_images) and is_edit_mode
         do_outpaint = bool(all_edit_images) and is_outpaint
@@ -1173,7 +1188,7 @@ class ImageGenCog(commands.Cog):
             or "flux" in model_lower
             or "seedream-4" in model_lower
         )
-        if supports_dynamic_aspect and not (do_edit or do_outpaint):
+        if supports_dynamic_aspect and not (do_edit or do_outpaint or is_gif):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
             aspect_ratio_override = await self._get_aspect_ratio_for_prompt(prompts[0])
 
@@ -1185,7 +1200,7 @@ class ImageGenCog(commands.Cog):
                 prompts,
                 spec,
                 seed,
-                all_edit_images if (do_edit or do_outpaint) else None,
+                all_edit_images or None,
                 outpaint_mask if do_outpaint else None,
                 do_edit or do_outpaint,
                 aspect_ratio_override,

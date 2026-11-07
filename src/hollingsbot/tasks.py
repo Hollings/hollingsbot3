@@ -125,8 +125,11 @@ def generate_image(
         ts = time.time_ns()
         _ensure_output_dir()
         paths: list[str] = []
+        if output_format == "gif" and any(not img.startswith((b"GIF87a", b"GIF89a")) for img in images_bytes):
+            raise RuntimeError("Generator did not return GIF data.")
         for idx, img in enumerate(images_bytes, start=1):
-            fp = OUTPUT_DIR / f"{prompt_id}_{ts}_{idx:02d}.png"
+            ext = "gif" if img.startswith((b"GIF87a", b"GIF89a")) else "png"
+            fp = OUTPUT_DIR / f"{prompt_id}_{ts}_{idx:02d}.{ext}"
             fp.write_bytes(img)
             paths.append(str(fp))
         update_status(prompt_id, "completed")
