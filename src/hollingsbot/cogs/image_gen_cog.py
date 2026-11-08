@@ -28,7 +28,6 @@ from dataclasses import dataclass, field, replace
 from io import BytesIO
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
-from weakref import WeakValueDictionary
 
 import discord
 import emoji
@@ -295,7 +294,6 @@ class ImageGenCog(commands.Cog):
 
         self._run_task = task_runner or self._default_celery_runner
         self._pending: set[asyncio.Task[None]] = set()
-        self._user_generation_locks: WeakValueDictionary[int, asyncio.Lock] = WeakValueDictionary()
 
     def _reload_config(self) -> None:
         if self._cfg_path is None:
@@ -1098,16 +1096,14 @@ class ImageGenCog(commands.Cog):
         raw_prompt: str,
         spec: GeneratorSpec,
     ) -> None:
-        # Keep affordability checks and billing in order for each user, including
-        # requests in different channels. Different users can still run in parallel.
-        lock = self._user_generation_locks.setdefault(message.author.id, asyncio.Lock())
-        async with lock:
-            try:
-                await self._generate_for_user(message, raw_prompt, spec)
-            except Exception:
-                _log.exception("Image generation failed for message %s", message.id)
-                await self._react(message, FAILURE)
-                await self._send_error_message(message, "Image generation failed. Please try again.")
+        # Budget admission is a short SQLite transaction. Never hold a user
+        # lock while a provider runs, so a slow model cannot block their next request.
+        try:
+            await self._generate_for_user(message, raw_prompt, spec)
+        except Exception:
+            _log.exception("Image generation failed for message %s", message.id)
+            await self._react(message, FAILURE)
+            await self._send_error_message(message, "Image generation failed. Please try again.")
 
     async def _generate_for_user(
         self,
@@ -1254,6 +1250,11 @@ class ImageGenCog(commands.Cog):
         progress.prompt_ids = prompt_ids
         if not prompt_ids:
             return
+        reserved, error_msg = self._cost_tracker.reserve_images(message.author.id, prompt_ids, per_image_cost)
+        if not reserved:
+            await self._react(message, FAILURE)
+            await self._send_error_message(message, error_msg)
+            return
 
         # For models that support aspect ratio (non-edit), get dynamic aspect ratio from Claude
         aspect_ratio_override: str | None = None
@@ -1264,7 +1265,7 @@ class ImageGenCog(commands.Cog):
             or "flux" in model_lower
             or "seedream-4" in model_lower
         )
-        if supports_dynamic_aspect and not (do_edit or do_outpaint or is_gif):
+        if supports_dynamic_aspect and spec.aspect_ratio is None and not (do_edit or do_outpaint or is_gif):
             # Use the first prompt for aspect ratio detection (they're usually all similar)
             aspect_ratio_override = await self._get_aspect_ratio_for_prompt(prompts[0])
 

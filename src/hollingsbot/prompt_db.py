@@ -101,6 +101,15 @@ def init_db() -> None:
                 cost REAL NOT NULL
             )"""
         )
+        conn.execute(
+            """CREATE TABLE IF NOT EXISTS image_reservations (
+                prompt_id INTEGER PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                cost REAL NOT NULL CHECK(cost >= 0),
+                expires_at TEXT NOT NULL
+            )"""
+        )
+        conn.execute("CREATE INDEX IF NOT EXISTS image_reservations_user ON image_reservations(user_id)")
         # Per-user model preference (scoped to guild)
         conn.execute(
             """
@@ -462,11 +471,33 @@ _IMAGE_STATUS_PREDECESSORS = {
 }
 
 
+def expire_image_reservations(conn: sqlite3.Connection) -> None:
+    """Release crashed owners' holds and close their jobs before admitting new spend."""
+    now = datetime.utcnow().isoformat()
+    conn.execute(
+        """UPDATE prompts SET status = 'outcome_unknown'
+           WHERE id IN (SELECT prompt_id FROM image_reservations WHERE expires_at <= ?)
+           AND status IN ('queued', 'generating', 'generated', 'delivering')""",
+        (now,),
+    )
+    conn.execute("DELETE FROM image_reservations WHERE expires_at <= ?", (now,))
+
+
 def transition_image_prompt(prompt_id: int, status: str) -> bool:
     """Advance a bot-owned image variant without overwriting terminal states."""
     previous = _IMAGE_STATUS_PREDECESSORS[status]
     init_db()
     with _connect() as conn:
+        if status == "delivering":
+            # A late result from an expired owner must never start a send.
+            return bool(
+                conn.execute(
+                    """UPDATE prompts SET status = 'delivering' WHERE id = ? AND status = 'generated'
+                   AND EXISTS (SELECT 1 FROM image_reservations
+                               WHERE prompt_id = ? AND expires_at > ?)""",
+                    (prompt_id, prompt_id, datetime.utcnow().isoformat()),
+                ).rowcount
+            )
         return bool(
             conn.executemany(
                 "UPDATE prompts SET status = ? WHERE id = ? AND status = ?",
@@ -499,7 +530,9 @@ def finish_image_attempt(attempt_id: int, status: str) -> None:
 def abandon_image_prompts(prompt_ids: Iterable[int]) -> None:
     """Stop unfinished variants, preserving completed debits and uncertain sends."""
     init_db()
+    prompt_ids = tuple(prompt_ids)
     with _connect() as conn:
+        conn.executemany("DELETE FROM image_reservations WHERE prompt_id = ?", ((pid,) for pid in prompt_ids))
         conn.executemany(
             """UPDATE prompts SET status = CASE
                 WHEN status IN ('generating', 'delivering') THEN 'outcome_unknown'
@@ -514,6 +547,8 @@ def recover_stale_image_jobs(max_age: timedelta = timedelta(hours=2)) -> None:
     init_db()
     cutoff = (datetime.utcnow() - max_age).isoformat()
     with _connect() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        expire_image_reservations(conn)
         conn.execute(
             """UPDATE prompts SET status = 'outcome_unknown'
                 WHERE time < ? AND status IN ('queued', 'generating', 'generated', 'delivering')

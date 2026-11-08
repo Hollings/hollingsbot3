@@ -15,9 +15,12 @@ import contextlib
 import logging
 import math
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+from hollingsbot.prompt_db import expire_image_reservations
 
 _log = logging.getLogger(__name__)
+_RESERVATION_LIFETIME = timedelta(minutes=15)
 
 
 def validate_amount(value: float, *, allow_negative: bool = False) -> float:
@@ -153,6 +156,40 @@ class CostTracker:
         # No time elapsed, return current budget
         return current_budget
 
+    def _available_balances(self, user_id: int, conn: sqlite3.Connection) -> tuple[float, float, float]:
+        expire_image_reservations(conn)
+        free = self._update_hourly_budget(user_id, conn)
+        row = conn.execute("SELECT balance FROM user_credits WHERE user_id = ?", (user_id,)).fetchone()
+        credits = row[0] if row else 0.0
+        held = conn.execute(
+            "SELECT COALESCE(SUM(cost), 0) FROM image_reservations WHERE user_id = ?", (user_id,)
+        ).fetchone()[0]
+        return max(0.0, free - held), credits - max(0.0, held - free), held
+
+    def reserve_images(self, user_id: int, prompt_ids: list[int], cost: float) -> tuple[bool, str]:
+        """Atomically hold a batch's budget; no provider I/O or generation lock."""
+        validate_amount(cost)
+        if not prompt_ids or len(set(prompt_ids)) != len(prompt_ids):
+            raise ValueError("Expected distinct image variant IDs")
+        with contextlib.closing(sqlite3.connect(self.db_path, timeout=30)) as conn, conn:
+            conn.execute("BEGIN IMMEDIATE")
+            free, credits, held = self._available_balances(user_id, conn)
+            for pid in prompt_ids:
+                row = conn.execute("SELECT submitter, status FROM prompts WHERE id = ?", (pid,)).fetchone()
+                if row != (str(user_id), "queued"):
+                    raise ValueError("Cannot reserve an image that is not queued for this user")
+                if conn.execute("SELECT 1 FROM image_reservations WHERE prompt_id = ?", (pid,)).fetchone():
+                    raise ValueError("Image already has a reservation")
+            total = cost * len(prompt_ids)
+            if free + credits + 1e-9 < total:
+                return False, self._insufficient_funds(total, free, credits, held)
+            expires = (datetime.utcnow() + _RESERVATION_LIFETIME).isoformat()
+            conn.executemany(
+                "INSERT INTO image_reservations (prompt_id, user_id, cost, expires_at) VALUES (?, ?, ?, ?)",
+                ((pid, user_id, cost, expires) for pid in prompt_ids),
+            )
+        return True, ""
+
     def can_afford(self, user_id: int, cost: float) -> tuple[bool, str]:
         """Check if a user can afford a generation.
 
@@ -173,18 +210,8 @@ class CostTracker:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
 
-            # Update and get current hourly budget (commit the tick: this is a
-            # standalone read path, not part of a larger transaction)
-            current_budget = self._update_hourly_budget(user_id, conn)
+            current_budget, credit_balance, held = self._available_balances(user_id, conn)
             conn.commit()
-
-            # Get credit balance
-            credit_row = conn.execute(
-                "SELECT balance FROM user_credits WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
-
-            credit_balance = credit_row["balance"] if credit_row else 0.0
 
         # Check if affordable
         if current_budget >= cost:
@@ -200,11 +227,14 @@ class CostTracker:
             )
             return (True, "")
 
+        return False, self._insufficient_funds(cost, current_budget, credit_balance, held)
+
+    def _insufficient_funds(self, cost: float, current_budget: float, credit_balance: float, held: float) -> str:
         # Cannot afford - tell the user exactly when they'll have enough,
         # since budget accrues per minute and the wait is computable.
         minute_rate = self.daily_free_budget / 1440.0
         shortfall_after_credits = cost - current_budget - credit_balance
-        if minute_rate > 0 and cost <= self.daily_free_budget + credit_balance:
+        if not held and minute_rate > 0 and cost <= self.daily_free_budget + credit_balance:
             minutes_needed = math.ceil(shortfall_after_credits / minute_rate)
             wait = f"~{minutes_needed} min" if minutes_needed < 60 else f"~{minutes_needed / 60:.1f} hours"
             wait_line = f"You'll have enough free budget in {wait}.\n"
@@ -217,13 +247,15 @@ class CostTracker:
             f"  - Free budget: ${current_budget:.2f} / ${self.daily_free_budget:.2f}\n"
             f"  - Credit balance: ${credit_balance:.2f}\n\n"
             f"{wait_line}"
-            f"Or trade tokens for credits with `!redeem` (check `!balance` and `!usage`)."
+            + (
+                f"Reserved for running images: ${held:.3f}. Failed requests release this automatically.\n"
+                if held
+                else ""
+            )
+            + "Or trade tokens for credits with `!redeem` (check `!balance` and `!usage`)."
         )
 
-        _log.info(
-            f"User {user_id} cannot afford ${cost:.5f} (free: ${current_budget:.5f}, credits: ${credit_balance:.2f})"
-        )
-        return (False, error_msg)
+        return error_msg
 
     def deduct_cost(self, user_id: int, cost: float, *, prompt_id: int | None = None) -> None:
         """Deduct cost from user's free budget and/or credits.
@@ -255,6 +287,12 @@ class CostTracker:
                     )
                     if not inserted.rowcount:
                         return
+                    reservation = conn.execute(
+                        "SELECT user_id, cost FROM image_reservations WHERE prompt_id = ?", (prompt_id,)
+                    ).fetchone()
+                    if reservation is None or reservation[0] != user_id or abs(reservation[1] - cost) > 1e-9:
+                        raise RuntimeError("Image delivery has no matching budget reservation.")
+                    conn.execute("DELETE FROM image_reservations WHERE prompt_id = ?", (prompt_id,))
                     updated = conn.execute(
                         "UPDATE prompts SET status = 'delivered' WHERE id = ? AND status = 'delivering'",
                         (prompt_id,),
@@ -339,10 +377,7 @@ class CostTracker:
             conn.row_factory = sqlite3.Row
             conn.execute("BEGIN IMMEDIATE")
 
-            # Update and get current hourly budget (commit the tick: this is a
-            # standalone read path, not part of a larger transaction)
-            current_budget = self._update_hourly_budget(user_id, conn)
-            conn.commit()
+            current_budget, credit_balance, held = self._available_balances(user_id, conn)
 
             # Get daily usage
             daily_row = conn.execute(
@@ -354,15 +389,10 @@ class CostTracker:
                 (user_id, today),
             ).fetchone()
 
-            # Get credit balance
-            credit_row = conn.execute(
-                "SELECT balance FROM user_credits WHERE user_id = ?",
-                (user_id,),
-            ).fetchone()
+            conn.commit()
 
         credits_used_today = daily_row["credits_used"] if daily_row else 0.0
         generation_count = daily_row["generation_count"] if daily_row else 0
-        credit_balance = credit_row["balance"] if credit_row else 0.0
         hourly_rate = self.daily_free_budget / 24.0
 
         return {
@@ -372,6 +402,7 @@ class CostTracker:
             "credits_used_today": credits_used_today,
             "generation_count": generation_count,
             "credit_balance": credit_balance,
+            "reserved_for_images": held,
         }
 
     def grant_credits(self, user_id: int, amount: float) -> None:

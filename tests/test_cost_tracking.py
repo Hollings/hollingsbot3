@@ -22,36 +22,12 @@ def db_path():
 
 
 @pytest.fixture
-def setup_db(db_path):
-    """Initialize the database tables needed for cost tracking."""
-    with contextlib.closing(sqlite3.connect(db_path)) as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_hourly_budget (
-                user_id INTEGER PRIMARY KEY,
-                current_budget REAL DEFAULT 0,
-                last_tick_minute TEXT
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_daily_costs (
-                user_id INTEGER,
-                date TEXT,
-                total_cost REAL DEFAULT 0,
-                free_budget_used REAL DEFAULT 0,
-                credits_used REAL DEFAULT 0,
-                generation_count INTEGER DEFAULT 0,
-                PRIMARY KEY (user_id, date)
-            )
-        """)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_credits (
-                user_id INTEGER PRIMARY KEY,
-                balance REAL DEFAULT 0,
-                lifetime_spent REAL DEFAULT 0,
-                last_updated TEXT
-            )
-        """)
-        conn.commit()
+def setup_db(db_path, monkeypatch):
+    """Exercise the same schema and migrations as production."""
+    from hollingsbot import prompt_db
+
+    monkeypatch.setattr(prompt_db, "DB_PATH", Path(db_path))
+    prompt_db.init_db()
     return db_path
 
 

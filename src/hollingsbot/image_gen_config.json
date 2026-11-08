@@ -3,8 +3,11 @@
   "default_price_per_image": 0.03,
   "!": {
     "api": "replicate",
-    "model": "prunaai/hidream-l1-fast",
-    "price_per_image": 0.005
+    "model": "black-forest-labs/flux-2-klein-4b",
+    "aspect_ratio": "1:1",
+    "output_megapixels": "1",
+    "disable_safety_checker": false,
+    "price_per_image": 0.001
   },
   "$": {
     "api": "replicate",

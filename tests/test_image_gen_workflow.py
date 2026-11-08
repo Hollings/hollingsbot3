@@ -137,7 +137,8 @@ async def test_gif_command_preserves_frames_and_charges_ten_cents(cog, tmp_path,
     assert cog._cost_tracker.get_history(1)[0]["total_cost"] == pytest.approx(0.10)
 
 
-async def test_same_user_is_serialized_but_other_users_can_generate(cog):
+async def test_slow_request_does_not_block_same_user_or_other_users(cog):
+    cog._react = AsyncMock()
     first_started, release = asyncio.Event(), asyncio.Event()
     entered = []
 
@@ -154,7 +155,7 @@ async def test_same_user_is_serialized_but_other_users_can_generate(cog):
     second = asyncio.create_task(cog._handle_generation(message(), "second", spec))
     await cog._handle_generation(message(user=2), "other", spec)
     await asyncio.sleep(0)
-    assert entered == ["first", "other"]
+    assert entered == ["first", "other", "second"]
     release.set()
     await asyncio.gather(first, second)
     assert entered == ["first", "other", "second"]
@@ -179,6 +180,7 @@ async def test_cancellation_during_emoji_lookup_stops_image_job(cog):
     cog._execute_generation_tasks = generate
     cog._cost_tracker = Mock()
     cog._cost_tracker.can_afford.return_value = (True, "")
+    cog._cost_tracker.reserve_images.return_value = (True, "")
     request = asyncio.create_task(cog._handle_generation(message(), "cat", cog._prefix_map["!"]))
     await started.wait()
     request.cancel()

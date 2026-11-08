@@ -11,7 +11,7 @@ need a clear owner and a few invariants, not a state-machine library.
 | Chat reply | Coordinator and active generation registration | Ownership lasts through delivery, including typing delays. Cancel/clear must stop unsent output. A visible partial reply must not trigger another bot's fallback. |
 | Temporary bot reply | Reply reservation, active webhook ownership, persisted remaining count | Opening and normal replies obey the same cancellation/refund rules. Reaper cannot delete an in-flight webhook. Failed cleanup remains retryable. |
 | Jev visit | Persisted visit and current visit identity | Completion from an older visit cannot consume a replacement visit's replies or delete it. |
-| Image request | Request owner, separately identified provider attempts, delivery accounting | A file written by a worker is not a delivered image. Error placeholders cannot count as success. Timeout means outcome unknown unless cancellation is confirmed. Replay cannot debit a delivered variant twice. |
+| Image request | SQLite budget reservations, request owner, separately identified provider attempts, delivery accounting | Admission reserves the whole batch atomically; no user lock spans provider I/O. Delivery consumes its reservation and debits in one transaction. Failure/cancellation releases only that request's remaining holds. Expired holds cannot authorize a late send. Replay cannot debit a delivered variant twice. |
 | Summary generation | Cached messages, clear cutoff, conditional summary insertion | Check cutoff before provider call and when saving its result. Group boundaries restart after clear. Legacy recall summaries without provenance must not reintroduce cleared context. |
 | Starboard | In-flight protection and post log | Preserve overlap protection and retry after failed send. Durable replay protection is a future improvement if duplicates after restart become a problem. |
 
@@ -37,6 +37,21 @@ Windows runs may need Git Bash for these. An ordinary review should inspect only
 affected flows; a periodic broad audit can use parallel reviewers when requested.
 
 ## Scope and limits
+
+Image requests from the same user may run concurrently, subject to worker capacity.
+A slow provider previously held the user's lock across generation and delivery,
+silently blocking their next request even after redeeming credits. Short SQLite
+transactions now reserve available funds before dispatch; holds are shown in
+`!usage`, and only acknowledged deliveries become charges. A batch is admitted
+all-or-nothing, while each delivered variant settles independently.
+
+Reservations expire after 15 minutes, longer than the worker timeout. Startup
+recovery and subsequent budget reads/admissions reclaim expired holds and mark
+unfinished jobs as outcome unknown. A crash between claiming a request and
+reserving funds spends nothing; persisted request IDs prevent replay. A crash
+after Discord accepts a send but before settlement remains an unknown outcome,
+with no automatic resend or debit. Worker capacity still limits simultaneous
+provider calls; it is independent of budget admission.
 
 Jev Builder is disabled and excluded from this remediation. Do not enable it as
 part of a main-bot deployment. Its data is preserved for a future explicit resume.

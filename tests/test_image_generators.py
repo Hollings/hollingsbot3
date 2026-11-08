@@ -6,6 +6,9 @@ These cover pure/local logic only - no network calls are made.
 from __future__ import annotations
 
 import io
+import json
+from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 from PIL import Image
@@ -18,6 +21,21 @@ from hollingsbot.image_generators import (
 from hollingsbot.image_generators.replicate_api import _scale_image_to_max_dimension
 
 TOKEN = "test-token"
+
+
+async def test_cheap_command_pins_klein_resolution_and_price():
+    from hollingsbot.cogs.image_gen_cog import spec_from_dict
+
+    config = Path(__file__).parents[1] / "src/hollingsbot/image_gen_config.json"
+    spec = spec_from_dict(json.loads(config.read_text())["!"])
+    assert spec.model == "black-forest-labs/flux-2-klein-4b"
+    assert spec.price_per_image == 0.001
+    gen = get_image_generator(spec.api, spec.model, aspect_ratio=spec.aspect_ratio, model_options=spec.model_options)
+    gen._run_model = AsyncMock(return_value=[b"image"])
+    assert await gen.generate_many("cat", seed=42) == [b"image"]
+    gen._run_model.assert_awaited_once_with(
+        {"prompt": "cat", "seed": 42, "aspect_ratio": "1:1", "output_megapixels": "1", "disable_safety_checker": False}
+    )
 
 
 @pytest.fixture(autouse=True)

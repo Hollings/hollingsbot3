@@ -67,6 +67,9 @@ class CreditsCog(commands.Cog):
                 f"  - Budget increases by ${hourly_rate:.2f}/hour (max ${free_total:.2f}/day)",
             ]
 
+            if status.get("reserved_for_images", 0):
+                lines.append(f"  - Reserved for running images: ${status['reserved_for_images']:.3f}")
+
             if credits_used_today > 0:
                 lines.append(f"  - Credits spent today: ${credits_used_today:.2f}")
 
