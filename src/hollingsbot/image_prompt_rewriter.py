@@ -44,7 +44,7 @@ sparse request, fewer when appropriate, and at most 350 words per image.
 async def rewrite_image_prompts(prompts: list[str]) -> list[str]:
     """One bounded call per claimed request; failure leaves the originals intact."""
     try:
-        generator = get_text_generator("anthropic", os.getenv("IMAGE_PROMPT_REWRITE_MODEL", "claude-haiku-4-5"))
+        generator = get_text_generator("anthropic", os.getenv("IMAGE_PROMPT_REWRITE_MODEL", "claude-opus-5-5"))
         response = await asyncio.wait_for(
             generator.generate(
                 [{"role": "system", "content": ART_DIRECTION}, {"role": "user", "content": json.dumps(prompts)}]
