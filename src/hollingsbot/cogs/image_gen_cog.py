@@ -361,8 +361,10 @@ class ImageGenCog(commands.Cog):
                 chain.append(f"{fallback.api} / {fallback.model}")
                 fallback = fallback.fallback
             fallback_display = f" (falls back to {', then '.join(chain)})" if chain else ""
+            processing_display = " / prompt processing with Claude Opus" if spec.rewrite_prompt else ""
             lines.append(
-                f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}{fallback_display}"
+                f"- {prefix_display}: {spec.api} / {spec.model}{mode_display}{price_display}"
+                f"{processing_display}{fallback_display}"
             )
         lines.append(f"\nDM support: {'enabled' if self._allow_dms else 'disabled'}")
         allowlist_desc = (
