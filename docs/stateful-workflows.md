@@ -53,6 +53,14 @@ after Discord accepts a send but before settlement remains an unknown outcome,
 with no automatic resend or debit. Worker capacity still limits simultaneous
 provider calls; it is independent of budget admission.
 
+The opt-in `$$$$` art-direction pass runs after request claiming and budget
+reservation, before image dispatch. It uses one bounded text call for the batch;
+invalid output or timeout falls back to the original prompts without retrying.
+Cancellation propagates to the text call and releases the request's holds;
+replayed Discord events cannot repeat the preprocessing call. Original prompts
+remain in the request record and captions. The rewritten prompts are sent only
+to the image provider, and are not yet persisted for exact reproduction.
+
 Jev Builder is disabled and excluded from this remediation. Do not enable it as
 part of a main-bot deployment. Its data is preserved for a future explicit resume.
 

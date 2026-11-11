@@ -36,6 +36,7 @@ from discord.ext import commands
 from hollingsbot import prompt_db
 from hollingsbot.caption import add_caption
 from hollingsbot.cost_tracking import CostTracker, validate_amount
+from hollingsbot.image_prompt_rewriter import rewrite_image_prompts
 from hollingsbot.prompt_db import bulk_add_prompts, init_db
 from hollingsbot.settings import parse_id_set
 from hollingsbot.tasks import generate_image  # celery task
@@ -162,6 +163,7 @@ class GeneratorSpec:
     api: str
     model: str
     mode: str = "generate"  # "generate", "edit", or "outpaint"
+    rewrite_prompt: bool = False
     price_per_image: float | None = None
     quality: str = "medium"  # For OpenAI: "low", "medium", "high"
     aspect_ratio: str | None = None  # For OpenAI: "1:1", "3:2", "2:3", etc.
@@ -176,7 +178,9 @@ class _ImageRequestProgress:
     working_reactions: set[str] = field(default_factory=lambda: {THINKING})
 
 
-_SPEC_KNOWN_KEYS = frozenset({"api", "model", "mode", "price_per_image", "quality", "aspect_ratio", "default_prompt"})
+_SPEC_KNOWN_KEYS = frozenset(
+    {"api", "model", "mode", "rewrite_prompt", "price_per_image", "quality", "aspect_ratio", "default_prompt"}
+)
 
 
 def spec_from_dict(
@@ -209,6 +213,8 @@ def spec_from_dict(
         spec_kwargs.setdefault("mode", parent.mode)
         spec_kwargs.setdefault("quality", parent.quality)
     spec = GeneratorSpec(**spec_kwargs)
+    if not isinstance(spec.rewrite_prompt, bool):
+        raise ValueError("rewrite_prompt must be a boolean")
     if not all(isinstance(value, str) and value.strip() for value in (spec.api, spec.model)):
         raise ValueError("Image generator api and model must be non-empty strings")
     if spec.mode not in {"generate", "edit", "outpaint"}:
@@ -1256,6 +1262,10 @@ class ImageGenCog(commands.Cog):
             await self._send_error_message(message, error_msg)
             return
 
+        original_prompts = prompts
+        if spec.rewrite_prompt and not (do_edit or do_outpaint or is_gif):
+            prompts = await rewrite_image_prompts(prompts)
+
         # For models that support aspect ratio (non-edit), get dynamic aspect ratio from Claude
         aspect_ratio_override: str | None = None
         model_lower = spec.model.lower()
@@ -1301,6 +1311,11 @@ class ImageGenCog(commands.Cog):
                     working_emoji = themed
 
             results = await generation_task
+            # Keep user-facing captions concise; the provider gets the art direction.
+            results = [
+                (original, result[1]) if not isinstance(result, Exception) else result
+                for original, result in zip(original_prompts, results, strict=True)
+            ]
         finally:
             for task in (generation_task, thematic_emoji_task):
                 if not task.done():

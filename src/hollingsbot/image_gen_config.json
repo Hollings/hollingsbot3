@@ -29,9 +29,11 @@
     "price_per_image": 0.08
   },
   "$$$$": {
+    "rewrite_prompt": true,
     "api": "replicate",
-    "model": "google/nano-banana-pro",
-    "price_per_image": 0.20
+    "model": "openai/gpt-image-2.6-flare",
+    "quality": "medium",
+    "price_per_image": 0.08
   },
   "^": {
     "api": "svg",
